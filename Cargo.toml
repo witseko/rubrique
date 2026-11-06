@@ -32,7 +32,7 @@ cpal = "0.18.2"
 # Argon2id to turn the password into a key and to store the PIN, and zeroize
 # to wipe the key from memory on lock. All from the audited RustCrypto set.
 chacha20poly1305 = "0.10"
-argon2 = { version = "0.5", features = ["zeroize"] }
+argon2 = { version = "0.6", features = ["zeroize"] }
 zeroize = "1"
 # "Delete" in the explorer moves local files to the system Trash (macOS
 # Finder Trash, the freedesktop.org trash on Linux), so a delete can be undone.
