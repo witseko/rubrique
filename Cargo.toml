@@ -31,7 +31,7 @@ cpal = "0.18.2"
 # Encrypted scratches and the app PIN: XChaCha20-Poly1305 for the files,
 # Argon2id to turn the password into a key and to store the PIN, and zeroize
 # to wipe the key from memory on lock. All from the audited RustCrypto set.
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 argon2 = { version = "0.5", features = ["zeroize"] }
 zeroize = "1"
 # "Delete" in the explorer moves local files to the system Trash (macOS
