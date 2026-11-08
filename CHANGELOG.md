@@ -14,6 +14,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   deleted (or undoes a block edit, a table row or column, or Prettify),
   and Shift+Cmd+Z or Cmd+Y does it again. It is the same history as the
   source editor, so you can switch views and keep stepping through it.
+- **See what you changed before you save.** In the preview, a bar beside
+  a block marks it as edited or new since the last save, and a dashed
+  line shows where a block was deleted. Hover the bar to compare the saved
+  and current Markdown and put the block back with one click. The status
+  bar counts the changes ("Unsaved: 2 edited, 1 deleted"); click it for
+  the new Changes panel, which lists every block that will change on Save,
+  with Revert, Discard all and Save. Undoing back to the saved text takes
+  a change off the list, and saving clears it.
 
 ## [0.8.8] - 2026-11-08
 

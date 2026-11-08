@@ -11,6 +11,8 @@ pub enum SideView {
     Notes,
     /// The `@tmux-` mentions in the open Markdown file, to send to terminals.
     Tasks,
+    /// The blocks that differ from the saved file, until Save.
+    Changes,
 }
 
 impl SideView {
@@ -20,12 +22,16 @@ impl SideView {
             SideView::Structure => "structure",
             SideView::Notes => "notes",
             SideView::Tasks => "tasks",
+            SideView::Changes => "changes",
         }
     }
 
     /// Read a stored word; anything unknown is Structure.
     fn parse(value: &str) -> Self {
-        [SideView::Notes, SideView::Tasks].into_iter().find(|view| view.id() == value).unwrap_or(SideView::Structure)
+        [SideView::Notes, SideView::Tasks, SideView::Changes]
+            .into_iter()
+            .find(|view| view.id() == value)
+            .unwrap_or(SideView::Structure)
     }
 }
 

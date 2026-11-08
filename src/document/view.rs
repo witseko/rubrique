@@ -7,6 +7,8 @@ use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::text_edit::{TextEditOutput, TextEditState};
 use eframe::egui::{self, Align, Align2, Color32, Context, FontId, Id, Key, Modifiers, TextBuffer, Ui, pos2};
 
+use super::block_changes::{BlockChange, ChangeKind};
+use super::changes_view::{block_mark, deleted_row};
 use super::highlighting::{HighlightStyle, Syntax, highlighted};
 use super::line_ops::{Direction, Selection, duplicate_lines, insert_text, move_lines};
 use super::text_file::Document;
@@ -312,6 +314,8 @@ pub enum PreviewEvent {
     PlayVideo(PathBuf),
     /// A button on a voice memo.
     Memo(MemoAction),
+    /// Revert, Remove or Restore on an unsaved change: back to the saved block.
+    RevertChange(BlockChange),
 }
 
 /// What the preview reports after drawing.
@@ -343,15 +347,18 @@ const INSERT_BUTTON_RADIUS: f32 = 9.0;
 
 /// Draw the rendered Markdown, one clickable block at a time; the block in
 /// `editing` shows as a Markdown text box instead, where typing `@ai-`
-/// suggests `mentions`.
+/// suggests `mentions`. Blocks in `changes` (in block order) get a mark in
+/// the margin, and deleted ones a dashed line where they were.
 pub fn show_preview(
     ui: &mut Ui,
     path: &Path,
     blocks: &[SourceBlock],
     mut editing: Option<&mut BlockEdit>,
     mentions: &[Suggestion],
+    changes: &[BlockChange],
 ) -> PreviewOutput {
     let mut event = None;
+    let mut pending_changes = changes.iter().peekable();
     let mut hovered = None;
     let scroll_target = take_preview_scroll(ui.ctx());
     // Source offset of the first block still on screen, for the Structure panel.
@@ -380,6 +387,13 @@ pub fn show_preview(
                 if event.is_none() {
                     event = found;
                 }
+                let here = changes_at(&mut pending_changes, index);
+                if let Some(found) = deleted_rows(ui, &here)
+                    && event.is_none()
+                {
+                    event = Some(found);
+                }
+                let mark_background = ui.painter().add(egui::Shape::Noop);
                 let top = ui.cursor().top();
                 let found = match editing.as_deref_mut() {
                     Some(edit) if edit.index == index && !edit.inserting => match edit.cell {
@@ -389,6 +403,13 @@ pub fn show_preview(
                     _ => clickable_block(ui, index, source),
                 };
                 let span = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
+                let marked = here.iter().find(|change| change.kind != ChangeKind::Deleted);
+                if let Some(change) = marked
+                    && block_mark(ui, span, mark_background, change)
+                    && event.is_none()
+                {
+                    event = Some(PreviewEvent::RevertChange((*change).clone()));
+                }
                 if ui.rect_contains_pointer(span) {
                     hovered = Some(index);
                 }
@@ -401,6 +422,13 @@ pub fn show_preview(
                 if event.is_none() {
                     event = found;
                 }
+            }
+            // Blocks deleted after the last one.
+            let here = changes_at(&mut pending_changes, blocks.len());
+            if let Some(found) = deleted_rows(ui, &here)
+                && event.is_none()
+            {
+                event = Some(found);
             }
             // Under the last block: the new block being typed, or empty
             // space that starts one when clicked.
@@ -421,6 +449,27 @@ pub fn show_preview(
         None => data.remove::<usize>(preview_top_id(path)),
     });
     PreviewOutput { event, hovered }
+}
+
+/// The changes on block `index` (or deleted just before it), taken from
+/// the front of `pending`, which is in block order.
+fn changes_at<'a>(
+    pending: &mut std::iter::Peekable<std::slice::Iter<'a, BlockChange>>,
+    index: usize,
+) -> Vec<&'a BlockChange> {
+    while pending.next_if(|change| change.block < index).is_some() {}
+    std::iter::from_fn(|| pending.next_if(|change| change.block == index)).collect()
+}
+
+/// A dashed line for each deleted block in `here`; Restore on one is the event.
+fn deleted_rows(ui: &mut Ui, here: &[&BlockChange]) -> Option<PreviewEvent> {
+    let mut event = None;
+    for change in here.iter().filter(|change| change.kind == ChangeKind::Deleted) {
+        if deleted_row(ui, change) && event.is_none() {
+            event = Some(PreviewEvent::RevertChange((*change).clone()));
+        }
+    }
+    event
 }
 
 /// Where a jump from the Structure panel waits for the next preview frame.
@@ -993,7 +1042,7 @@ mod preview_tests {
             let mut output = None;
             let mut full = self.ctx.run_ui(input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    output = Some(show_preview(ui, &self.path, &self.blocks, edit.as_deref_mut(), &[]));
+                    output = Some(show_preview(ui, &self.path, &self.blocks, edit.as_deref_mut(), &[], &[]));
                 });
             });
             // No screen here: the font texture is never uploaded.

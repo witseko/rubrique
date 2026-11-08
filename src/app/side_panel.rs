@@ -1,8 +1,9 @@
 //! The right panel beside the page, for Markdown files: Structure (the
-//! headings) or Notes. It stays closed until asked for: the toggle at the
-//! right end of the tab bar, Cmd+Shift+O (Structure), or adding a note
-//! (Notes). Its header switches between the two views and closes it, and
-//! the choice is remembered between runs.
+//! headings), Notes, Tasks or Changes (unsaved block changes). It stays
+//! closed until asked for: the toggle at the right end of the tab bar,
+//! Cmd+Shift+O (Structure), adding a note (Notes), or the "Unsaved: …"
+//! button in the status bar (Changes). Its header switches between the
+//! views and closes it, and the choice is remembered between runs.
 
 use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, Rect, Sense, Ui, vec2};
 
@@ -27,6 +28,8 @@ const SWITCH_HEIGHT: f32 = 24.0;
 const SWITCH_INSET: f32 = 2.0;
 /// Space left and right of a segment's label.
 const SEGMENT_PADDING: f32 = 12.0;
+/// Least space left and right of a segment's label, in a narrow panel.
+const MIN_SEGMENT_PADDING: f32 = 3.0;
 /// Size of the panel's close button.
 const CLOSE_SIZE: f32 = 22.0;
 /// Margin around the panel's header.
@@ -91,12 +94,15 @@ impl RubriqueApp {
                 SideView::Structure => self.structure_panel(ui),
                 SideView::Notes => self.notes_panel(ui),
                 SideView::Tasks => self.tasks_panel(ui),
+                SideView::Changes => self.changes_panel(ui),
             }
         });
     }
 
-    /// The Structure | Notes | Tasks switch (with counts) and the close cross.
+    /// The Structure | Notes | Tasks | Changes switch (with counts) and the close cross.
     fn side_panel_header(&mut self, ui: &mut Ui) {
+        self.refresh_block_changes();
+        let change_count = self.block_changes.list.len();
         let (note_count, task_count) = match &self.open_file {
             OpenFile::Text { document, .. } => {
                 (find_notes(&document.text).len(), find_delegations(&document.text).len())
@@ -113,8 +119,11 @@ impl RubriqueApp {
                     (SideView::Structure, "Structure".to_string()),
                     (SideView::Notes, counted("Notes", note_count)),
                     (SideView::Tasks, counted("Tasks", task_count)),
+                    (SideView::Changes, counted("Changes", change_count)),
                 ];
-                if let Some(view) = view_switch(ui, &choices, layout.side_view) {
+                // Room for the close cross, so the switch never runs under it.
+                let reserved = CLOSE_SIZE + ui.spacing().item_spacing.x;
+                if let Some(view) = view_switch(ui, &choices, layout.side_view, reserved) {
                     layout.side_view = view;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -128,15 +137,21 @@ impl RubriqueApp {
 }
 
 /// A segmented switch in the style of the Preview | Source switch: the
-/// chosen segment filled like the page. Returns the segment clicked.
-fn view_switch(ui: &mut Ui, choices: &[(SideView, String)], current: SideView) -> Option<SideView> {
+/// chosen segment filled like the page. It leaves `reserved` points of the
+/// row free, with less space around the labels when the panel is narrow.
+/// Returns the segment clicked.
+fn view_switch(ui: &mut Ui, choices: &[(SideView, String)], current: SideView, reserved: f32) -> Option<SideView> {
     let visuals = ui.visuals().clone();
     let font = egui::TextStyle::Body.resolve(ui.style());
     let galleys: Vec<_> = choices
         .iter()
         .map(|(_, label)| ui.painter().layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER))
         .collect();
-    let widths: Vec<f32> = galleys.iter().map(|galley| galley.size().x + SEGMENT_PADDING * 2.0).collect();
+    let labels_width: f32 = galleys.iter().map(|galley| galley.size().x).sum();
+    let room = ui.available_width() - reserved - SWITCH_INSET * 2.0 - labels_width;
+    #[expect(clippy::cast_precision_loss, reason = "a handful of segments")]
+    let padding = (room / (choices.len() as f32 * 2.0)).clamp(MIN_SEGMENT_PADDING, SEGMENT_PADDING);
+    let widths: Vec<f32> = galleys.iter().map(|galley| galley.size().x + padding * 2.0).collect();
     let total = widths.iter().sum::<f32>() + SWITCH_INSET * 2.0;
     let (rect, _) = ui.allocate_exact_size(vec2(total, SWITCH_HEIGHT), Sense::hover());
     ui.painter().rect_filled(rect, 7, visuals.widgets.inactive.weak_bg_fill);

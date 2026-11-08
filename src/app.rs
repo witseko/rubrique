@@ -8,6 +8,7 @@ use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, RichText, Ui
 
 mod agent_history;
 mod ask;
+mod changes_panel;
 mod delegate;
 mod delete;
 mod drafts;
@@ -340,6 +341,8 @@ pub struct RubriqueApp {
     last_disk_check: f64,
     /// The preview block being edited as Markdown.
     block_edit: Option<BlockEdit>,
+    /// Blocks of the open Markdown file that differ from the saved file.
+    block_changes: changes_panel::ChangesCache,
     /// The note being written or edited.
     note_draft: Option<NoteDraft>,
     /// Voice memos: recording, playback, transcription.
@@ -434,6 +437,7 @@ impl RubriqueApp {
             merging: None,
             last_disk_check: 0.0,
             block_edit: None,
+            block_changes: changes_panel::ChangesCache::default(),
             note_draft: None,
             voice: voice::VoiceState::default(),
             install: install::InstallState::default(),
@@ -1591,6 +1595,7 @@ impl RubriqueApp {
         }
         let showing_preview = self.showing_preview();
         let mentions = self.mentions(ui.ctx());
+        self.refresh_block_changes();
         let mut notice_choice = None;
         let mut name_choice = None;
         let mut merge_action = None;
@@ -1637,7 +1642,14 @@ impl RubriqueApp {
                     let blocks = preview.get_or_insert_with(|| parse_source_blocks(&document.text));
                     let folder = document.path.parent().unwrap_or(Path::new("/"));
                     set_memo_states(ui.ctx(), self.voice.memo_states(folder, blocks));
-                    let output = show_preview(ui, &document.path, blocks, self.block_edit.as_mut(), &mentions);
+                    let output = show_preview(
+                        ui,
+                        &document.path,
+                        blocks,
+                        self.block_edit.as_mut(),
+                        &mentions,
+                        &self.block_changes.list,
+                    );
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
                 } else {
@@ -1689,6 +1701,7 @@ impl RubriqueApp {
             PreviewEvent::Code { index, action } => self.code_block_action(ctx, index, action),
             PreviewEvent::Memo(action) => self.memo_action(ctx, action),
             PreviewEvent::PlayVideo(path) => self.play_video(&path),
+            PreviewEvent::RevertChange(change) => self.revert_change(&change),
         }
     }
 
@@ -2340,6 +2353,7 @@ impl RubriqueApp {
         if !showing_preview && let Some(stats) = &self.stats {
             ui.label(format!("{}   ", stats.summary()));
         }
+        self.changes_status_button(ui);
     }
 
     /// "Encrypt" on a plain scratch, "Encrypted" (with a menu to undo it)
