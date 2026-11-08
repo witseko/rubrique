@@ -82,6 +82,7 @@ numbers and other options are in Settings → Accessibility.
 | Shortcut | Action |
 | --- | --- |
 | Cmd+S | Save |
+| Cmd+Z / Cmd+Shift+Z | Undo / redo (in the preview too) |
 | Cmd+W | Close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Cmd+, | Settings |

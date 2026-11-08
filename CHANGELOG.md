@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Undo and redo in the preview.** Cmd+Z brings back a block you
+  deleted (or undoes a block edit, a table row or column, or Prettify),
+  and Shift+Cmd+Z or Cmd+Y does it again. It is the same history as the
+  source editor, so you can switch views and keep stepping through it.
+
 ## [0.8.8] - 2026-11-08
 
 ### Added
