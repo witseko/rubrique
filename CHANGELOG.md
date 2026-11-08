@@ -17,6 +17,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   between two blocks (or above the first one) and an accent line with a
   plus shows; click it to type a new block right there.
 
+### Fixed
+
+- **Symbols like ✔ no longer show as empty boxes.** Characters the
+  built-in fonts lack, such as check marks, stars, emoji and Chinese or
+  Japanese text, are now drawn with a font from your system.
+
 ## [0.8.7] - 2026-11-08
 
 ### Added
