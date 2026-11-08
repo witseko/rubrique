@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-11-08
+
 ### Added
 
 - **Undo and redo in the preview.** Cmd+Z brings back a block you
