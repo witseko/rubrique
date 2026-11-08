@@ -12,7 +12,7 @@ use super::line_ops::{Direction, Selection, duplicate_lines, insert_text, move_l
 use super::text_file::Document;
 use super::text_stats::{TextStats, text_stats};
 use crate::ai::mention_list::{self, Suggestion};
-use crate::icons::{Icon, icon_button};
+use crate::icons::{Icon, icon_button, small_icon_button_on};
 use crate::markdown::blocks::{Block, SourceBlock};
 use crate::markdown::render::page_text;
 use crate::markdown::render::{
@@ -284,6 +284,9 @@ pub struct BlockEdit {
     pub focused: bool,
     /// `Some` when only this cell of a table is edited, not the whole block.
     pub cell: Option<TableCell>,
+    /// A new block typed just before block `index` (at the end of the file
+    /// when `index` is past the last block); `range` is empty there.
+    pub inserting: bool,
 }
 
 /// What the user did in the preview.
@@ -299,6 +302,10 @@ pub enum PreviewEvent {
     StartNewBlock,
     /// Done with the block being edited (Esc, Cmd+Enter, Done, or a click elsewhere).
     FinishEdit,
+    /// The cross beside a block, or Delete while editing it: remove the block.
+    DeleteBlock(usize),
+    /// Clicked the line in the gap above block `index`: type a new block there.
+    InsertBlock(usize),
     /// Copy or Prettify on a code block inside top-level block `index`.
     Code { index: usize, action: CodeAction },
     /// Play on a video in the preview.
@@ -325,6 +332,14 @@ const EDIT_OUTLINE: f32 = 1.5;
 const TABLE_BUTTONS_GAP: f32 = 4.0;
 /// Space between a block and its hover / edit background.
 const BLOCK_PAD: i8 = 6;
+/// Side of the delete cross beside a block under the mouse.
+const DELETE_BUTTON_SIZE: f32 = 20.0;
+/// Space between a block's hover background and its delete cross.
+const DELETE_BUTTON_GAP: f32 = 4.0;
+/// Width of the insert line drawn in a gap between blocks under the mouse.
+const INSERT_LINE_WIDTH: f32 = 1.5;
+/// Radius of the circled + in the middle of the insert line.
+const INSERT_BUTTON_RADIUS: f32 = 9.0;
 
 /// Draw the rendered Markdown, one clickable block at a time; the block in
 /// `editing` shows as a Markdown text box instead, where typing `@ai-`
@@ -347,12 +362,27 @@ pub fn show_preview(
         egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
             ui.set_max_width(PREVIEW_MAX_WIDTH.min(ui.available_width()));
             for (index, source) in blocks.iter().enumerate() {
+                let gap = top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0;
+                // Bottom of the block above (the first block has the page margin above it).
+                let above = ui.cursor().top();
                 if index > 0 {
-                    ui.add_space(top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0);
+                    ui.add_space(gap);
+                }
+                let found = match editing.as_deref_mut() {
+                    // A new block typed in this gap: its box, then the gap again.
+                    Some(edit) if edit.inserting && edit.index == index => {
+                        let found = edit_box(ui, edit, mentions);
+                        ui.add_space(gap.max(0.0));
+                        found
+                    }
+                    _ => insert_line(ui, index, above, ui.cursor().top()),
+                };
+                if event.is_none() {
+                    event = found;
                 }
                 let top = ui.cursor().top();
                 let found = match editing.as_deref_mut() {
-                    Some(edit) if edit.index == index => match edit.cell {
+                    Some(edit) if edit.index == index && !edit.inserting => match edit.cell {
                         Some(cell) => cell_edit_block(ui, index, source, edit, cell),
                         None => edit_box(ui, edit, mentions),
                     },
@@ -432,8 +462,36 @@ fn new_block_space(ui: &mut Ui) -> Option<PreviewEvent> {
     response.clicked().then_some(PreviewEvent::StartNewBlock)
 }
 
-/// A rendered block: tinted under the mouse, a click (not a text selection
-/// or a link) asks to edit it.
+/// The gap above block `index`, from `above` (the bottom of the block over
+/// it) to `below` (its top). Under the mouse it shows an accent line with
+/// a plus in the middle; a click there types a new block in that gap. The gap
+/// between two paragraphs is only a few pixels, so the line also takes the
+/// padding of the blocks on both sides (which leave that padding to it).
+fn insert_line(ui: &Ui, index: usize, above: f32, below: f32) -> Option<PreviewEvent> {
+    let pad = f32::from(BLOCK_PAD);
+    // Above the first block there is no block padding, only the page margin.
+    let top = if index == 0 { below - f32::from(PREVIEW_MARGIN.1) / 2.0 } else { above - pad };
+    let zone = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=below + pad);
+    let response = ui.interact(zone, ui.scope_id().with(("insert-block", index)), egui::Sense::click());
+    if !response.hovered() {
+        return None;
+    }
+    let accent = ui.visuals().hyperlink_color;
+    let painter = ui.painter();
+    let center = zone.center();
+    let line = egui::Stroke::new(INSERT_LINE_WIDTH, accent);
+    painter.hline(zone.left()..=center.x - INSERT_BUTTON_RADIUS, center.y, line);
+    painter.hline(center.x + INSERT_BUTTON_RADIUS..=zone.right(), center.y, line);
+    painter.circle(center, INSERT_BUTTON_RADIUS, ui.visuals().panel_fill, line);
+    let arm = INSERT_BUTTON_RADIUS * 0.5;
+    painter.hline(center.x - arm..=center.x + arm, center.y, line);
+    painter.vline(center.x, center.y - arm..=center.y + arm, line);
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Insert a block here");
+    response.clicked().then_some(PreviewEvent::InsertBlock(index))
+}
+
+/// A rendered block: tinted under the mouse, with a delete cross beside its
+/// top right corner; a click (not a text selection or a link) asks to edit it.
 fn clickable_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<PreviewEvent> {
     let background = ui.painter().add(egui::Shape::Noop);
     let response = egui::Frame::new().inner_margin(BLOCK_PAD).show(ui, |ui| {
@@ -441,10 +499,23 @@ fn clickable_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<Pr
         render_top_block(ui, &source.block);
     });
     let rect = response.response.rect;
-    let hovered = ui.rect_contains_pointer(rect);
-    if hovered {
+    // The padding above and below belongs to the insert lines in the gaps.
+    let own = rect.shrink2(egui::vec2(0.0, f32::from(BLOCK_PAD)));
+    let hovered = ui.rect_contains_pointer(own);
+    // The cross sits in the page margin, just right of the block, so it never
+    // covers the block's own buttons (a code block's Copy is at its top right).
+    let delete_rect = egui::Rect::from_min_size(
+        pos2(rect.right() + DELETE_BUTTON_GAP, rect.top()),
+        egui::vec2(DELETE_BUTTON_SIZE, DELETE_BUTTON_SIZE),
+    );
+    // Moving from the block to its cross keeps both shown.
+    if ui.rect_contains_pointer(own.union(delete_rect)) {
         let fill = ui.visuals().hyperlink_color.gamma_multiply(HOVER_TINT);
         ui.painter().set(background, egui::Shape::rect_filled(rect, 6, fill));
+        let id = ui.scope_id().with(("delete-block", index));
+        if small_icon_button_on(ui, delete_rect, id, Icon::Close, "Delete block", "Delete this block").clicked() {
+            return Some(PreviewEvent::DeleteBlock(index));
+        }
     }
     // A code block button was clicked: that, not editing the block.
     if let Some(action) = take_code_action(ui.ctx()) {
@@ -662,6 +733,12 @@ fn edit_box(ui: &mut Ui, edit: &mut BlockEdit, mentions: &[Suggestion]) -> Optio
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.small_button("Done").clicked() || finish_keys {
                     event = Some(PreviewEvent::FinishEdit);
+                }
+                // A new block is not in the file yet: emptying it is enough.
+                if !edit.range.is_empty()
+                    && ui.small_button("Delete").on_hover_text("Delete this block from the file").clicked()
+                {
+                    event = Some(PreviewEvent::DeleteBlock(edit.index));
                 }
             });
         });
@@ -943,8 +1020,14 @@ mod preview_tests {
             #[expect(clippy::cast_precision_loss, reason = "screen positions")]
             let at = pos2(60.0, y as f32);
             assert_eq!(preview.click(at, None), Some(PreviewEvent::StartEdit(0)));
-            let mut edit =
-                BlockEdit { index: 0, range: 0..text.len(), text: text.to_string(), focused: false, cell: None };
+            let mut edit = BlockEdit {
+                index: 0,
+                range: 0..text.len(),
+                text: text.to_string(),
+                focused: false,
+                cell: None,
+                inserting: false,
+            };
             preview.frame(vec![], Some(&mut edit));
             let state = TextEditState::load(&preview.ctx, block_editor_id()).expect("the box stored its state");
             state.cursor.char_range().expect("the cursor was placed").primary.index.0
@@ -986,8 +1069,14 @@ mod preview_tests {
     #[test]
     fn the_cell_box_takes_focus_typing_and_enter() {
         let mut preview = Preview::new();
-        let mut edit =
-            BlockEdit { index: 0, range: 2..6, text: "File".to_string(), focused: false, cell: Some(cell(0, 0)) };
+        let mut edit = BlockEdit {
+            index: 0,
+            range: 2..6,
+            text: "File".to_string(),
+            focused: false,
+            cell: Some(cell(0, 0)),
+            inserting: false,
+        };
         preview.frame(Vec::new(), Some(&mut edit));
         preview.frame(Vec::new(), Some(&mut edit));
         assert!(edit.focused);
@@ -1011,8 +1100,14 @@ mod preview_tests {
     #[test]
     fn while_editing_a_cell_other_cells_and_the_buttons_are_clickable() {
         let mut preview = Preview::new();
-        let mut edit =
-            BlockEdit { index: 0, range: 42..46, text: "a.md".to_string(), focused: false, cell: Some(cell(1, 0)) };
+        let mut edit = BlockEdit {
+            index: 0,
+            range: 42..46,
+            text: "a.md".to_string(),
+            focused: false,
+            cell: Some(cell(1, 0)),
+            inserting: false,
+        };
         preview.frame(Vec::new(), Some(&mut edit));
         let events = preview.scan(36..780, 26..200, Some(&mut edit));
         let cells = cells_clicked(&events);
@@ -1035,8 +1130,14 @@ mod preview_tests {
     #[test]
     fn the_header_row_has_no_remove_row_button() {
         let mut preview = Preview::new();
-        let mut edit =
-            BlockEdit { index: 0, range: 2..6, text: "File".to_string(), focused: false, cell: Some(cell(0, 0)) };
+        let mut edit = BlockEdit {
+            index: 0,
+            range: 2..6,
+            text: "File".to_string(),
+            focused: false,
+            cell: Some(cell(0, 0)),
+            inserting: false,
+        };
         preview.frame(Vec::new(), Some(&mut edit));
         let events = preview.scan(600..780, 50..200, Some(&mut edit));
         let actions: Vec<TableAction> = events

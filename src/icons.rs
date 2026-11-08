@@ -281,6 +281,16 @@ pub fn small_icon_button(ui: &mut Ui, icon: Icon, size: f32, label: &str, tip: &
     response.on_hover_text(tip)
 }
 
+/// A small flat button like [`small_icon_button`] drawn on `rect` without
+/// taking layout space, so it can sit beside a widget (like the cross next
+/// to a preview block). `id` must be unique among the widgets on screen.
+pub fn small_icon_button_on(ui: &Ui, rect: egui::Rect, id: egui::Id, icon: Icon, label: &str, tip: &str) -> Response {
+    let response = ui.interact(rect, id, Sense::click());
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, label));
+    paint_small_button(ui, icon, rect, &response, false);
+    response.on_hover_text(tip)
+}
+
 /// A small flat button like [`small_icon_button`] that turns `on` and off
 /// when clicked, and keeps the selection fill while it is on.
 pub fn small_toggle_button(ui: &mut Ui, icon: Icon, size: f32, label: &str, tip: &str, on: &mut bool) -> Response {
