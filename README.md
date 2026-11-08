@@ -37,7 +37,10 @@ Agents run only when you ask, read-only by default.
 
 - Live preview: click a block to edit it. In a table, click a cell to edit
   just that cell; buttons under it add or remove rows and columns.
-- Side panel (the button at the right of the tabs): Structure, the file's headings (`Cmd+Shift+O`), or its Notes.
+- Unsaved changes are marked until you save: a bar beside each edited or
+  new block (hover it to compare with the saved text and revert), a dashed
+  line where a block was deleted, and the full list in the Changes panel.
+- Side panel (the button at the right of the tabs): Structure, the file's headings (`Cmd+Shift+O`), its Notes, Tasks, or unsaved Changes.
 - Voice memos (`Cmd+Shift+R`), transcribed locally with whisper.cpp.
 - Drop images and audio onto the page.
 - Scratch files (`Cmd+N`), each one encrypted or not, switched at any time:
