@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Symbols like ✔ no longer show as empty boxes.** Characters the
+  built-in fonts lack, such as check marks, stars, emoji and Chinese or
+  Japanese text, are now drawn with a font from your system.
+
 ## [0.8.7] - 2026-11-08
 
 ### Added

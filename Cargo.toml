@@ -12,12 +12,14 @@ rust-version = "1.95"
 
 [dependencies]
 # GUI toolkit. Default features trimmed to the OpenGL
-# backend (lighter than wgpu), clipboard, link opening, and the Linux backends.
+# backend (lighter than wgpu), clipboard, link opening, the Linux backends,
+# and system fonts for characters the bundled fonts lack (✔, emoji, CJK).
 eframe = { version = "0.37.0", default-features = false, features = [
     "glow",
     "clipboard",
     "links",
     "default_fonts",
+    "system_fonts",
     "wayland",
     "x11",
 ] }
