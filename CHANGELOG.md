@@ -15,6 +15,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   will land. Tab groups follow the new folder order, and the terminal
   order is remembered between runs (new terminals still show on top).
 
+### Fixed
+
+- **Enter no longer deletes a cleared block.** Clearing a block in the
+  preview and leaving it keeps the block as it was, even after pressing
+  Enter in the empty box; before, the block was replaced by a blank line.
+  Blank lines typed at the start or end of a block are dropped when you
+  finish, so they no longer leave extra space in the file.
+
 ## [0.8.6] - 2026-11-08
 
 ### Changed

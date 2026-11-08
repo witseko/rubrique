@@ -1832,7 +1832,7 @@ impl RubriqueApp {
         let new_text = match cell {
             Some(_) => table_edit::escape_cell(&text),
             None if range.is_empty() && range.start == document.text.len() => appended_block(&document.text, &text),
-            None => text,
+            None => edited_block(&text).to_string(),
         };
         // A block emptied out stays as it was; a cell may be emptied.
         if cell.is_none() && new_text.is_empty() {
@@ -2338,6 +2338,20 @@ fn notes_help(ui: &mut Ui, tool: &str) {
     ui.label(RichText::new(text).weak().size(11.5));
 }
 
+/// The Markdown of an edited block without the blank lines Enter leaves
+/// before or after it, which belong to no block (the gap to the next block
+/// is outside the range being replaced). Empty when only whitespace is left,
+/// so a block cleared with a stray Enter stays as it was, like a cleared one.
+fn edited_block(block: &str) -> &str {
+    let block = block.trim_end();
+    // Keep the first line's indentation: it can make an indented code block.
+    let Some(text_start) = block.find(|c: char| !c.is_whitespace()) else {
+        return "";
+    };
+    let line_start = block[..text_start].rfind('\n').map_or(0, |newline| newline + 1);
+    &block[line_start..]
+}
+
 fn appended_block(text: &str, block: &str) -> String {
     let block = block.trim_end();
     if block.trim().is_empty() {
@@ -2576,7 +2590,18 @@ impl eframe::App for RubriqueApp {
 
 #[cfg(test)]
 mod tests {
-    use super::appended_block;
+    use super::{appended_block, edited_block};
+
+    #[test]
+    fn edited_block_drops_blank_lines_around_it() {
+        assert_eq!(edited_block("Text"), "Text");
+        assert_eq!(edited_block("Text\n"), "Text");
+        assert_eq!(edited_block("\n\nText\n\n"), "Text");
+        assert_eq!(edited_block("One\n\nTwo\n"), "One\n\nTwo");
+        assert_eq!(edited_block("\n    code\n"), "    code");
+        assert_eq!(edited_block("\n"), "");
+        assert_eq!(edited_block("  \n \n"), "");
+    }
 
     #[test]
     fn appended_block_gets_a_blank_line_before_it() {
