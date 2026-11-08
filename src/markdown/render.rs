@@ -681,14 +681,67 @@ fn render_inlines(ui: &mut Ui, inlines: &[Inline], style: &TextStyle) {
     ui.horizontal_wrapped(|ui| {
         // Spans touch; the line height alone sets the space between lines.
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        let wrap_width = ui.max_rect().width();
         for span in spans {
             match span {
                 Span::LineBreak => ui.end_row(),
-                Span::Text(text, style) => render_span(ui, text, &style),
+                Span::Text(text, style) => {
+                    for piece in split_long_words(&text, style.size, wrap_width) {
+                        render_span(ui, piece, &style);
+                    }
+                }
                 Span::Image { alt, url, link } => render_image(ui, &alt, &url, link.as_deref()),
             }
         }
     });
+}
+
+/// Cut `text` so that every word that may be wider than `wrap_width` is a
+/// piece of its own (with the whitespace after it); the text around such
+/// words stays whole. Joining the pieces gives back `text`.
+///
+/// This works around an egui 0.37 wrapping bug. A label that starts part way
+/// along a line keeps that start as an indent past its first line break, and
+/// when a later line has no space to break at (a long path or URL), egui
+/// applies the indent again: that line is drawn to the left of the text and
+/// a table column grows by the indent, leaving empty room on its right. A
+/// label holding a single word breaks correctly.
+///
+/// No glyph is wider than about one font size, so a word of `n` characters is
+/// at most `n * font_size` wide; only words past that bound are cut out, and
+/// nothing has to be measured.
+fn split_long_words(text: &str, font_size: f32, wrap_width: f32) -> Vec<String> {
+    let mut pieces = Vec::new();
+    let mut current = String::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        // One word and the whitespace before it.
+        let word_start = rest.find(|c: char| !c.is_whitespace()).unwrap_or(rest.len());
+        let word_end = rest[word_start..].find(char::is_whitespace).map_or(rest.len(), |offset| word_start + offset);
+        let (leading, word) = rest[..word_end].split_at(word_start);
+        #[expect(clippy::cast_precision_loss, reason = "a word has a handful of characters")]
+        let may_overflow = word.chars().count() as f32 * font_size > wrap_width;
+        current.push_str(leading);
+        if may_overflow && !current.is_empty() {
+            pieces.push(std::mem::take(&mut current));
+        }
+        current.push_str(word);
+        if may_overflow {
+            // The whitespace after the word stays with it, so the next piece
+            // starts with a word, and copied text keeps its spaces.
+            let after =
+                rest[word_end..].find(|c: char| !c.is_whitespace()).map_or(rest.len(), |offset| word_end + offset);
+            current.push_str(&rest[word_end..after]);
+            pieces.push(std::mem::take(&mut current));
+            rest = &rest[after..];
+        } else {
+            rest = &rest[word_end..];
+        }
+    }
+    if !current.is_empty() || pieces.is_empty() {
+        pieces.push(current);
+    }
+    pieces
 }
 
 /// One styled run of text; links become clickable.
@@ -912,7 +965,7 @@ fn collect_spans(inlines: &[Inline], style: &TextStyle, spans: &mut Vec<Span>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TABLE_COLUMN_MIN_WIDTH, fit_column_widths};
+    use super::{TABLE_COLUMN_MIN_WIDTH, fit_column_widths, split_long_words};
 
     #[test]
     fn columns_that_fit_keep_their_width() {
@@ -935,5 +988,28 @@ mod tests {
     fn wide_columns_are_not_cut_below_the_minimum() {
         let widths = fit_column_widths(&[50.0, 1000.0, 1000.0], 200.0);
         assert_eq!(widths, vec![50.0, TABLE_COLUMN_MIN_WIDTH, TABLE_COLUMN_MIN_WIDTH]);
+    }
+
+    #[test]
+    fn text_of_short_words_stays_one_piece() {
+        assert_eq!(split_long_words("a superuser still creates it", 10.0, 200.0), vec!["a superuser still creates it"]);
+    }
+
+    #[test]
+    fn a_word_that_may_overflow_gets_a_piece_of_its_own() {
+        // 39 characters at 10 points may be 390 wide, past the 200 of the line.
+        let pieces = split_long_words("POST /api_internal/v2/virtual-penalty/rounds still", 10.0, 200.0);
+        assert_eq!(pieces, vec!["POST ", "/api_internal/v2/virtual-penalty/rounds ", "still"]);
+    }
+
+    #[test]
+    fn the_pieces_join_back_into_the_text() {
+        let text = "  lead /a/very/long/path/name/here   and   /another/long/path/name/x  ";
+        assert_eq!(split_long_words(text, 10.0, 100.0).concat(), text);
+    }
+
+    #[test]
+    fn empty_text_is_one_empty_piece() {
+        assert_eq!(split_long_words("", 10.0, 100.0), vec![String::new()]);
     }
 }
