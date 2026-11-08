@@ -1630,16 +1630,8 @@ impl RubriqueApp {
         if let Some(action) = merge_action {
             self.finish_merge(action);
         }
-        match preview_event {
-            Some(PreviewEvent::StartEdit(index)) => self.start_block_edit(index),
-            Some(PreviewEvent::StartCellEdit { index, cell }) => self.start_cell_edit(index, cell),
-            Some(PreviewEvent::Table { index, action }) => self.table_action(index, action),
-            Some(PreviewEvent::StartNewBlock) => self.start_new_block(),
-            Some(PreviewEvent::FinishEdit) => self.finish_block_edit(),
-            Some(PreviewEvent::Code { index, action }) => self.code_block_action(ui.ctx(), index, action),
-            Some(PreviewEvent::Memo(action)) => self.memo_action(ui.ctx(), action),
-            Some(PreviewEvent::PlayVideo(path)) => self.play_video(&path),
-            None => {}
+        if let Some(event) = preview_event {
+            self.preview_action(ui.ctx(), event);
         }
         if let Some(event) = media_event {
             self.media_action(ui.ctx(), event);
@@ -1647,6 +1639,22 @@ impl RubriqueApp {
         self.drop_hint(ui.ctx(), page);
         if showing_preview && self.block_edit.is_none() && self.note_draft.is_none() && !self.ask.is_open() {
             self.add_note_button(ui.ctx());
+        }
+    }
+
+    /// Act on what the user did in the preview.
+    fn preview_action(&mut self, ctx: &Context, event: PreviewEvent) {
+        match event {
+            PreviewEvent::StartEdit(index) => self.start_block_edit(index),
+            PreviewEvent::StartCellEdit { index, cell } => self.start_cell_edit(index, cell),
+            PreviewEvent::Table { index, action } => self.table_action(index, action),
+            PreviewEvent::StartNewBlock => self.start_new_block(),
+            PreviewEvent::FinishEdit => self.finish_block_edit(),
+            PreviewEvent::DeleteBlock(index) => self.delete_block(index),
+            PreviewEvent::InsertBlock(index) => self.start_insert_block(index),
+            PreviewEvent::Code { index, action } => self.code_block_action(ctx, index, action),
+            PreviewEvent::Memo(action) => self.memo_action(ctx, action),
+            PreviewEvent::PlayVideo(path) => self.play_video(&path),
         }
     }
 
@@ -1731,7 +1739,8 @@ impl RubriqueApp {
         let Some(text) = document.text.get(range.clone()) else {
             return;
         };
-        self.block_edit = Some(BlockEdit { index, range, text: text.to_string(), focused: false, cell: None });
+        self.block_edit =
+            Some(BlockEdit { index, range, text: text.to_string(), focused: false, cell: None, inserting: false });
     }
 
     /// Edit one cell of the table at block `index` in place. A cell the
@@ -1753,13 +1762,19 @@ impl RubriqueApp {
             return;
         };
         let Some(within) = table_edit::cell_range(source, cell) else {
-            self.block_edit =
-                Some(BlockEdit { index, range: block, text: source.to_string(), focused: false, cell: None });
+            self.block_edit = Some(BlockEdit {
+                index,
+                range: block,
+                text: source.to_string(),
+                focused: false,
+                cell: None,
+                inserting: false,
+            });
             return;
         };
         let range = block.start + within.start..block.start + within.end;
         let text = document.text.get(range.clone()).unwrap_or_default().to_string();
-        self.block_edit = Some(BlockEdit { index, range, text, focused: false, cell: Some(cell) });
+        self.block_edit = Some(BlockEdit { index, range, text, focused: false, cell: Some(cell), inserting: false });
     }
 
     /// Add or remove a row or column of the table at block `index`, next to
@@ -1796,13 +1811,25 @@ impl RubriqueApp {
         };
         let mut range = blocks.get(index)?.range.clone();
         if let Some(applied) = self.finish_block_edit_with_shift() {
-            if range.start > applied.at {
+            // `>=`: a block inserted right before this one moves it too.
+            if range.start >= applied.at {
                 range = shift(range.start, applied.delta)..shift(range.end, applied.delta);
             } else if applied.cell_block == Some(index) {
                 range.end = shift(range.end, applied.delta);
             }
         }
         Some(range)
+    }
+
+    /// Edit an empty new block just before top-level block `index`. The
+    /// blank lines around it are added when the edit is finished with text in it.
+    fn start_insert_block(&mut self, index: usize) {
+        let Some(block) = self.block_edit_target(index) else {
+            return;
+        };
+        let at = block.start;
+        self.block_edit =
+            Some(BlockEdit { index, range: at..at, text: String::new(), focused: false, cell: None, inserting: true });
     }
 
     /// Edit an empty new block at the end of the file. The blank line before
@@ -1813,8 +1840,34 @@ impl RubriqueApp {
             return;
         };
         let end = document.text.len();
-        self.block_edit =
-            Some(BlockEdit { index: blocks.len(), range: end..end, text: String::new(), focused: false, cell: None });
+        self.block_edit = Some(BlockEdit {
+            index: blocks.len(),
+            range: end..end,
+            text: String::new(),
+            focused: false,
+            cell: None,
+            inserting: true,
+        });
+    }
+
+    /// Remove top-level block `index` and the blank lines that separated it
+    /// from the next block. Typing in that block is dropped with it; an edit
+    /// of another block is put in first.
+    fn delete_block(&mut self, index: usize) {
+        if self.block_edit.as_ref().is_some_and(|edit| edit.index == index && !edit.inserting) {
+            self.block_edit = None;
+        }
+        let Some(block) = self.block_edit_target(index) else {
+            return;
+        };
+        let OpenFile::Text { document, preview, .. } = &mut self.open_file else {
+            return;
+        };
+        let range = deleted_block_range(&document.text, block);
+        document.text.replace_range(range, "");
+        document.on_text_changed();
+        *preview = None;
+        self.show_status("Deleted the block (save to keep it)".to_string());
     }
 
     /// Put the edited block's Markdown (or cell's text) into the document.
@@ -1832,6 +1885,7 @@ impl RubriqueApp {
         let new_text = match cell {
             Some(_) => table_edit::escape_cell(&text),
             None if range.is_empty() && range.start == document.text.len() => appended_block(&document.text, &text),
+            None if range.is_empty() => inserted_block(&document.text[..range.start], &text),
             None => edited_block(&text).to_string(),
         };
         // A block emptied out stays as it was; a cell may be emptied.
@@ -2367,6 +2421,63 @@ fn appended_block(text: &str, block: &str) -> String {
     format!("{separator}{block}\n")
 }
 
+/// The text to remove to delete the block at `block` (as in
+/// `SourceBlock::range`): the block, its line break, and the blank lines
+/// after it, so the next block moves up into its place. The last block
+/// takes the blank lines before it instead, so the file still ends right
+/// after the block above.
+fn deleted_block_range(text: &str, block: Range<usize>) -> Range<usize> {
+    let mut end = block.end;
+    if text[end..].starts_with("\r\n") {
+        end += 2;
+    } else if text[end..].starts_with('\n') {
+        end += 1;
+    }
+    while let Some(next) = blank_line_end(text, end) {
+        end = next;
+    }
+    let mut start = block.start;
+    if end == text.len() {
+        // A block starts at a line start, so text[start - 1] is a line break.
+        while start > 0 {
+            let line_start = text[..start - 1].rfind('\n').map_or(0, |newline| newline + 1);
+            if !text[line_start..start - 1].trim().is_empty() {
+                break;
+            }
+            start = line_start;
+        }
+    }
+    start..end
+}
+
+/// End (after its line break) of the line starting at `at`, if that line
+/// is blank. Only whole blank lines count: spaces before text can make the
+/// next block indented code.
+fn blank_line_end(text: &str, at: usize) -> Option<usize> {
+    let rest = text.get(at..).filter(|rest| !rest.is_empty())?;
+    let line_end = rest.find('\n').map_or(text.len(), |newline| at + newline + 1);
+    text[at..line_end].trim().is_empty().then_some(line_end)
+}
+
+/// The text to put at a block's start (`before` is everything ahead of it)
+/// to insert `block` there: the block and a blank line after it, plus a
+/// blank line before it when the text ahead does not end with one. Empty
+/// when only whitespace was typed.
+fn inserted_block(before: &str, block: &str) -> String {
+    let block = edited_block(block);
+    if block.is_empty() {
+        return String::new();
+    }
+    let separator = if before.is_empty() || before.ends_with("\n\n") || before.ends_with("\n\r\n") {
+        ""
+    } else if before.ends_with('\n') {
+        "\n"
+    } else {
+        "\n\n"
+    };
+    format!("{separator}{block}\n\n")
+}
+
 fn shift(value: usize, delta: isize) -> usize {
     value.saturating_add_signed(delta)
 }
@@ -2590,7 +2701,46 @@ impl eframe::App for RubriqueApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{appended_block, edited_block};
+    use super::{appended_block, deleted_block_range, edited_block, inserted_block};
+    use crate::markdown::blocks::parse_source_blocks;
+
+    /// `text` with its top-level block `index` deleted.
+    fn delete(text: &str, index: usize) -> String {
+        let block = parse_source_blocks(text)[index].range.clone();
+        let mut text = text.to_string();
+        text.replace_range(deleted_block_range(&text, block), "");
+        text
+    }
+
+    #[test]
+    fn deleting_a_block_takes_the_blank_lines_after_it() {
+        let text = "# One\n\nTwo\n\n\n- three\n- four\n";
+        assert_eq!(delete(text, 0), "Two\n\n\n- three\n- four\n");
+        assert_eq!(delete(text, 1), "# One\n\n- three\n- four\n");
+        assert_eq!(delete("One\r\n\r\nTwo\r\n", 0), "Two\r\n");
+        // Spaces before the next block's text are kept: they make it code.
+        assert_eq!(delete("One\n\n    code\n", 0), "    code\n");
+    }
+
+    #[test]
+    fn inserted_block_gets_blank_lines_around_it() {
+        let text = "One\n\nTwo\n";
+        let at = parse_source_blocks(text)[1].range.start;
+        let inserted = inserted_block(&text[..at], "\nNew\n");
+        assert_eq!(format!("{}{inserted}{}", &text[..at], &text[at..]), "One\n\nNew\n\nTwo\n");
+        // A block right under a heading, with no blank line between them.
+        assert_eq!(inserted_block("# Title\n", "New"), "\nNew\n\n");
+        assert_eq!(inserted_block("", "New"), "New\n\n");
+        assert_eq!(inserted_block("One\n\n", " \n"), "");
+    }
+
+    #[test]
+    fn deleting_the_last_block_takes_the_blank_lines_before_it() {
+        assert_eq!(delete("One\n\nTwo\n", 1), "One\n");
+        assert_eq!(delete("One\n\n\nTwo", 1), "One\n");
+        assert_eq!(delete("Only\n", 0), "");
+        assert_eq!(delete("\n\nOnly\n\n", 0), "");
+    }
 
     #[test]
     fn edited_block_drops_blank_lines_around_it() {

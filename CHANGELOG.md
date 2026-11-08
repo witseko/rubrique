@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Delete a block from the preview.** Hover a block and click the cross
+  beside its top right corner, or press Delete next to Done while editing
+  it. The blank lines around it go too; save to keep the change.
+- **Insert a block between blocks in the preview.** Hover the gap
+  between two blocks (or above the first one) and an accent line with a
+  plus shows; click it to type a new block right there.
+
 ## [0.8.7] - 2026-11-08
 
 ### Added
