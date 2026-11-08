@@ -821,11 +821,35 @@ pub fn apply_with_undo(ctx: &Context, text: &mut String, cursor: usize, edit: im
     undoer.add_undo(&(before, text.clone()));
     edit(text);
     let after = CCursorRange::one(CCursor::new(cursor));
+    let after_state = (after, text.clone());
+    // Feeding a changed state drops the redo steps, as typing does: after
+    // an undo, a new edit starts a new line of history.
+    undoer.feed_state(ctx.input(|input| input.time), &after_state);
     // The new text is a point too, so the editor sees no change to gather.
-    undoer.add_undo(&(after, text.clone()));
+    undoer.add_undo(&after_state);
     state.set_undoer(undoer);
     state.cursor.set_char_range(Some(after));
     state.store(ctx, editor_id());
+}
+
+/// Step the editor's undo history back one point (forward when `redo`)
+/// from outside the editor, e.g. Cmd+Z in the preview, putting the text and
+/// cursor of that point back. Returns false when there is no step to take.
+pub fn step_editor_history(ctx: &Context, text: &mut String, redo: bool) -> bool {
+    let Some(mut state) = TextEditState::load(ctx, editor_id()) else {
+        return false;
+    };
+    let current = (state.cursor.char_range().unwrap_or_default(), text.clone());
+    let mut undoer = state.undoer();
+    let step = if redo { undoer.redo(&current) } else { undoer.undo(&current) };
+    let Some((cursor, restored)) = step.cloned() else {
+        return false;
+    };
+    *text = restored;
+    state.set_undoer(undoer);
+    state.cursor.set_char_range(Some(cursor));
+    state.store(ctx, editor_id());
+    true
 }
 
 /// Give keyboard focus to the editor (e.g. after opening a file).
@@ -884,6 +908,46 @@ pub fn handle_editor_shortcuts(ctx: &Context, document: &mut Document) -> bool {
     state.store(ctx, editor_id());
     document.on_text_changed();
     true
+}
+
+#[cfg(test)]
+mod undo_tests {
+    use super::*;
+
+    #[test]
+    fn edits_from_outside_the_editor_undo_and_redo() {
+        let ctx = Context::default();
+        let mut text = "One\n\nTwo\n\nThree\n".to_string();
+        // Delete "Two", as deleting a block in the preview does.
+        apply_with_undo(&ctx, &mut text, 5, |text| text.replace_range(5..10, ""));
+        apply_with_undo(&ctx, &mut text, 0, |text| text.replace_range(0..5, ""));
+        assert_eq!(text, "Three\n");
+
+        assert!(step_editor_history(&ctx, &mut text, false));
+        assert_eq!(text, "One\n\nThree\n");
+        assert!(step_editor_history(&ctx, &mut text, false));
+        assert_eq!(text, "One\n\nTwo\n\nThree\n");
+        assert!(!step_editor_history(&ctx, &mut text, false), "nothing older to undo");
+
+        assert!(step_editor_history(&ctx, &mut text, true));
+        assert_eq!(text, "One\n\nThree\n");
+
+        // A new edit after an undo drops the redo steps.
+        apply_with_undo(&ctx, &mut text, 0, |text| text.push_str("Four\n"));
+        assert!(!step_editor_history(&ctx, &mut text, true), "the old redo is gone");
+        assert_eq!(text, "One\n\nThree\nFour\n");
+        assert!(step_editor_history(&ctx, &mut text, false));
+        assert_eq!(text, "One\n\nThree\n");
+    }
+
+    #[test]
+    fn no_history_means_nothing_to_undo() {
+        let ctx = Context::default();
+        let mut text = "Same".to_string();
+        assert!(!step_editor_history(&ctx, &mut text, false));
+        assert!(!step_editor_history(&ctx, &mut text, true));
+        assert_eq!(text, "Same");
+    }
 }
 
 #[cfg(test)]
