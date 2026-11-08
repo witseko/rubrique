@@ -39,8 +39,8 @@ use crate::document::preview_selection;
 use crate::document::text_file::{DiskState, Document, Opened, Unsupported};
 use crate::document::text_stats::TextStats;
 use crate::document::view::{
-    BlockEdit, EditorState, PreviewEvent, editor_selection, focus_editor, handle_editor_shortcuts, set_editor_cursor,
-    show_editor, show_preview,
+    BlockEdit, EditorState, PreviewEvent, apply_with_undo, editor_selection, focus_editor, handle_editor_shortcuts,
+    set_editor_cursor, show_editor, show_preview, step_editor_history,
 };
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
@@ -134,6 +134,10 @@ const TEXT_LARGER: [KeyboardShortcut; 2] =
 const TEXT_SMALLER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Minus);
 const TEXT_DEFAULT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Num0);
 const LOCK: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::L);
+const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
+/// Redo as on Windows and Linux.
+const REDO_Y: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Y);
 
 /// What a tab shows (and, for the active tab, the right panel).
 #[derive(Debug)]
@@ -823,7 +827,39 @@ impl RubriqueApp {
         {
             *preview = None;
         }
+        self.handle_undo_keys(ctx);
         self.prepare_find(ctx);
+    }
+
+    /// Cmd+Z and Shift+Cmd+Z (or Cmd+Y) when no text box takes the keys, as
+    /// in the preview: step back or forward through the editor's undo
+    /// history, so a deleted block comes back and can be deleted again.
+    /// A text box with focus (the editor, a block being edited) keeps its own Undo.
+    fn handle_undo_keys(&mut self, ctx: &Context) {
+        if !matches!(self.open_file, OpenFile::Text { .. })
+            || ctx.egui_wants_keyboard_input()
+            || self.merging.is_some()
+            || self.settings_open
+        {
+            return;
+        }
+        // Redo first: Cmd+Z alone would also match Shift+Cmd+Z.
+        let redo = ctx.input_mut(|input| input.consume_shortcut(&REDO) || input.consume_shortcut(&REDO_Y));
+        if !redo && !ctx.input_mut(|input| input.consume_shortcut(&UNDO)) {
+            return;
+        }
+        // A block edit still open is put in first, so it is the step undone.
+        self.finish_block_edit();
+        let OpenFile::Text { document, preview, .. } = &mut self.open_file else {
+            return;
+        };
+        if step_editor_history(ctx, &mut document.text, redo) {
+            document.on_text_changed();
+            *preview = None;
+        } else {
+            let what = if redo { "redo" } else { "undo" };
+            self.show_status(format!("Nothing to {what}"));
+        }
     }
 
     /// Cmd/Ctrl + plus, minus and 0: the next text size, the one before, the default.
@@ -1228,9 +1264,7 @@ impl RubriqueApp {
             );
             return;
         };
-        document.text.replace_range(range, &formatted);
-        document.on_text_changed();
-        *preview = None;
+        replace_with_undo(ctx, document, preview, range, &formatted);
         self.show_status(format!("Prettified the {} (save to keep it)", language.name()));
     }
 
@@ -1794,9 +1828,7 @@ impl RubriqueApp {
             return;
         };
         let new_block = block.start..block.start + edited.source.len();
-        document.text.replace_range(block, &edited.source);
-        document.on_text_changed();
-        *preview = None;
+        replace_with_undo(&self.repaint, document, preview, block, &edited.source);
         if let Some(next) = edited.next {
             self.edit_cell_in(index, new_block, next);
         }
@@ -1864,10 +1896,8 @@ impl RubriqueApp {
             return;
         };
         let range = deleted_block_range(&document.text, block);
-        document.text.replace_range(range, "");
-        document.on_text_changed();
-        *preview = None;
-        self.show_status("Deleted the block (save to keep it)".to_string());
+        replace_with_undo(&self.repaint, document, preview, range, "");
+        self.show_status("Deleted the block (Cmd+Z brings it back; save to keep it deleted)".to_string());
     }
 
     /// Put the edited block's Markdown (or cell's text) into the document.
@@ -1897,9 +1927,7 @@ impl RubriqueApp {
         }
         let old_length = isize::try_from(range.len()).unwrap_or(0);
         let new_length = isize::try_from(new_text.len()).unwrap_or(0);
-        document.text.replace_range(range.clone(), &new_text);
-        document.on_text_changed();
-        *preview = None;
+        replace_with_undo(&self.repaint, document, preview, range.clone(), &new_text);
         Some(EditShift { at: range.start, delta: new_length - old_length, cell_block: cell.map(|_| index) })
     }
 
@@ -2476,6 +2504,22 @@ fn inserted_block(before: &str, block: &str) -> String {
         "\n\n"
     };
     format!("{separator}{block}\n\n")
+}
+
+/// Replace `range` of the document's text with `new_text` as one step of
+/// the editor's undo history, so Cmd+Z (in the preview too) puts back what
+/// was there. The cursor goes to the end of the new text.
+fn replace_with_undo(
+    ctx: &Context,
+    document: &mut Document,
+    preview: &mut Option<Vec<SourceBlock>>,
+    range: Range<usize>,
+    new_text: &str,
+) {
+    let cursor = document.text[..range.start].chars().count() + new_text.chars().count();
+    apply_with_undo(ctx, &mut document.text, cursor, |text| text.replace_range(range, new_text));
+    document.on_text_changed();
+    *preview = None;
 }
 
 fn shift(value: usize, delta: isize) -> usize {
