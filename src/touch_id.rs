@@ -26,13 +26,19 @@ mod unsupported;
 use unsupported as platform;
 
 /// Why Touch ID did not give the key.
+///
+/// Only the macOS code makes the first three; the stub for other systems
+/// has nothing to report but [`TouchIdError::Other`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TouchIdError {
     /// The user closed the Touch ID sheet.
+    #[cfg_attr(not(target_os = "macos"), expect(dead_code, reason = "made by the macOS code only"))]
     Cancelled,
     /// No key is kept (never stored, or the fingerprints changed).
+    #[cfg_attr(not(target_os = "macos"), expect(dead_code, reason = "made by the macOS code only"))]
     NotStored,
     /// This build may not use the data protection keychain.
+    #[cfg_attr(not(target_os = "macos"), expect(dead_code, reason = "made by the macOS code only"))]
     NeedsSignedApp,
     /// Anything else, with the system's text.
     Other(String),
