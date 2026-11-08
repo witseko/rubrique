@@ -219,6 +219,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   style command to copy on Linux), and Check again turns Terminals on
   without restarting Rubrique.
 
+- **Touch ID for encrypted scratches** (macOS): Settings → Privacy → **Open
+  encrypted scratches with Touch ID**. A locked scratch, or the Unlock
+  dialog, asks for your fingerprint as soon as it shows; cancel and the
+  password field is still there, with a **Use Touch ID** button to ask
+  again. The scratch key is kept in this Mac's keychain and given out only
+  after the fingerprints enrolled when you turned it on; add or remove one
+  and Touch ID turns itself off until you set it up again. Works in the
+  Rubrique app from a release, which carries the signature macOS asks for.
+
 ### Fixed
 
 - **Codex and Claude installed with npm under nvm are found.** Opened

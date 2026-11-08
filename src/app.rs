@@ -70,7 +70,7 @@ use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_syst
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
 use crate::settings::view::{
-    AiInfo, PrivacyInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
+    AiInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
 use crate::settings::{Settings, default_agents_folder, default_scratch_folder, default_skills_folder, themes_folder};
 use crate::terminal::agent_sessions::SessionHistory;
@@ -1185,7 +1185,7 @@ impl RubriqueApp {
             local_model: self.install.local_model.as_ref(),
             install: &install,
         };
-        let privacy = PrivacyInfo { settings: &mut self.settings.privacy, unlocked: self.privacy.vault.is_some() };
+        let privacy = self.privacy.settings_info(&mut self.settings.privacy);
         let voice = VoiceInfo {
             settings: &mut self.settings.voice,
             found: self.voice.program_found.as_deref(),
@@ -2852,6 +2852,7 @@ impl eframe::App for RubriqueApp {
         let ctx = ui.ctx().clone();
         self.handle_window_events(&ctx);
         self.track_activity(&ctx);
+        self.poll_touch_id(&ctx);
         if self.app_locked() {
             // Only the PIN screen; drafts and background work go on.
             self.poll_drafts(&ctx);

@@ -102,10 +102,13 @@ jobs:
       # MACOS_CERTIFICATE_PASSWORD, APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD.
       # Without them (forks, or before setup) the app is ad-hoc signed: macOS
       # blocks it on first open, and the release notes say how to open it.
-      - name: Import the Developer ID certificate
+      # MACOS_PROVISIONING_PROFILE (a Developer ID profile, base64) lets the
+      # app use Touch ID for encrypted scratches; without it that is unavailable.
+      - name: Import the Developer ID certificate and provisioning profile
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_PROVISIONING_PROFILE: ${{ secrets.MACOS_PROVISIONING_PROFILE }}
         run: |
           if [ -z "$MACOS_CERTIFICATE" ]; then
             echo "::warning::No MACOS_CERTIFICATE secret: the app is ad-hoc signed and macOS will block it"
@@ -129,6 +132,12 @@ jobs:
             exit 1
           fi
           echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          if [ -n "$MACOS_PROVISIONING_PROFILE" ]; then
+            echo "$MACOS_PROVISIONING_PROFILE" | base64 --decode > "$RUNNER_TEMP/rubrique.provisionprofile"
+            echo "MACOS_PROFILE=$RUNNER_TEMP/rubrique.provisionprofile" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No MACOS_PROVISIONING_PROFILE secret: Touch ID for encrypted scratches is unavailable in this build"
+          fi
       - name: Bundle, sign and notarize
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}

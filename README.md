@@ -49,7 +49,8 @@ Agents run only when you ask, read-only by default.
 - Drop images and audio onto the page.
 - Scratch files (`Cmd+N`), each one encrypted or not, switched at any time:
   the lock button in the status bar or right-click in the explorer, and
-  `Cmd+Shift+N` for a new encrypted one. Optional app PIN.
+  `Cmd+Shift+N` for a new encrypted one. Touch ID opens them on a Mac.
+  Optional app PIN.
 - Format JSON, SQL, XML (`Cmd+Shift+F`). Render and lint Helm charts.
 
 **Files**

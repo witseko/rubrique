@@ -49,6 +49,15 @@ to `main` whose `Cargo.toml` version has no tag yet. If Actions did not
 run (for example the account's spending limit was reached), start it by
 hand from the Actions tab (`workflow_dispatch`) once that is fixed.
 
+Touch ID for encrypted scratches needs the signed app to embed a Developer
+ID provisioning profile for `io.github.witseko.rubrique` (the data
+protection keychain is open only to an authorized application identifier).
+The workflow reads it from the `MACOS_PROVISIONING_PROFILE` secret (base64)
+and passes its path to `bundle.sh` as `MACOS_PROFILE`, which adds the
+`com.apple.application-identifier` and `com.apple.developer.team-identifier`
+entitlements only then. A build without the profile still works; Touch ID
+reports that it needs the app from a release.
+
 ## macOS disk image
 
 `packaging/macos/bundle.sh` lays the `.dmg` out through Finder: window
