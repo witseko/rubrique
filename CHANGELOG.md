@@ -10,6 +10,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Syntax colors for Python, JavaScript, JSON and XML.** Keywords,
+  strings, numbers, comments, and the names of functions and classes are
+  colored in the editor for `.py`, `.js`, `.json` and `.xml` files (and
+  their relatives such as `.jsx`, `.jsonc` and `.svg`), and in preview
+  code blocks marked `python`, `js`, `json` or `xml`. The colors come from
+  the current theme.
 - **Terminals settings.** A new Terminals page in Settings says what
   terminals are and whether tmux was found. When it is missing it offers
   to install it (one click with Homebrew, or the `sudo apt install tmux`

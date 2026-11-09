@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
 use super::inlines::{Inline, is_openable_url, parse_inlines};
 use super::table_edit::TableCell;
+use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::media::{MediaKind, image_uri, media_kind_of_url};
 
 /// Sizes and spacing for one place Markdown is drawn.
@@ -231,7 +232,8 @@ fn code_action_id() -> egui::Id {
     egui::Id::unique("rubrique-code-action")
 }
 
-/// Code block in an outlined box, with its info string as a small label at
+/// Code block in an outlined box, colored when its info string names a
+/// language the editor colors, with that info string as a small label at
 /// the top right. Under the mouse, Copy (and Prettify for JSON, SQL and
 /// XML) show there too.
 fn render_code(ui: &mut Ui, look: &Look, info: &str, code: &str) {
@@ -247,7 +249,15 @@ fn render_code(ui: &mut Ui, look: &Look, info: &str, code: &str) {
         // A slim row above the code for the language and the buttons, so
         // they never cover the code.
         header = ui.allocate_exact_size(vec2(ui.available_width(), CODE_BUTTON_HEIGHT), Sense::hover()).0;
-        ui.label(RichText::new(code).monospace().size(CODE_SIZE).line_height(Some(CODE_LINE_HEIGHT)));
+        match Syntax::from_code_info(info) {
+            Some(syntax) => {
+                let style = HighlightStyle::from_ui(ui).with_size(CODE_SIZE, CODE_LINE_HEIGHT);
+                ui.label(highlighted(ui.ctx(), code, &style, Some(syntax)));
+            }
+            None => {
+                ui.label(RichText::new(code).monospace().size(CODE_SIZE).line_height(Some(CODE_LINE_HEIGHT)));
+            }
+        }
     });
     // The header spans the box's full width, minus a small inset on the right.
     let header = egui::Rect::from_min_max(

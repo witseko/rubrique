@@ -27,6 +27,15 @@ pub enum Kind {
     Key,
     /// The inside of a Helm (Go template) action, `{{ ... }}`.
     Template,
+    /// A language keyword in code (`def`, `return`, `true`), or an XML tag name.
+    Keyword,
+    /// A string literal in code, or an XML attribute value.
+    String,
+    /// A number literal in code.
+    Number,
+    /// A name being defined (`def name`, `class Name`), a Python decorator,
+    /// or an XML attribute name.
+    Name,
 }
 
 /// A labeled byte range of the text.
