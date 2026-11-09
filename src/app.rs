@@ -74,6 +74,7 @@ use crate::terminal::session::LiveTerminal;
 use crate::terminal::tmux::Tmux;
 use crate::terminal::view::show_terminal;
 use crate::theme::catalog::Themes;
+use crate::theme::code_colors::install_code_colors;
 use crate::theme::style::{apply_accessibility, apply_theme, install_fonts, page_fill};
 use crate::voice::view::set_memo_states;
 use privacy::AfterPassword;
@@ -393,6 +394,7 @@ impl RubriqueApp {
         install_fonts(ctx);
         let themes = Themes::load(themes_folder().as_deref());
         apply_theme(ctx, &themes, &settings.theme);
+        install_code_colors(ctx, settings.code_colors);
         apply_accessibility(ctx, &settings.accessibility);
         // Rubrique steps through its own text sizes instead (see `handle_text_size_keys`).
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
@@ -900,9 +902,10 @@ impl RubriqueApp {
         }
     }
 
-    /// The theme, then the accessibility settings on top of it.
+    /// The theme and code colors, then the accessibility settings on top of them.
     fn apply_look(&self, ctx: &Context) {
         apply_theme(ctx, &self.themes, &self.settings.theme);
+        install_code_colors(ctx, self.settings.code_colors);
         apply_accessibility(ctx, &self.settings.accessibility);
     }
 
@@ -1096,6 +1099,7 @@ impl RubriqueApp {
             &mut self.settings_group,
             &self.themes,
             &self.settings.theme,
+            self.settings.code_colors,
             folder.as_deref(),
             &mut self.settings.accessibility,
             scratch,
@@ -1109,17 +1113,10 @@ impl RubriqueApp {
             return;
         };
         match action {
-            SettingsAction::PickTheme(choice) => {
-                self.settings.theme = choice;
-                self.apply_look(ui.ctx());
+            SettingsAction::PickTheme(_) | SettingsAction::PickCodeColors(_) | SettingsAction::ReloadThemes => {
+                self.appearance_settings_action(ui.ctx(), &action, folder.as_deref());
             }
             SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
-            SettingsAction::ReloadThemes => {
-                self.themes = Themes::load(folder.as_deref());
-                self.apply_look(ui.ctx());
-                let count = self.themes.list.len();
-                self.show_status(format!("Loaded {count} themes"));
-            }
             SettingsAction::ChooseScratchFolder => {
                 let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
                 if let Some(current) = &scratch_folder {
@@ -1161,6 +1158,22 @@ impl RubriqueApp {
             // The Privacy buttons (privacy.rs).
             _ => self.privacy_action(&action),
         }
+    }
+
+    /// The Appearance group's actions: pick a theme or code colors (applied
+    /// at once), or read the themes folder again.
+    fn appearance_settings_action(&mut self, ctx: &Context, action: &SettingsAction, themes_folder: Option<&Path>) {
+        match action {
+            SettingsAction::PickTheme(choice) => self.settings.theme = choice.clone(),
+            SettingsAction::PickCodeColors(choice) => self.settings.code_colors = *choice,
+            SettingsAction::ReloadThemes => {
+                self.themes = Themes::load(themes_folder);
+                let count = self.themes.list.len();
+                self.show_status(format!("Loaded {count} themes"));
+            }
+            _ => return,
+        }
+        self.apply_look(ctx);
     }
 
     /// Show the open Markdown (rendered, in the current theme's colors) or

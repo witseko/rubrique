@@ -5,13 +5,29 @@
 //! values are strings; `<`, `>`, `=`, entities (`&amp;`), declarations
 //! (`<?xml ?>`, `<!DOCTYPE>`) and the CDATA brackets are markers; comments
 //! are comments and the inside of CDATA is code. Element text stays plain.
+//!
+//! HTML uses the same scanner with Angular's template syntax on top:
+//! `{{ value }}` interpolation is a template, binding attributes
+//! (`[value]`, `(click)`, `[(ngModel)]`, `*ngIf`, `#ref`) are names, and
+//! control flow blocks (`@if`, `@for`, `@switch`) are keywords. The text of
+//! `<script>` and `<style>` elements stays plain, so a `<` in code there
+//! opens no tag.
 
 use crate::markdown::highlight::{Kind, Span, Spans};
 
 /// Label every byte of `text`. Spans are in order, touch each other, never
 /// empty, and neighbors never share a kind.
 pub fn highlight(text: &str) -> Vec<Span> {
-    let mut scanner = Scanner { text, out: Spans::default(), position: 0 };
+    scan(text, false)
+}
+
+/// Label every byte of HTML `text`, Angular templates included.
+pub fn highlight_html(text: &str) -> Vec<Span> {
+    scan(text, true)
+}
+
+fn scan(text: &str, html: bool) -> Vec<Span> {
+    let mut scanner = Scanner { text, out: Spans::default(), position: 0, html };
     while scanner.position < text.len() {
         scanner.step();
     }
@@ -21,12 +37,19 @@ pub fn highlight(text: &str) -> Vec<Span> {
 
 const CDATA_OPEN: &str = "<![CDATA[";
 const CDATA_CLOSE: &str = "]]>";
+/// Angular's control flow blocks, written `@if (...) { ... }`.
+const ANGULAR_BLOCKS: [&str; 12] =
+    ["if", "else", "for", "empty", "switch", "case", "default", "defer", "placeholder", "loading", "error", "let"];
+/// HTML elements whose text is code or CSS, not markup.
+const RAW_TEXT_ELEMENTS: [&str; 2] = ["script", "style"];
 
 /// Walks the text once, front to back, stopping only on char boundaries.
 struct Scanner<'a> {
     text: &'a str,
     out: Spans,
     position: usize,
+    /// HTML with Angular templates rather than plain XML.
+    html: bool,
 }
 
 impl Scanner<'_> {
@@ -49,43 +72,70 @@ impl Scanner<'_> {
             self.tag();
         } else if rest.starts_with('<') && rest[1..].chars().next().is_some_and(is_name_start) {
             self.mark(self.position + 1, Kind::Marker);
-            self.tag();
+            let name_start = self.position;
+            let opened = self.tag();
+            let name = &self.text[name_start..name_end(self.text, name_start)];
+            if self.html && opened && RAW_TEXT_ELEMENTS.iter().any(|raw| raw.eq_ignore_ascii_case(name)) {
+                self.position = raw_text_end(self.text, self.position, name);
+            }
         } else if rest.starts_with('&') && entity_length(rest).is_some() {
             let end = self.position + entity_length(rest).unwrap_or(1);
             self.mark(end, Kind::Marker);
+        } else if self.html && rest.starts_with("{{") {
+            let end = self.end_after(self.position + 2, "}}");
+            self.mark(end, Kind::Template);
+        } else if let Some(length) = self.html.then(|| angular_block_length(rest)).flatten() {
+            self.mark(self.position + length, Kind::Keyword);
         } else {
             self.position += rest.chars().next().map_or(1, char::len_utf8);
         }
     }
 
     /// The inside of a tag, from its name to its closing `>` or `/>`.
-    fn tag(&mut self) {
+    /// Returns whether it ended with `>` (so an element's text follows).
+    fn tag(&mut self) -> bool {
         let end = name_end(self.text, self.position);
         self.mark(end, Kind::Keyword);
         while let Some(character) = self.text[self.position..].chars().next() {
             let rest = &self.text[self.position..];
             if rest.starts_with("/>") || rest.starts_with('>') {
-                let length = if rest.starts_with('>') { 1 } else { 2 };
-                self.mark(self.position + length, Kind::Marker);
-                return;
+                let opened = rest.starts_with('>');
+                self.mark(self.position + if opened { 1 } else { 2 }, Kind::Marker);
+                return opened;
             }
             if rest.starts_with('<') {
                 // A broken tag: let the next one start fresh.
-                return;
+                return false;
             }
-            if is_name_start(character) {
-                let end = name_end(self.text, self.position);
+            if is_name_start(character) || (self.html && is_binding_start(character)) {
+                let end =
+                    if self.html { binding_end(self.text, self.position) } else { name_end(self.text, self.position) };
                 self.mark(end, Kind::Name);
             } else if character == '=' {
                 self.mark(self.position + 1, Kind::Marker);
             } else if character == '"' || character == '\'' {
                 let quote = if character == '"' { "\"" } else { "'" };
                 let end = self.end_after(self.position + 1, quote);
-                self.mark(end, Kind::String);
+                self.mark_value(end);
             } else {
                 self.position += character.len_utf8();
             }
         }
+        false
+    }
+
+    /// An attribute value up to `end`: a string, with any `{{ ... }}` in
+    /// HTML labeled as a template.
+    fn mark_value(&mut self, end: usize) {
+        while self.html && self.position < end {
+            let Some(open) = find_from(self.text, self.position, "{{").filter(|&open| open < end) else {
+                break;
+            };
+            self.mark(open, Kind::String);
+            let close = find_from(self.text, open + 2, "}}").map_or(end, |close| (close + 2).min(end));
+            self.mark(close, Kind::Template);
+        }
+        self.mark(end, Kind::String);
     }
 
     /// Just past the next `close` at or after `from`, or the end of the text.
@@ -113,6 +163,51 @@ fn is_name_char(character: char) -> bool {
 /// The end of the name that starts at `start`.
 fn name_end(text: &str, start: usize) -> usize {
     text[start..].find(|character| !is_name_char(character)).map_or(text.len(), |offset| start + offset)
+}
+
+/// Angular binding attributes start with `[`, `(`, `*`, `#` or `@`.
+fn is_binding_start(character: char) -> bool {
+    matches!(character, '[' | '(' | '*' | '#' | '@')
+}
+
+/// The end of an HTML attribute name, Angular bindings included
+/// (`[(ngModel)]`, `(click)`, `[class.active]`, `*ngFor`).
+fn binding_end(text: &str, start: usize) -> usize {
+    text[start..]
+        .find(|character| !(is_name_char(character) || is_binding_start(character) || matches!(character, ']' | ')')))
+        .map_or(text.len(), |offset| start + offset)
+}
+
+/// The length of an Angular block keyword like `@if` or `@else if` at the
+/// start of `text`; `None` for other `@` text such as an email address.
+fn angular_block_length(text: &str) -> Option<usize> {
+    let word = text.strip_prefix('@')?;
+    let length = word.find(|character: char| !character.is_ascii_alphabetic()).unwrap_or(word.len());
+    if !ANGULAR_BLOCKS.contains(&&word[..length]) {
+        return None;
+    }
+    let else_if = &word[..length] == "else"
+        && word[length..].trim_start().starts_with("if")
+        && !word[length..].trim_start()[2..].starts_with(|character: char| character.is_alphanumeric());
+    if else_if {
+        let spaces = word[length..].len() - word[length..].trim_start().len();
+        return Some(1 + length + spaces + 2);
+    }
+    Some(1 + length)
+}
+
+/// Where the text of a `<script>` or `<style>` element that starts at
+/// `from` ends: at its closing tag (any case), or the end of the text.
+fn raw_text_end(text: &str, from: usize, name: &str) -> usize {
+    let mut search = from;
+    while let Some(found) = find_from(text, search, "</") {
+        let after = found + 2;
+        if text.get(after..after + name.len()).is_some_and(|candidate| candidate.eq_ignore_ascii_case(name)) {
+            return found;
+        }
+        search = after;
+    }
+    text.len()
 }
 
 /// The length of an entity like `&amp;` or `&#x41;` at the start of `text`.
@@ -181,11 +276,87 @@ mod tests {
         assert_eq!(colored("a < b & c"), vec![("a < b & c", Kind::Plain)]);
     }
 
+    fn colored_html(text: &str) -> Vec<(&str, Kind)> {
+        highlight_html(text)
+            .into_iter()
+            .filter(|span| span.kind != Kind::Plain)
+            .map(|span| (&text[span.range], span.kind))
+            .collect()
+    }
+
+    #[test]
+    fn angular_bindings_and_interpolation() {
+        let text = "<li *ngFor=\"let n of notes\" [class.done]=\"n.done\" (click)=\"open(n)\" title=\"Note {{n.id}}\">{{ n.title }}</li>";
+        assert_eq!(
+            colored_html(text),
+            vec![
+                ("<", Kind::Marker),
+                ("li", Kind::Keyword),
+                ("*ngFor", Kind::Name),
+                ("=", Kind::Marker),
+                ("\"let n of notes\"", Kind::String),
+                ("[class.done]", Kind::Name),
+                ("=", Kind::Marker),
+                ("\"n.done\"", Kind::String),
+                ("(click)", Kind::Name),
+                ("=", Kind::Marker),
+                ("\"open(n)\"", Kind::String),
+                ("title", Kind::Name),
+                ("=", Kind::Marker),
+                ("\"Note ", Kind::String),
+                ("{{n.id}}", Kind::Template),
+                ("\"", Kind::String),
+                (">", Kind::Marker),
+                ("{{ n.title }}", Kind::Template),
+                ("</", Kind::Marker),
+                ("li", Kind::Keyword),
+                (">", Kind::Marker),
+            ]
+        );
+    }
+
+    #[test]
+    fn angular_control_flow_blocks() {
+        let text = "@if (user) { hi } @else if (x) { } @else { } mail me@example.com";
+        assert_eq!(
+            colored_html(text),
+            vec![("@if", Kind::Keyword), ("@else if", Kind::Keyword), ("@else", Kind::Keyword)]
+        );
+    }
+
+    #[test]
+    fn script_text_opens_no_tags() {
+        let text = "<script>if (a<b) {}</SCRIPT><p>";
+        let tags: Vec<&str> =
+            colored_html(text).into_iter().filter(|(_, kind)| *kind == Kind::Keyword).map(|(tag, _)| tag).collect();
+        assert_eq!(tags, ["script", "SCRIPT", "p"]);
+    }
+
+    #[test]
+    fn xml_has_no_angular_syntax() {
+        assert_eq!(colored("{{ x }} @if"), vec![("{{ x }} @if", Kind::Plain)]);
+    }
+
     #[test]
     fn unfinished_input_is_covered() {
-        for text in ["<", "<a", "<a b=\"", "<!--", "<![CDATA[x", "&amp", "<a\n<b>", "<é ü='ö'>"] {
-            let spans = highlight(text);
-            assert_eq!(spans.last().map_or(0, |span| span.range.end), text.len(), "{text:?}");
+        for text in [
+            "<",
+            "<a",
+            "<a b=\"",
+            "<!--",
+            "<![CDATA[x",
+            "&amp",
+            "<a\n<b>",
+            "<é ü='ö'>",
+            "{{",
+            "@else",
+            "@else i",
+            "<script>",
+            "<a b=\"{{",
+        ] {
+            for spans in [highlight(text), highlight_html(text)] {
+                assert_eq!(spans.last().map_or(0, |span| span.range.end), text.len(), "{text:?}");
+            }
         }
     }
 }
