@@ -21,6 +21,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Revert block in the Changes view.** The Revert, Remove and Restore
   buttons on a change card work again; a click on them used to scroll to
   the block instead of undoing the change.
+- **Linux app icon size.** On Ubuntu and other Linux desktops the icon
+  fills its space like other apps (Obsidian, for one) instead of looking
+  smaller: it no longer carries the margin macOS needs.
 
 ## [0.9.1] - 2026-11-09
 

@@ -12,7 +12,7 @@ rm -rf "$stage"
 install -Dm755 "$binary" "$stage/bin/rubrique"
 install -Dm644 packaging/linux/rubrique.desktop "$stage/share/applications/rubrique.desktop"
 for size in 64 128 256 512; do
-    icon="assets/icon/rubrique-$size.png"
+    icon="assets/icon/linux/rubrique-$size.png"
     if [ -f "$icon" ]; then
         install -Dm644 "$icon" "$stage/share/icons/hicolor/${size}x${size}/apps/rubrique.png"
     fi
