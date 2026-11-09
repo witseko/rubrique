@@ -16,6 +16,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   colored by their language (Python, JavaScript, TypeScript, SQL, JSON,
   XML and the others the preview colors) instead of one flat code color.
 
+### Fixed
+
+- **Revert block in the Changes view.** The Revert, Remove and Restore
+  buttons on a change card work again; a click on them used to scroll to
+  the block instead of undoing the change.
+
 ## [0.9.1] - 2026-11-09
 
 ### Added
