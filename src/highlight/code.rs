@@ -1,4 +1,4 @@
-//! Find Python, JavaScript, TypeScript, Rust and JSON syntax in raw text so
+//! Find Python, JavaScript, TypeScript, Rust, JSON and SQL syntax in raw text so
 //! it can be colored.
 //!
 //! One small scanner reads them all, steered by a `Rules` value per
@@ -39,6 +39,9 @@ pub struct Rules {
     attributes: bool,
     /// Rust's macro calls, `println!`, colored as names.
     macros: bool,
+    /// Keywords match in any case (SQL's `SELECT`, `select` and `Select`).
+    /// When set, `keywords` are written in lowercase.
+    ignore_case: bool,
     keywords: &'static [&'static str],
     /// More keywords on top of `keywords` (TypeScript's, on top of JavaScript's).
     extra_keywords: &'static [&'static str],
@@ -58,6 +61,7 @@ pub const PYTHON: Rules = Rules {
     lifetimes: false,
     attributes: false,
     macros: false,
+    ignore_case: false,
     keywords: &[
         "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
         "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
@@ -79,6 +83,7 @@ pub const JAVASCRIPT: Rules = Rules {
     lifetimes: false,
     attributes: false,
     macros: false,
+    ignore_case: false,
     keywords: &[
         "async",
         "await",
@@ -188,6 +193,7 @@ pub const RUST: Rules = Rules {
     lifetimes: true,
     attributes: true,
     macros: true,
+    ignore_case: false,
     keywords: &[
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
         "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
@@ -215,7 +221,120 @@ pub const JSON: Rules = Rules {
     lifetimes: false,
     attributes: false,
     macros: false,
+    ignore_case: false,
     keywords: &["true", "false", "null"],
+    extra_keywords: &[],
+    definers: &[],
+};
+
+/// SQL, in the common dialects (PostgreSQL, MySQL, SQLite, SQL Server):
+/// `--` and `/* */` comments, `'...'` strings (a doubled `''` inside one
+/// reads as two strings side by side, the same color), and keywords in any
+/// case. `"..."` is a quoted name in SQL but is colored as a string, which
+/// is close enough to guide the eye.
+pub const SQL: Rules = Rules {
+    line_comment: "--",
+    block_comment: Some(("/*", "*/")),
+    triple_quotes: false,
+    // Strings stop at the end of the line, so a stray apostrophe colors one
+    // line rather than the rest of the query.
+    multiline_quotes: &[],
+    string_prefixes: false,
+    decorators: false,
+    string_keys: false,
+    jsx: false,
+    lifetimes: false,
+    attributes: false,
+    macros: false,
+    ignore_case: true,
+    keywords: &[
+        "add",
+        "all",
+        "alter",
+        "and",
+        "any",
+        "as",
+        "asc",
+        "begin",
+        "between",
+        "by",
+        "cascade",
+        "case",
+        "cast",
+        "check",
+        "column",
+        "commit",
+        "constraint",
+        "create",
+        "cross",
+        "database",
+        "default",
+        "delete",
+        "desc",
+        "distinct",
+        "drop",
+        "else",
+        "end",
+        "except",
+        "exists",
+        "false",
+        "fetch",
+        "foreign",
+        "from",
+        "full",
+        "function",
+        "grant",
+        "group",
+        "having",
+        "if",
+        "in",
+        "index",
+        "inner",
+        "insert",
+        "intersect",
+        "into",
+        "is",
+        "join",
+        "key",
+        "left",
+        "like",
+        "limit",
+        "not",
+        "null",
+        "offset",
+        "on",
+        "or",
+        "order",
+        "outer",
+        "over",
+        "partition",
+        "primary",
+        "procedure",
+        "references",
+        "replace",
+        "returning",
+        "revoke",
+        "right",
+        "rollback",
+        "select",
+        "set",
+        "table",
+        "then",
+        "transaction",
+        "trigger",
+        "true",
+        "truncate",
+        "union",
+        "unique",
+        "update",
+        "using",
+        "values",
+        "view",
+        "when",
+        "where",
+        "window",
+        "with",
+    ],
     extra_keywords: &[],
     definers: &[],
 };
@@ -304,13 +423,24 @@ impl Scanner<'_> {
             // `println!(...)` is a macro call; `a != b` is not.
             self.mark(end + 1, Kind::Name);
             return;
-        } else if self.rules.keywords.contains(&word) || self.rules.extra_keywords.contains(&word) {
+        } else if self.is_keyword(word) {
             self.define_next = self.rules.definers.contains(&word);
             Kind::Keyword
         } else {
             Kind::Plain
         };
         self.mark(end, kind);
+    }
+
+    /// True when `word` is one of the language's keywords.
+    fn is_keyword(&self, word: &str) -> bool {
+        let rules = self.rules;
+        if rules.ignore_case {
+            let lower = word.to_ascii_lowercase();
+            rules.keywords.contains(&lower.as_str()) || rules.extra_keywords.contains(&lower.as_str())
+        } else {
+            rules.keywords.contains(&word) || rules.extra_keywords.contains(&word)
+        }
     }
 
     /// A string whose opening quote is at the current position; `start` is
@@ -609,6 +739,25 @@ mod tests {
     }
 
     #[test]
+    fn sql_keywords_in_any_case_strings_numbers_comments() {
+        let text =
+            "-- active users\nSELECT name, Count(*) from users u\nwhere u.note = 'it''s' AND age > 18 /* adults */;";
+        assert_eq!(
+            colored(text, &SQL),
+            vec![
+                ("-- active users", Kind::Comment),
+                ("SELECT", Kind::Keyword),
+                ("from", Kind::Keyword),
+                ("where", Kind::Keyword),
+                ("'it''s'", Kind::String),
+                ("AND", Kind::Keyword),
+                ("18", Kind::Number),
+                ("/* adults */", Kind::Comment),
+            ]
+        );
+    }
+
+    #[test]
     fn escaped_quotes_stay_inside_strings() {
         assert_eq!(colored(r#""a\"b": 1"#, &JSON), vec![(r#""a\"b""#, Kind::Key), ("1", Kind::Number)]);
     }
@@ -616,7 +765,7 @@ mod tests {
     #[test]
     fn spans_cover_odd_input() {
         for text in ["", "'", "\"\\", "x = '\\", "/*", "@", "1e", "é = 'ü' # ö", "f'", "\"\"\"\\", "`\\\n"] {
-            for rules in [&PYTHON, &JAVASCRIPT, &TYPESCRIPT, &TSX, &RUST, &JSON] {
+            for rules in [&PYTHON, &JAVASCRIPT, &TYPESCRIPT, &TSX, &RUST, &JSON, &SQL] {
                 assert_covers(text, rules);
             }
         }
