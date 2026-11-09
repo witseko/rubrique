@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Revert block in the Changes view.** The Revert, Remove and Restore
+  buttons on a change card work again; a click on them used to scroll to
+  the block instead of undoing the change.
+
 ## [0.9.1] - 2026-11-09
 
 ### Added
