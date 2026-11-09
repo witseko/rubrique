@@ -92,19 +92,77 @@ fn path_from_env_output(output: &[u8]) -> Option<OsString> {
 }
 
 /// Where tools usually get installed, for when the shell gives no answer:
-/// the Claude Code and Codex installers (`~/.local/bin`), Homebrew, the
-/// classic local folder, and npm's documented user-owned global folder.
+/// the Claude Code and Codex installers (`~/.local/bin`), Homebrew (macOS
+/// and Linux), the classic local folder, and the folders where `npm -g`
+/// puts programs (see [`node_folders`]).
 fn usual_folders(home: Option<&Path>) -> Vec<PathBuf> {
     let mut folders = Vec::new();
     if let Some(home) = home {
         folders.push(home.join(".local/bin"));
     }
     folders.push(PathBuf::from("/opt/homebrew/bin"));
+    folders.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
     folders.push(PathBuf::from("/usr/local/bin"));
     if let Some(home) = home {
-        folders.push(home.join(".npm-global/bin"));
+        folders.extend(node_folders(home));
     }
     folders
+}
+
+/// Where `npm install -g` puts programs for the usual Node setups.
+///
+/// Node version managers (nvm, fnm, Volta) add their folder in `.bashrc`
+/// or `.zshrc`, which a login shell does not read; Ubuntu's `.bashrc` even
+/// stops early when the shell is not interactive. So `codex` installed with
+/// `npm -g` under nvm is missing from the login shell's `PATH`. These are
+/// the folders those managers use, plus npm's documented user-owned global
+/// folder and a `prefix` set in `~/.npmrc`.
+fn node_folders(home: &Path) -> Vec<PathBuf> {
+    let mut folders = vec![home.join(".npm-global/bin")];
+    if let Some(prefix) = npmrc_prefix(home) {
+        folders.push(prefix.join("bin"));
+    }
+    folders.push(home.join(".volta/bin"));
+    folders.push(home.join(".local/share/fnm/aliases/default/bin"));
+    folders.extend(nvm_folders(&home.join(".nvm/versions/node")));
+    folders
+}
+
+/// The `prefix=` folder in `~/.npmrc`, with a leading `~/` expanded.
+fn npmrc_prefix(home: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(home.join(".npmrc")).ok()?;
+    let value = text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "prefix").then(|| value.trim())
+    })?;
+    match value.strip_prefix("~/") {
+        Some(rest) => Some(home.join(rest)),
+        None if value.starts_with('/') => Some(PathBuf::from(value)),
+        // A relative or variable-based prefix cannot be resolved here.
+        None => None,
+    }
+}
+
+/// The `bin` folder of every Node version nvm installed in `versions`
+/// (`~/.nvm/versions/node/v22.11.0/bin`), newest version first. All of
+/// them, not only nvm's default, because a program installed with `npm -g`
+/// lives in the version that was active then, and reading nvm's default
+/// alias (`lts/*`, `node`, `22`) would mean redoing nvm's own resolution.
+fn nvm_folders(versions: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(versions) else {
+        return Vec::new();
+    };
+    let mut found: Vec<(Vec<u64>, PathBuf)> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let number =
+                name.strip_prefix('v')?.split('.').map(|part| part.parse().ok()).collect::<Option<Vec<u64>>>()?;
+            Some((number, entry.path().join("bin")))
+        })
+        .collect();
+    found.sort_by(|left, right| right.0.cmp(&left.0));
+    found.into_iter().map(|(_, folder)| folder).collect()
 }
 
 /// `current` with the folders of `from_shell` it lacks appended in the
@@ -190,6 +248,42 @@ mod tests {
         set_executable(&failing);
         assert_eq!(login_shell_path(&failing, Duration::from_secs(5)), None);
         assert_eq!(login_shell_path(&temp.path().join("missing"), Duration::from_secs(5)), None);
+    }
+
+    #[test]
+    fn finds_nvm_versions_newest_first() {
+        let temp = TempFolder::new();
+        let versions = temp.path().join(".nvm/versions/node");
+        for name in ["v9.11.2", "v22.11.0", "v20.18.1", "system"] {
+            std::fs::create_dir_all(versions.join(name).join("bin")).unwrap();
+        }
+        assert_eq!(
+            nvm_folders(&versions),
+            [versions.join("v22.11.0/bin"), versions.join("v20.18.1/bin"), versions.join("v9.11.2/bin")]
+        );
+        assert_eq!(nvm_folders(&temp.path().join("missing")), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn reads_the_npmrc_prefix() {
+        let temp = TempFolder::new();
+        assert_eq!(npmrc_prefix(temp.path()), None);
+        temp.write(".npmrc", "registry=https://example.org/\nprefix = ~/.npm-packages\n");
+        assert_eq!(npmrc_prefix(temp.path()), Some(temp.path().join(".npm-packages")));
+        temp.write(".npmrc", "prefix=/opt/npm\n");
+        assert_eq!(npmrc_prefix(temp.path()), Some(PathBuf::from("/opt/npm")));
+        temp.write(".npmrc", "prefix=${HOME}/npm\n");
+        assert_eq!(npmrc_prefix(temp.path()), None);
+    }
+
+    #[test]
+    fn node_folders_include_nvm_and_the_npmrc_prefix() {
+        let temp = TempFolder::new();
+        temp.make_folder(".nvm/versions/node/v22.11.0/bin");
+        temp.write(".npmrc", "prefix=~/.npm-packages\n");
+        let folders = node_folders(temp.path());
+        assert!(folders.contains(&temp.path().join(".nvm/versions/node/v22.11.0/bin")), "{folders:?}");
+        assert!(folders.contains(&temp.path().join(".npm-packages/bin")), "{folders:?}");
     }
 
     fn set_executable(path: &Path) {

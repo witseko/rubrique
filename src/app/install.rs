@@ -12,8 +12,10 @@ use crate::ai::{self, AiTool};
 use crate::install::view::{DialogChoice, InstallAction, Offer, install_dialog};
 use crate::install::{
     InstallStatus, Platform, Progress, Recipe, find_installer, installed_message, last_line, model_recipe,
-    ollama_model, ollama_model_present, ollama_pull_recipe, recipe_for_command,
+    ollama_model, ollama_model_present, ollama_pull_recipe, recipe_for_command, tmux_recipe,
 };
+use crate::terminal::monitor::TerminalMonitor;
+use crate::terminal::tmux::Tmux;
 use crate::voice::MODEL_URL;
 
 /// Recipes for what is missing, the dialog, and the install that runs.
@@ -32,6 +34,8 @@ pub(super) struct InstallState {
     pub(super) voice: Option<Recipe>,
     /// The whisper model, when it is missing.
     pub(super) voice_model: Option<Recipe>,
+    /// tmux, when it was not found (Terminals are off without it).
+    pub(super) tmux: Option<Recipe>,
 }
 
 impl RubriqueApp {
@@ -67,6 +71,22 @@ impl RubriqueApp {
             .and(voice.model_path())
             .filter(|_| voice.model_missing())
             .map(|model| model_recipe(&model, MODEL_URL, &find_installer));
+    }
+
+    /// Look for tmux when Terminals are off, and turn them on once it is
+    /// there, so installing it needs no restart. Its recipe while missing.
+    pub(super) fn check_terminals(&mut self) {
+        if self.terminals.is_none() {
+            self.terminals = Tmux::find().map(|tmux| TerminalMonitor::start(tmux, &self.repaint));
+        }
+        self.install.tmux = self.terminals.is_none().then(|| tmux_recipe(Platform::current(), &find_installer));
+    }
+
+    /// Settings' Check again: look for tmux and say what was found.
+    pub(super) fn check_terminals_again(&mut self) {
+        self.check_terminals();
+        let status = if self.terminals.is_some() { "Found tmux: Terminals are on" } else { "tmux is still not found" };
+        self.show_status(status.to_string());
     }
 
     /// The install that runs or ran last.
@@ -165,6 +185,7 @@ impl RubriqueApp {
         };
         self.check_ai_tools();
         self.check_voice_tool();
+        self.check_terminals();
         let progress = match result {
             Ok(()) => {
                 let found = recipe.provides.as_deref().is_none_or(|program| ai::find_on_path(program).is_some());
