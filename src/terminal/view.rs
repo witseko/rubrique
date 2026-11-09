@@ -84,10 +84,12 @@ pub fn show_terminal(ui: &mut Ui, terminal: &mut LiveTerminal) {
     );
     let colors = DefaultColors { text: ui.visuals().text_color(), background };
     let galley = ui.fonts_mut(|fonts| fonts.layout_job(screen_job(&screen, &font, colors)));
+    let cursor_cell = screen.cursor.map(|(column, row)| {
+        cursor_rect(&galley, usize::from(column), usize::from(row), vec2(cell_width, row_height))
+            .translate(inner.min.to_vec2())
+    });
     ui.painter().with_clip_rect(rect).galley(inner.min, galley, colors.text);
-    if let Some((column, row)) = screen.cursor {
-        let corner = inner.min + vec2(f32::from(column) * cell_width, f32::from(row) * row_height);
-        let cursor = egui::Rect::from_min_size(corner, vec2(cell_width, row_height));
+    if let Some(cursor) = cursor_cell {
         let color = ui.visuals().text_cursor.stroke.color;
         if focused {
             ui.painter().rect_filled(cursor, 0.0, color.gamma_multiply(0.7));
@@ -95,6 +97,41 @@ pub fn show_terminal(ui: &mut Ui, terminal: &mut LiveTerminal) {
             ui.painter().rect_stroke(cursor, 0.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
         }
     }
+}
+
+/// Where the cursor cell at `column`, `row` sits, relative to the galley.
+///
+/// Placed from the laid-out rows rather than `row * cell height`: a row
+/// with a glyph from a fallback font (such as `❯` or box drawing) is
+/// taller than the monospace font's row, so multiplying would drift the
+/// cursor further down with every such row above it. tmux trims trailing
+/// spaces, so a cursor past the end of a row's text (or below the last
+/// row) is placed by whole cells after the last character (or row).
+fn cursor_rect(galley: &egui::Galley, column: usize, row: usize, cell: egui::Vec2) -> egui::Rect {
+    let Some(last) = galley.rows.last() else {
+        return egui::Rect::from_min_size(egui::pos2(cells(column, cell.x), cells(row, cell.y)), cell);
+    };
+    let (placed, rows_below) = match galley.rows.get(row) {
+        Some(placed) => (placed, 0),
+        None => (last, row + 1 - galley.rows.len()),
+    };
+    let glyphs = &placed.glyphs;
+    let x = match glyphs.get(column) {
+        Some(glyph) => glyph.pos.x,
+        None => placed.size.x + cells(column - glyphs.len(), cell.x),
+    };
+    let (top, height) = if rows_below == 0 {
+        (placed.pos.y, placed.size.y)
+    } else {
+        (placed.pos.y + placed.size.y + cells(rows_below - 1, cell.y), cell.y)
+    };
+    let width = glyphs.get(column).map_or(cell.x, |glyph| glyph.advance_width);
+    egui::Rect::from_min_size(egui::pos2(placed.pos.x + x, top), vec2(width, height))
+}
+
+/// The length of `count` cells of `size`; terminal sizes fit in a `u16`.
+fn cells(count: usize, size: f32) -> f32 {
+    f32::from(u16::try_from(count).unwrap_or(u16::MAX)) * size
 }
 
 /// The "session ended" message with a button to start it again. True
@@ -231,6 +268,34 @@ mod tests {
         assert_eq!(indexed_color(231), Color32::from_rgb(255, 255, 255));
         assert_eq!(indexed_color(232), Color32::from_rgb(8, 8, 8));
         assert_eq!(indexed_color(255), Color32::from_rgb(238, 238, 238));
+    }
+
+    #[test]
+    fn cursor_follows_the_laid_out_rows() {
+        // A first row in a bigger font stands in for a row made taller by
+        // a fallback glyph.
+        let mut job = LayoutJob::default();
+        let small = TextFormat { font_id: FontId::monospace(12.0), ..TextFormat::default() };
+        let big = TextFormat { font_id: FontId::monospace(24.0), ..TextFormat::default() };
+        job.append("big\n", 0.0, big);
+        job.append("ab", 0.0, small);
+        let ctx = egui::Context::default();
+        let mut galley = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            galley = Some(ui.fonts_mut(|fonts| fonts.layout_job(job.clone())));
+        });
+        output.textures_delta.clear();
+        let galley = galley.expect("laid out in the frame");
+        let cell = vec2(7.0, 14.0);
+        let first_height = galley.rows[0].size.y;
+        assert!(first_height > cell.y);
+
+        let on_text = cursor_rect(&galley, 1, 1, cell);
+        assert_eq!(on_text.min, egui::pos2(galley.rows[1].glyphs[1].pos.x, first_height));
+        let past_text = cursor_rect(&galley, 4, 1, cell);
+        assert_eq!(past_text.min.x, galley.rows[1].size.x + 2.0 * cell.x);
+        let below = cursor_rect(&galley, 0, 3, cell);
+        assert_eq!(below.min.y, galley.rows[1].pos.y + galley.rows[1].size.y + cell.y);
     }
 
     #[test]
