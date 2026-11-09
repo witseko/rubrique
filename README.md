@@ -37,6 +37,7 @@ Agents run only when you ask, read-only by default.
 
 - Live preview: click a block to edit it. In a table, click a cell to edit
   just that cell; buttons under it add or remove rows and columns.
+  HTML files get a read-only preview too.
 - Unsaved changes are marked until you save: a bar beside each edited or
   new block (hover it to compare with the saved text and revert), a dashed
   line where a block was deleted, and the full list in the Changes panel.

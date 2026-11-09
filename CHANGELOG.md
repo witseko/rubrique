@@ -16,6 +16,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   their relatives such as `.jsx`, `.jsonc` and `.svg`), and in preview
   code blocks marked `python`, `js`, `json` or `xml`. The colors come from
   the current theme.
+- **HTML preview.** `.html` files open in the preview, drawn like
+  Markdown in the theme's colors: headings, paragraphs, bold and italic,
+  links, images, lists and checkboxes, quotes, code and tables. The
+  Preview | Source switch (`Cmd+E`) goes back to the HTML. Styles and
+  scripts are left out and nothing runs; Open in browser still shows the
+  page as a browser does.
 - **Terminals settings.** A new Terminals page in Settings says what
   terminals are and whether tmux was found. When it is missing it offers
   to install it (one click with Homebrew, or the `sudo apt install tmux`

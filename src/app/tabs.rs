@@ -16,6 +16,7 @@ use crate::document::view::{focus_editor, restore_editor_state, take_editor_stat
 use crate::explorer::paths::absolute_path_text;
 use crate::explorer::view::{InlineRename, rename_field};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button};
+use crate::markdown::html::is_html_path;
 use crate::media::image_uri;
 use crate::theme::style::page_fill;
 
@@ -305,6 +306,41 @@ impl RubriqueApp {
         }
     }
 
+    /// The Preview | Source switch of a Markdown or HTML file at the right
+    /// end of the tab strip, and for Markdown the side panel toggle after
+    /// it. Returns the part of `strip` left for the tabs.
+    fn preview_controls(&mut self, ui: &mut Ui, strip: egui::Rect) -> egui::Rect {
+        let has_toggle = self.can_show_side_panel();
+        let has_switch = has_toggle || self.open_file.path().is_some_and(is_html_path);
+        let switch_width = SWITCH_SEGMENT * 2.0 + SWITCH_INSET * 2.0;
+        let toggle_width = if has_toggle { side_panel::TOGGLE_WIDTH + SWITCH_MARGIN } else { 0.0 };
+        let controls_width = switch_width + SWITCH_MARGIN * 2.0 + toggle_width;
+        let tabs_rect = if has_switch { strip.with_max_x(strip.right() - controls_width) } else { strip };
+        if has_toggle {
+            let toggle = egui::Rect::from_center_size(
+                pos2(strip.right() - SWITCH_MARGIN - side_panel::TOGGLE_WIDTH / 2.0, strip.center().y),
+                vec2(side_panel::TOGGLE_WIDTH, TAB_HEIGHT),
+            );
+            self.side_panel_toggle(ui, toggle);
+        }
+        if has_switch {
+            let switch = egui::Rect::from_center_size(
+                pos2(strip.right() - toggle_width - SWITCH_MARGIN - switch_width / 2.0, strip.center().y),
+                vec2(switch_width, SWITCH_HEIGHT),
+            );
+            let showing = self.showing_any_preview();
+            if let Some(preview) = preview_switch(ui, switch, showing)
+                && preview != showing
+            {
+                self.toggle_preview();
+                if !self.showing_any_preview() {
+                    focus_editor(ui.ctx());
+                }
+            }
+        }
+        tabs_rect
+    }
+
     /// The row of tabs above the page.
     pub(super) fn tab_bar(&mut self, ui: &mut Ui) {
         let mut action = None;
@@ -318,31 +354,7 @@ impl RubriqueApp {
         ui.painter().rect_filled(strip, 0, strip_fill);
         let line = ui.visuals().widgets.noninteractive.bg_stroke;
         ui.painter().hline(strip.x_range(), strip.bottom() - line.width / 2.0, line);
-        // Markdown files get the Preview | Source switch at the right end,
-        // then the side panel toggle after it.
-        let has_switch = self.can_show_side_panel();
-        let switch_width = SWITCH_SEGMENT * 2.0 + SWITCH_INSET * 2.0;
-        let controls_width = switch_width + SWITCH_MARGIN * 3.0 + side_panel::TOGGLE_WIDTH;
-        let tabs_rect = if has_switch { strip.with_max_x(strip.right() - controls_width) } else { strip };
-        if has_switch {
-            let toggle = egui::Rect::from_center_size(
-                pos2(strip.right() - SWITCH_MARGIN - side_panel::TOGGLE_WIDTH / 2.0, strip.center().y),
-                vec2(side_panel::TOGGLE_WIDTH, TAB_HEIGHT),
-            );
-            self.side_panel_toggle(ui, toggle);
-            let switch = egui::Rect::from_center_size(
-                pos2(toggle.left() - SWITCH_MARGIN - switch_width / 2.0, strip.center().y),
-                vec2(switch_width, SWITCH_HEIGHT),
-            );
-            if let Some(preview) = preview_switch(ui, switch, self.showing_preview())
-                && preview != self.showing_preview()
-            {
-                self.toggle_preview();
-                if !self.showing_preview() {
-                    focus_editor(ui.ctx());
-                }
-            }
-        }
+        let tabs_rect = self.preview_controls(ui, strip);
         ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
             egui::ScrollArea::horizontal()
                 .id_salt("tab-strip")
@@ -520,7 +532,7 @@ fn preview_switch(ui: &mut Ui, rect: egui::Rect, preview: bool) -> Option<bool> 
         let color = if selected { visuals.strong_text_color() } else { visuals.weak_text_color() };
         let accent = if selected { visuals.hyperlink_color } else { color };
         paint_icon(ui.painter(), icon, half.center(), color, accent, fill);
-        let tip = if mode { "Show the preview (Cmd+E)" } else { "Show the Markdown source (Cmd+E)" };
+        let tip = if mode { "Show the preview (Cmd+E)" } else { "Show the source (Cmd+E)" };
         let response = response.on_hover_text(tip);
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
         if response.clicked() {

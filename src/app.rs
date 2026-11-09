@@ -41,7 +41,7 @@ use crate::document::text_file::{DiskState, Document, Opened, Unsupported};
 use crate::document::text_stats::TextStats;
 use crate::document::view::{
     BlockEdit, EditorState, PreviewEvent, apply_with_undo, editor_selection, focus_editor, handle_editor_shortcuts,
-    set_editor_cursor, show_editor, show_preview, step_editor_history,
+    set_editor_cursor, show_editor, show_preview, show_read_only_preview, step_editor_history,
 };
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
@@ -56,6 +56,7 @@ use crate::icons::{Icon, icon_button};
 use crate::install::view::InstallAction;
 use crate::markdown::blocks::{SourceBlock, parse_blocks, parse_source_blocks};
 use crate::markdown::html::{file_url, html_page, is_html_path, with_base};
+use crate::markdown::html_blocks::html_source_blocks;
 use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, rewrite_note};
 use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
@@ -153,8 +154,8 @@ enum OpenFile {
         disk_notice: Option<DiskState>,
         /// Cursor and undo history while the tab is hidden.
         editor: Option<EditorState>,
-        /// A Markdown file shows its source instead of the preview. Every
-        /// file opens in preview; this lasts only for its tab.
+        /// A Markdown or HTML file shows its source instead of the
+        /// preview. Every file opens in preview; this lasts only for its tab.
         source: bool,
     },
     /// An image (shown in the page) or a video (shown as a card).
@@ -635,19 +636,32 @@ impl RubriqueApp {
         ctx.copy_text(text);
     }
 
-    /// Switch a Markdown file between editor and preview (no-op for other files).
+    /// Switch a Markdown or HTML file between editor and preview (no-op for
+    /// other files).
     fn toggle_preview(&mut self) {
         self.finish_block_edit();
-        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
-        if is_markdown && let OpenFile::Text { source, .. } = &mut self.open_file {
+        let has_preview = self.open_file.path().is_some_and(|path| is_markdown_path(path) || is_html_path(path));
+        if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = !*source;
         }
     }
 
-    /// True when the right panel shows the rendered preview.
+    /// True when the right panel shows the Markdown preview, where blocks
+    /// are edited in place.
     fn showing_preview(&self) -> bool {
         matches!(self.open_file, OpenFile::Text { source: false, .. })
             && self.open_file.path().is_some_and(is_markdown_path)
+    }
+
+    /// True when the right panel shows the read-only preview of an HTML file.
+    fn showing_html_preview(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { source: false, .. })
+            && self.open_file.path().is_some_and(is_html_path)
+    }
+
+    /// True when the right panel shows either preview instead of the editor.
+    fn showing_any_preview(&self) -> bool {
+        self.showing_preview() || self.showing_html_preview()
     }
 
     /// When the window regains focus, look for changes made by other programs.
@@ -823,7 +837,7 @@ impl RubriqueApp {
         }
         if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_PREVIEW)) {
             self.toggle_preview();
-            if !self.showing_preview() {
+            if !self.showing_any_preview() {
                 focus_editor(ctx);
             }
         }
@@ -1597,6 +1611,7 @@ impl RubriqueApp {
             self.recording_bar(ui);
         }
         let showing_preview = self.showing_preview();
+        let showing_html_preview = self.showing_html_preview();
         let mentions = self.mentions(ui.ctx());
         self.refresh_block_changes();
         let mut notice_choice = None;
@@ -1621,12 +1636,7 @@ impl RubriqueApp {
             OpenFile::Media { path, kind: MediaKind::Video, bytes, .. } => {
                 media_event = show_video(ui, path, *bytes);
             }
-            OpenFile::Unsupported { path, reason } => {
-                egui::Frame::new().inner_margin(UNSUPPORTED_MARGIN).show(ui, |ui| {
-                    ui.heading(name_text(path));
-                    ui.label(format!("Cannot display this file. {}", reason.describe()));
-                });
-            }
+            OpenFile::Unsupported { path, reason } => unsupported_notice(ui, path, reason),
             OpenFile::Text { document, preview, disk_notice, .. } => {
                 if let Some(session) = &mut self.merging {
                     merge_action = show_merge(ui, session, &name_text(&document.path));
@@ -1655,6 +1665,9 @@ impl RubriqueApp {
                     );
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
+                } else if showing_html_preview {
+                    let blocks = preview.get_or_insert_with(|| html_source_blocks(&document.text));
+                    preview_event = show_read_only_preview(ui, &document.path, blocks);
                 } else {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
@@ -2298,7 +2311,7 @@ impl RubriqueApp {
         let dirty = if self.open_file.is_dirty() { DIRTY_MARKER } else { "" };
         let path_text = format!("{dirty}{}", crate::remote::display(path));
         let is_text = matches!(self.open_file, OpenFile::Text { .. });
-        let showing_preview = self.showing_preview();
+        let showing_preview = self.showing_any_preview();
         let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
         let is_html = self.open_file.path().is_some_and(is_html_path);
         // Right side first, so a long path is shortened instead of overlapping it.
@@ -2573,6 +2586,14 @@ fn shorten(text: &str, limit: usize) -> String {
 /// Byte index of character `index` in `text` (the end when past it).
 fn char_to_byte(text: &str, index: usize) -> usize {
     text.char_indices().nth(index).map_or(text.len(), |(offset, _)| offset)
+}
+
+/// The page for a file that cannot be shown: its name and why.
+fn unsupported_notice(ui: &mut Ui, path: &Path, reason: &Unsupported) {
+    egui::Frame::new().inner_margin(UNSUPPORTED_MARGIN).show(ui, |ui| {
+        ui.heading(name_text(path));
+        ui.label(format!("Cannot display this file. {}", reason.describe()));
+    });
 }
 
 /// Write `page` to a temporary file for the browser, one per source file, and

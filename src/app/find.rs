@@ -97,12 +97,12 @@ impl FindBar {
 impl RubriqueApp {
     /// Open the bar (or put the pointer back in its field), with the replace
     /// row when `replace` is set. A one-line selection in the editor becomes
-    /// the query. Find works on the source, so a Markdown preview switches
-    /// to it.
+    /// the query. Find works on the source, so a Markdown or HTML preview
+    /// switches to it.
     pub(super) fn open_find(&mut self, ctx: &Context, replace: bool) {
         self.finish_block_edit();
-        let selected = if self.showing_preview() { None } else { self.selected_line(ctx) };
-        if self.showing_preview() {
+        let selected = if self.showing_any_preview() { None } else { self.selected_line(ctx) };
+        if self.showing_any_preview() {
             self.toggle_preview();
         }
         let bar = self.find.get_or_insert_with(FindBar::default);

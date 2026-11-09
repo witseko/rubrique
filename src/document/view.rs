@@ -18,8 +18,8 @@ use crate::icons::{Icon, icon_button, small_icon_button_on};
 use crate::markdown::blocks::{Block, SourceBlock};
 use crate::markdown::render::page_text;
 use crate::markdown::render::{
-    CodeAction, render_top_block, render_top_table, set_image_folder, take_cell_click, take_code_action,
-    take_play_request, top_gap,
+    CodeAction, render_read_only_block, render_top_block, render_top_table, set_image_folder, take_cell_click,
+    take_code_action, take_play_request, top_gap,
 };
 use crate::markdown::table_edit::{TableAction, TableCell};
 use crate::voice::view::{MemoAction, take_memo_action};
@@ -449,6 +449,37 @@ pub fn show_preview(
         None => data.remove::<usize>(preview_top_id(path)),
     });
     PreviewOutput { event, hovered }
+}
+
+/// Draw a page the preview does not edit (an HTML file), laid out like the
+/// Markdown preview. A code block's Copy and a click on a video come back
+/// as the event.
+pub fn show_read_only_preview(ui: &mut Ui, path: &Path, blocks: &[SourceBlock]) -> Option<PreviewEvent> {
+    let mut event = None;
+    // Relative image paths are next to the file.
+    set_image_folder(ui.ctx(), path.parent().map(Path::to_path_buf));
+    egui::ScrollArea::vertical().id_salt(("preview-scroll", path)).auto_shrink([false, false]).show(ui, |ui| {
+        egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
+            ui.set_max_width(PREVIEW_MAX_WIDTH.min(ui.available_width()));
+            for (index, source) in blocks.iter().enumerate() {
+                if index > 0 {
+                    ui.add_space(top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0);
+                }
+                // The same padding as an editable block, so both previews line up.
+                egui::Frame::new().inner_margin(BLOCK_PAD).show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    render_read_only_block(ui, &source.block);
+                });
+                if let Some(action) = take_code_action(ui.ctx()) {
+                    event = Some(PreviewEvent::Code { index, action });
+                }
+                if let Some(path) = take_play_request(ui.ctx()) {
+                    event = Some(PreviewEvent::PlayVideo(path));
+                }
+            }
+        });
+    });
+    event
 }
 
 /// The changes on block `index` (or deleted just before it), taken from
