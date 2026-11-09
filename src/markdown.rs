@@ -5,6 +5,7 @@
 pub mod blocks;
 pub mod highlight;
 pub mod html;
+pub mod html_blocks;
 pub mod inlines;
 pub mod notes;
 pub mod outline;

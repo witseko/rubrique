@@ -40,6 +40,10 @@ const PAGE: Look = Look {
     file_tools: true,
 };
 
+/// The preview of an HTML file: the page's sizes, without Prettify and
+/// memo rows, which rewrite the file as Markdown.
+const READ_ONLY_PAGE: Look = Look { file_tools: false, ..PAGE };
+
 /// Smaller and tighter, for AI answers.
 const COMPACT: Look = Look {
     heading_sizes: [19.0, 17.0, 15.5, 14.5, 14.0, 14.0],
@@ -139,6 +143,12 @@ fn render_blocks_at(ui: &mut Ui, look: &Look, blocks: &[Block], depth: usize, ga
 /// Draw one top-level block (for the clickable preview).
 pub fn render_top_block(ui: &mut Ui, block: &Block) {
     render_block(ui, &PAGE, block, 0);
+}
+
+/// Draw one top-level block of a page that is not edited in place (the
+/// HTML preview). Code blocks still offer Copy (see `take_code_action`).
+pub fn render_read_only_block(ui: &mut Ui, block: &Block) {
+    render_block(ui, &READ_ONLY_PAGE, block, 0);
 }
 
 /// Space above a top-level block that follows another one.
