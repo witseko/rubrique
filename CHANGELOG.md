@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-11-09
+
 ### Added
 
 - **VS Code code colors.** Settings → Appearance → Code colors switches
