@@ -25,6 +25,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Rust colors.** `.rs` files and `rust` code blocks are colored:
   keywords, built-in types, lifetimes, `#[attributes]` and `macro!` calls.
 
+### Fixed
+
+- **Terminal cursor in the right place.** The cursor in a terminal tab
+  now sits on the character it belongs to, instead of drifting down when
+  rows above it hold symbols such as `❯` or box-drawing lines.
+
 ## [0.9.0] - 2026-11-09
 
 ### Added
