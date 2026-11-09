@@ -54,6 +54,11 @@ impl Tmux {
         Some(Tmux { program, socket: None })
     }
 
+    /// Where the tmux program is, as shown in Settings.
+    pub fn program(&self) -> &Path {
+        &self.program
+    }
+
     /// A tmux using its own server, for tests.
     #[cfg(test)]
     pub fn with_socket(socket: &str) -> Option<Tmux> {

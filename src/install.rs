@@ -1,5 +1,5 @@
 //! Install a missing tool with one click: the recipes for the programs
-//! Rubrique runs (whisper.cpp, Ollama, Claude Code, Codex, Grok) and the
+//! Rubrique runs (whisper.cpp, Ollama, Claude Code, Codex, Grok, tmux) and the
 //! files they need (the whisper model, an Ollama model).
 //!
 //! A recipe has a one-click command only when it is a single, well-known
@@ -27,6 +27,15 @@ const OLLAMA_SCRIPT: &str = "curl -fsSL https://ollama.com/install.sh | sh";
 const CLAUDE_PAGE: &str = "https://docs.anthropic.com/en/docs/claude-code/setup";
 const CODEX_PAGE: &str = "https://github.com/openai/codex#quickstart";
 const GROK_PAGE: &str = "https://github.com/superagent-ai/grok-cli";
+const TMUX_PAGE: &str = "https://github.com/tmux/tmux/wiki/Installing";
+/// Linux package managers and their tmux install command, in the order
+/// they are looked for. They need `sudo`, so the command is only copied.
+const LINUX_TMUX_COMMANDS: [(&str, &str); 4] = [
+    ("apt-get", "sudo apt install tmux"),
+    ("dnf", "sudo dnf install tmux"),
+    ("pacman", "sudo pacman -S tmux"),
+    ("zypper", "sudo zypper install tmux"),
+];
 /// Where Ollama keeps models unless `OLLAMA_MODELS` says otherwise.
 const OLLAMA_REGISTRY: &str = "registry.ollama.ai";
 
@@ -159,6 +168,24 @@ fn npm_recipe(name: &str, package: &str, page: &'static str, find: &dyn Fn(&str)
     let run = find("npm").map(|npm| command(&npm));
     let copy = run.is_none().then(|| command(Path::new("npm")).display());
     Recipe { run, copy, page: Some(page), ..Recipe::named(name) }
+}
+
+/// tmux, for Terminals: `brew install tmux` with one click when Homebrew
+/// is there; otherwise the command to copy (the system package manager's
+/// on Linux, which needs `sudo`; Homebrew's on macOS) and the tmux page.
+pub fn tmux_recipe(platform: Platform, find: &dyn Fn(&str) -> Option<PathBuf>) -> Recipe {
+    let mut recipe = Recipe { page: Some(TMUX_PAGE), provides: Some("tmux".to_string()), ..Recipe::named("tmux") };
+    if let Some(brew) = find("brew") {
+        recipe.run = Some(InstallCommand::new(&brew, &["install", "tmux"]));
+    } else if platform == Platform::Mac {
+        recipe.copy = Some("brew install tmux".to_string());
+    } else {
+        recipe.copy = LINUX_TMUX_COMMANDS
+            .iter()
+            .find(|(manager, _)| find(manager).is_some())
+            .map(|(_, command)| (*command).to_string());
+    }
+    recipe
 }
 
 /// Download the whisper model `url` to `model` with curl.
@@ -341,6 +368,21 @@ mod tests {
         assert_eq!(recipe_for_command("llama-cli -p {prompt}", Platform::Mac, &with(&["brew"])), None);
         assert_eq!(recipe_for_command("/opt/x/whisper-cli -f {audio}", Platform::Mac, &with(&["brew"])), None);
         assert_eq!(recipe_for_command("", Platform::Mac, &with(&[])), None);
+    }
+
+    #[test]
+    fn tmux_installs_with_brew_or_copies_the_package_command() {
+        let brew = tmux_recipe(Platform::Linux, &with(&["brew", "apt-get"]));
+        assert_eq!(brew.shown_command().as_deref(), Some("/bin/brew install tmux"));
+        assert_eq!(brew.provides.as_deref(), Some("tmux"));
+        let ubuntu = tmux_recipe(Platform::Linux, &with(&["apt-get"]));
+        assert_eq!((ubuntu.run, ubuntu.copy.as_deref()), (None, Some("sudo apt install tmux")));
+        let fedora = tmux_recipe(Platform::Linux, &with(&["dnf"]));
+        assert_eq!(fedora.copy.as_deref(), Some("sudo dnf install tmux"));
+        let unknown = tmux_recipe(Platform::Linux, &with(&[]));
+        assert_eq!((unknown.copy, unknown.page), (None, Some(TMUX_PAGE)));
+        let mac = tmux_recipe(Platform::Mac, &with(&[]));
+        assert_eq!(mac.copy.as_deref(), Some("brew install tmux"));
     }
 
     #[test]

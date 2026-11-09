@@ -16,6 +16,20 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   their relatives such as `.jsx`, `.jsonc` and `.svg`), and in preview
   code blocks marked `python`, `js`, `json` or `xml`. The colors come from
   the current theme.
+- **Terminals settings.** A new Terminals page in Settings says what
+  terminals are and whether tmux was found. When it is missing it offers
+  to install it (one click with Homebrew, or the `sudo apt install tmux`
+  style command to copy on Linux), and Check again turns Terminals on
+  without restarting Rubrique.
+
+### Fixed
+
+- **Codex and Claude installed with npm under nvm are found.** Opened
+  from the app menu on Linux, Rubrique now also looks in the folders of
+  nvm, fnm, Volta and a `prefix` set in `~/.npmrc`, which a login shell
+  does not add, so `npm -g` installs show up in the agent list.
+- **Terminals on Ubuntu and Debian.** The `.deb` package now recommends
+  `tmux`, so `apt` installs it with Rubrique and the Terminals list shows.
 
 ## [0.8.9] - 2026-11-08
 
