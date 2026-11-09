@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-09
+
 ### Added
 
 - **Syntax colors for Python, JavaScript, JSON and XML.** Keywords,
