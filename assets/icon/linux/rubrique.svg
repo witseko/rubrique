@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <title>rubrique</title>
+  <!-- Linux app icon: the same art as ../rubrique.svg, scaled up so the tile fills the canvas.
+       The macOS tile is 824 px inside 1024 because macOS docks add no margin of their own;
+       Linux docks (GNOME, Ubuntu) show the whole canvas, so the macOS art looks small next to
+       other apps. Here the tile is 960 px with a 32 px edge, and the corner radius and the "R"
+       grow by the same ratio (960 / 824). -->
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="#2b2170"/>
+  <g transform="translate(512 512) scale(1.305) translate(-445 -518)">
+    <path d="M300 730 V300 H450 Q590 300 590 415 Q590 530 450 530 H300 M450 530 Q590 530 590 640"
+          fill="none" stroke="#ebe8ff" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+    <polygon points="544,640 636,640 620,760 560,782" fill="#ffc233"/>
+  </g>
+</svg>

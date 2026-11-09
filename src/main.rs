@@ -37,7 +37,12 @@ use settings::Settings;
 const DEFAULT_WINDOW_SIZE: (f32, f32) = (1100.0, 720.0);
 
 /// App icon for the window (the same art as the packaged icons).
+/// macOS draws its dock icons with a margin built into the art; other systems
+/// show the whole picture, so they get the larger Linux tile.
+#[cfg(target_os = "macos")]
 const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/icon/rubrique-256.png");
+#[cfg(not(target_os = "macos"))]
+const WINDOW_ICON_PNG: &[u8] = include_bytes!("../assets/icon/linux/rubrique-256.png");
 
 const USAGE: &str = "Usage: rubrique [FOLDER | FILE]...
 

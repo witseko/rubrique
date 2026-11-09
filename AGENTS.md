@@ -62,6 +62,17 @@ swift packaging/macos/background.swift packaging/macos/background.png
 The icon positions live in both `bundle.sh` and `background.swift`;
 change them together and remake the picture.
 
+## Linux app icon
+
+`assets/icon/linux/` holds a larger copy of the app icon for Linux: the
+tile fills 960 of 1024 px, where the macOS one (`assets/icon/`) keeps the
+macOS margin and looks small in GNOME and Ubuntu docks. Change both SVGs
+together, then remake the Linux PNGs (macOS only):
+
+```sh
+swift packaging/linux/icons.swift assets/icon/linux/rubrique.svg assets/icon/linux
+```
+
 ## Screenshots
 
 `docs/screenshots/themes.png` is remade by a script (macOS only):

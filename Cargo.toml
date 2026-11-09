@@ -83,11 +83,11 @@ extended-description = "A fast editor, agentic on demand. This version edits Mar
 assets = [
     ["target/release/rubrique", "usr/bin/", "755"],
     ["packaging/linux/rubrique.desktop", "usr/share/applications/", "644"],
-    ["assets/icon/rubrique.svg", "usr/share/icons/hicolor/scalable/apps/rubrique.svg", "644"],
-    ["assets/icon/rubrique-64.png", "usr/share/icons/hicolor/64x64/apps/rubrique.png", "644"],
-    ["assets/icon/rubrique-128.png", "usr/share/icons/hicolor/128x128/apps/rubrique.png", "644"],
-    ["assets/icon/rubrique-256.png", "usr/share/icons/hicolor/256x256/apps/rubrique.png", "644"],
-    ["assets/icon/rubrique-512.png", "usr/share/icons/hicolor/512x512/apps/rubrique.png", "644"],
+    ["assets/icon/linux/rubrique.svg", "usr/share/icons/hicolor/scalable/apps/rubrique.svg", "644"],
+    ["assets/icon/linux/rubrique-64.png", "usr/share/icons/hicolor/64x64/apps/rubrique.png", "644"],
+    ["assets/icon/linux/rubrique-128.png", "usr/share/icons/hicolor/128x128/apps/rubrique.png", "644"],
+    ["assets/icon/linux/rubrique-256.png", "usr/share/icons/hicolor/256x256/apps/rubrique.png", "644"],
+    ["assets/icon/linux/rubrique-512.png", "usr/share/icons/hicolor/512x512/apps/rubrique.png", "644"],
     ["README.md", "usr/share/doc/rubrique/", "644"],
     ["CHANGELOG.md", "usr/share/doc/rubrique/", "644"],
 ]
