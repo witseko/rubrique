@@ -64,6 +64,8 @@ pub enum SettingsAction {
     ForgetAllowedFolders,
     /// The transcription command changed, so look for its program again.
     VoiceCommandChanged,
+    /// Look for tmux again (after installing it in a terminal).
+    CheckTerminals,
     /// Put this text on the clipboard.
     Copy(String),
     /// A click in an install prompt.
@@ -96,6 +98,16 @@ pub struct VoiceInfo<'a> {
     pub recipe: Option<&'a Recipe>,
     /// How to download the model, when it is missing.
     pub model_recipe: Option<&'a Recipe>,
+    pub install: &'a InstallStatus,
+}
+
+/// Whether tmux was found, for the Terminals section.
+#[derive(Clone, Copy, Debug)]
+pub struct TerminalsInfo<'a> {
+    /// Where tmux is; `None` when it was not found and Terminals are off.
+    pub found: Option<&'a Path>,
+    /// How to install tmux, when it is missing.
+    pub recipe: Option<&'a Recipe>,
     pub install: &'a InstallStatus,
 }
 
@@ -174,11 +186,12 @@ pub enum SettingsGroup {
     Ai,
     Skills,
     Agents,
+    Terminals,
     VoiceMemos,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 8] = [
+    pub const ALL: [SettingsGroup; 9] = [
         Self::Appearance,
         Self::Accessibility,
         Self::Files,
@@ -186,6 +199,7 @@ impl SettingsGroup {
         Self::Ai,
         Self::Skills,
         Self::Agents,
+        Self::Terminals,
         Self::VoiceMemos,
     ];
 
@@ -198,6 +212,7 @@ impl SettingsGroup {
             Self::Ai => "AI",
             Self::Skills => "Skills",
             Self::Agents => "Agents",
+            Self::Terminals => "Terminals",
             Self::VoiceMemos => "Voice memos",
         }
     }
@@ -236,6 +251,7 @@ pub fn show_settings(
     privacy: PrivacyInfo,
     ai: AiInfo,
     voice: VoiceInfo,
+    terminals: TerminalsInfo,
 ) -> Option<SettingsAction> {
     let mut action = None;
     let (outer, _) = ui.allocate_exact_size(window_size(ui.ctx()), Sense::hover());
@@ -288,6 +304,7 @@ pub fn show_settings(
                         let AiInfo { settings, agents, agents_folder, .. } = ai;
                         agents_section(ui, settings, agents, agents_folder)
                     }
+                    SettingsGroup::Terminals => terminals_section(ui, terminals),
                     SettingsGroup::VoiceMemos => voice_section(ui, voice),
                 };
                 if picked.is_some() {
@@ -1028,6 +1045,65 @@ fn agents_section(
             action = Some(SettingsAction::CreateExampleAgent);
         }
     });
+    action
+}
+
+/// Terminals: what they are, whether tmux was found, and how to install it
+/// when it is missing (Terminals stay off until it is there).
+fn terminals_section(ui: &mut Ui, terminals: TerminalsInfo) -> Option<SettingsAction> {
+    let TerminalsInfo { found, recipe, install } = terminals;
+    let visuals = ui.visuals().clone();
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Terminals").strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if let Some(path) = found {
+                let (check, _) = ui.allocate_exact_size(vec2(CHECK_SIZE, CHECK_SIZE), Sense::hover());
+                paint_check(ui.painter(), check.center(), visuals.hyperlink_color);
+                let status = ui.label(RichText::new("Installed").size(STATUS_SIZE).weak());
+                status.on_hover_text(RichText::new(path.display().to_string()).monospace());
+            } else {
+                ui.label(RichText::new("Not found").size(STATUS_SIZE).color(visuals.warn_fg_color));
+            }
+        });
+    });
+    ui.add(
+        egui::Label::new(
+            RichText::new(
+                "Shells and agents (claude, codex) running in tmux sessions, listed under your files. \
+                 They keep running when Rubrique closes, and you can hand one a step with @tmux-name.",
+            )
+            .weak(),
+        )
+        .wrap(),
+    );
+    let small = |text: &str| RichText::new(text).size(SMALL_SIZE).weak();
+    if let Some(path) = found {
+        path_box(ui, path);
+        ui.label(small("Start one with New → Terminal in the file list, or open a .tmux file."));
+        return None;
+    }
+    let message = "tmux is not installed, or not on PATH. Install it to turn on Terminals.";
+    match recipe {
+        Some(recipe) => {
+            if let Some(clicked) = prompt(ui, message, recipe, install) {
+                action = Some(SettingsAction::Install(clicked));
+            }
+            if recipe.run.is_some() {
+                ui.label(small("Terminals turn on as soon as the install finishes, no restart."));
+            } else {
+                ui.label(small(
+                    "Run the command in a terminal (it may ask for your password), then click Check again.",
+                ));
+            }
+        }
+        None => {
+            ui.label(RichText::new(message).size(SMALL_SIZE).color(visuals.warn_fg_color));
+        }
+    }
+    if ui.button("Check again").on_hover_text("Look for tmux again").clicked() {
+        action = Some(SettingsAction::CheckTerminals);
+    }
     action
 }
 

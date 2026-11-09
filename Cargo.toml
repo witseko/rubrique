@@ -77,6 +77,8 @@ panic = "abort"
 [package.metadata.deb]
 maintainer = "witseko"
 section = "editors"
+# Terminals run in tmux, which Ubuntu and Debian do not install by default.
+recommends = "tmux"
 extended-description = "A fast editor, agentic on demand. This version edits Markdown and other text, runs Claude Code, Codex, Grok or a local model, and reviews every change in a merge screen."
 assets = [
     ["target/release/rubrique", "usr/bin/", "755"],

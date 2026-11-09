@@ -53,6 +53,7 @@ use crate::explorer::view::{
 use crate::format::{Language, format};
 use crate::icons::icon_text_button;
 use crate::icons::{Icon, icon_button};
+use crate::install::view::InstallAction;
 use crate::markdown::blocks::{SourceBlock, parse_blocks, parse_source_blocks};
 use crate::markdown::html::{file_url, html_page, is_html_path, with_base};
 use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, rewrite_note};
@@ -62,7 +63,7 @@ use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_syst
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::TextSize;
 use crate::settings::view::{
-    AiInfo, PrivacyInfo, ScratchInfo, SettingsAction, SettingsGroup, VoiceInfo, show_settings,
+    AiInfo, PrivacyInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
 use crate::settings::{Settings, default_agents_folder, default_scratch_folder, default_skills_folder, themes_folder};
 use crate::terminal::agent_sessions::SessionHistory;
@@ -938,6 +939,7 @@ impl RubriqueApp {
             self.check_ai_tools();
             self.load_skills_and_agents();
             self.check_voice_tool();
+            self.check_terminals();
         }
     }
 
@@ -1073,6 +1075,8 @@ impl RubriqueApp {
             model_recipe: self.install.voice_model.as_ref(),
             install: &install,
         };
+        let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
+        let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
         let action = show_settings(
             ui,
             &mut self.settings_group,
@@ -1085,6 +1089,7 @@ impl RubriqueApp {
             privacy,
             ai,
             voice,
+            terminals,
         );
         let Some(action) = action else {
             return;
@@ -1135,10 +1140,8 @@ impl RubriqueApp {
                 }
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
-            SettingsAction::Copy(text) => {
-                ui.ctx().copy_text(text);
-                self.show_status("Copied the command; paste it into a terminal".to_string());
-            }
+            SettingsAction::CheckTerminals => self.check_terminals_again(),
+            SettingsAction::Copy(text) => self.install_action(ui.ctx(), InstallAction::Copy(text)),
             SettingsAction::Install(action) => self.install_action(ui.ctx(), action),
             SettingsAction::Close => self.settings_open = false,
             // The Privacy buttons (privacy.rs).
