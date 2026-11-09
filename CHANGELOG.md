@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **SQL colors and colored code in the editor.** `.sql` files and `sql`
+  code blocks are colored: keywords in any case, strings, numbers and
+  comments. In a Markdown file's source, fenced code blocks are now
+  colored by their language (Python, JavaScript, TypeScript, SQL, JSON,
+  XML and the others the preview colors) instead of one flat code color.
+
 ## [0.9.1] - 2026-11-09
 
 ### Added

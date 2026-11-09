@@ -1,5 +1,5 @@
 //! Color Markdown, YAML, Helm template and code syntax (Python, JavaScript,
-//! TypeScript, Rust, JSON, XML, HTML) in the editor and in preview code blocks with the current
+//! TypeScript, Rust, JSON, XML, HTML, SQL) in the editor and in preview code blocks with the current
 //! theme, and lay plain text out with the same line height.
 
 use eframe::egui::cache::{ComputerMut, FrameCache};
@@ -31,6 +31,7 @@ pub enum Syntax {
     Xml,
     /// HTML, with Angular's template syntax.
     Html,
+    Sql,
 }
 
 impl Syntax {
@@ -50,7 +51,7 @@ impl Syntax {
                 "ts" | "mts" | "cts" => Some(Syntax::TypeScript),
                 "tsx" => Some(Syntax::Tsx),
                 "rs" => Some(Syntax::Rust),
-                _ => Syntax::of_format(Language::from_path(path)?),
+                _ => Language::from_path(path).map(Syntax::of_format),
             }
         }
     }
@@ -66,22 +67,26 @@ impl Syntax {
             "tsx" => Some(Syntax::Tsx),
             "rust" | "rs" => Some(Syntax::Rust),
             "html" | "htm" | "angular" => Some(Syntax::Html),
-            _ => Syntax::of_format(Language::from_code_info(info)?),
+            _ => Language::from_code_info(info).map(Syntax::of_format),
         }
     }
 
-    /// JSON and XML share their file names and info strings with Format.
-    fn of_format(language: Language) -> Option<Syntax> {
+    /// JSON, XML and SQL share their file names and info strings with Format.
+    fn of_format(language: Language) -> Syntax {
         match language {
-            Language::Json => Some(Syntax::Json),
-            Language::Xml => Some(Syntax::Xml),
-            Language::Sql => None,
+            Language::Json => Syntax::Json,
+            Language::Xml => Syntax::Xml,
+            Language::Sql => Syntax::Sql,
         }
     }
 
     fn spans(self, text: &str) -> Vec<Span> {
         match self {
-            Syntax::Markdown => crate::markdown::highlight::highlight(text),
+            // Fenced code blocks are colored as the language their info
+            // string names, as in the preview.
+            Syntax::Markdown => crate::markdown::highlight::highlight_with_code(text, |info, code| {
+                Some(Syntax::from_code_info(info)?.spans(code))
+            }),
             Syntax::Yaml => crate::helm::highlight::highlight(text),
             Syntax::Python => code::highlight(text, &code::PYTHON),
             Syntax::JavaScript => code::highlight(text, &code::JAVASCRIPT),
@@ -91,6 +96,7 @@ impl Syntax {
             Syntax::Json => code::highlight(text, &code::JSON),
             Syntax::Xml => xml::highlight(text),
             Syntax::Html => xml::highlight_html(text),
+            Syntax::Sql => code::highlight(text, &code::SQL),
         }
     }
 }
@@ -223,7 +229,7 @@ mod tests {
         assert_eq!(Syntax::of(Path::new("package.json")), Some(Syntax::Json));
         assert_eq!(Syntax::of(Path::new("pom.xml")), Some(Syntax::Xml));
         assert_eq!(Syntax::of(Path::new("notes.md")), Some(Syntax::Markdown));
-        assert_eq!(Syntax::of(Path::new("query.sql")), None);
+        assert_eq!(Syntax::of(Path::new("query.sql")), Some(Syntax::Sql));
         assert_eq!(Syntax::of(Path::new("Makefile")), None);
     }
 
@@ -237,8 +243,21 @@ mod tests {
         assert_eq!(Syntax::from_code_info("html"), Some(Syntax::Html));
         assert_eq!(Syntax::from_code_info("jsonc"), Some(Syntax::Json));
         assert_eq!(Syntax::from_code_info("svg"), Some(Syntax::Xml));
-        assert_eq!(Syntax::from_code_info("sql"), None);
+        assert_eq!(Syntax::from_code_info("sql"), Some(Syntax::Sql));
+        assert_eq!(Syntax::from_code_info("PostgreSQL"), Some(Syntax::Sql));
         assert_eq!(Syntax::from_code_info(""), None);
+    }
+
+    #[test]
+    fn markdown_colors_fenced_code_by_its_language() {
+        let text = "# Notes\n```python\ndef f(): pass\n```\n";
+        let kind_of = |piece: &str| {
+            let at = text.find(piece).unwrap();
+            Syntax::Markdown.spans(text).into_iter().find(|span| span.range.contains(&at)).map(|span| span.kind)
+        };
+        assert_eq!(kind_of("def"), Some(Kind::Keyword));
+        assert_eq!(kind_of("f()"), Some(Kind::Name));
+        assert_eq!(kind_of("```python"), Some(Kind::Marker));
     }
 
     /// The color of the first section of `text` as Python, with the code
