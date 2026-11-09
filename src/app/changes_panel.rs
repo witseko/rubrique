@@ -190,15 +190,27 @@ struct CardClicks {
 /// saved and current Markdown and the button that undoes it.
 fn change_card(ui: &mut Ui, change: &BlockChange) -> CardClicks {
     let tint = ui.visuals().hyperlink_color.gamma_multiply(CARD_TINT);
-    let frame = egui::Frame::new().fill(tint).corner_radius(8).inner_margin(10).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        let source = if change.kind == ChangeKind::Deleted { &change.saved } else { &change.now };
-        let first_line: String = source.lines().next().unwrap_or_default().chars().take(CARD_TITLE_CHARS).collect();
-        ui.label(RichText::new(first_line).strong());
-        change_details(ui, change)
+    // The card's click sense is registered before its contents, so the
+    // button inside sits on top and gets its own clicks. Adding the sense
+    // after the contents (`response.interact`) put the card on top, and
+    // egui gave every click on the button to the card instead.
+    let card = ui.scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+        egui::Frame::new()
+            .fill(tint)
+            .corner_radius(8)
+            .inner_margin(10)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                let source = if change.kind == ChangeKind::Deleted { &change.saved } else { &change.now };
+                let first_line: String =
+                    source.lines().next().unwrap_or_default().chars().take(CARD_TITLE_CHARS).collect();
+                ui.label(RichText::new(first_line).strong());
+                change_details(ui, change)
+            })
+            .inner
     });
-    let response = frame.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-    CardClicks { clicked: response.clicked() && !frame.inner, reverted: frame.inner }
+    let response = card.response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    CardClicks { clicked: response.clicked() && !card.inner, reverted: card.inner }
 }
 
 /// The text edit that undoes `change` in `text` (split into `blocks`):
@@ -255,5 +267,74 @@ mod tests {
     #[test]
     fn a_new_last_block_goes_with_its_blank_line() {
         assert_eq!(revert_all("One\n", "One\n\nTwo\n"), "One\n");
+    }
+}
+
+#[cfg(test)]
+mod card_tests {
+    use eframe::egui::{Event, PointerButton, Pos2, RawInput, Rect, vec2};
+
+    use super::*;
+
+    /// Draw one change card for each pointer step, pressing or releasing
+    /// the button where it says so. Returns the card's area from the first
+    /// frame and what the last frame reported as clicked.
+    fn card_frames(steps: &[(Pos2, Option<bool>)]) -> (Rect, bool, bool) {
+        let change =
+            BlockChange { kind: ChangeKind::Edited, block: 0, saved: "Old\n".to_string(), now: "New\n".to_string() };
+        let ctx = egui::Context::default();
+        let mut area = Rect::NOTHING;
+        let (mut clicked, mut reverted) = (false, false);
+        for (frame, (pos, button)) in steps.iter().enumerate() {
+            let mut input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 600.0))),
+                time: Some(f64::from(u16::try_from(frame).unwrap_or(0)) * 0.016),
+                ..Default::default()
+            };
+            input.events.push(Event::PointerMoved(*pos));
+            if let Some(pressed) = *button {
+                input.events.push(Event::PointerButton {
+                    pos: *pos,
+                    button: PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::default(),
+                });
+            }
+            let mut output = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let top = ui.cursor().min;
+                    let clicks = change_card(ui, &change);
+                    if frame == 0 {
+                        let bottom = ui.cursor().top() - ui.spacing().item_spacing.y;
+                        area = Rect::from_min_max(top, Pos2::new(ui.max_rect().right(), bottom));
+                    }
+                    (clicked, reverted) = (clicks.clicked, clicks.reverted);
+                });
+            });
+            output.textures_delta.clear();
+        }
+        (area, clicked, reverted)
+    }
+
+    /// Move to `at`, press, release.
+    fn click_at(at: Pos2) -> (bool, bool) {
+        let (_, clicked, reverted) = card_frames(&[(at, None), (at, None), (at, Some(true)), (at, Some(false))]);
+        (clicked, reverted)
+    }
+
+    #[test]
+    fn the_revert_button_on_a_card_reverts_instead_of_jumping() {
+        let (area, _, _) = card_frames(&[(Pos2::ZERO, None)]);
+        // The button is the last thing in the card, at its bottom left,
+        // inside the card's 10 point margin.
+        let button = Pos2::new(area.left() + 20.0, area.bottom() - 18.0);
+        assert_eq!(click_at(button), (false, true));
+    }
+
+    #[test]
+    fn a_click_elsewhere_on_a_card_jumps_to_the_block() {
+        let (area, _, _) = card_frames(&[(Pos2::ZERO, None)]);
+        let title = Pos2::new(area.right() - 20.0, area.top() + 16.0);
+        assert_eq!(click_at(title), (true, false));
     }
 }
