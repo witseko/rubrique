@@ -1,6 +1,7 @@
-//! Find Python, JavaScript and JSON syntax in raw text so it can be colored.
+//! Find Python, JavaScript, TypeScript, Rust and JSON syntax in raw text so
+//! it can be colored.
 //!
-//! One small scanner reads all three, steered by a `Rules` value per
+//! One small scanner reads them all, steered by a `Rules` value per
 //! language. Like the Markdown and YAML highlighters it is forgiving: it
 //! never fails, it only labels byte ranges. It knows comments, strings,
 //! numbers, keywords and the names that `def`, `class` and `function`
@@ -10,6 +11,8 @@
 //! damage stays on that line).
 
 use crate::markdown::highlight::{Kind, Span, Spans};
+
+mod jsx;
 
 /// What a language looks like to the scanner.
 #[expect(clippy::struct_excessive_bools, reason = "each flag is an independent language feature, not a state")]
@@ -28,7 +31,17 @@ pub struct Rules {
     decorators: bool,
     /// A string followed by `:` is an object key (JSON).
     string_keys: bool,
+    /// React's JSX tags inside the code (see `jsx.rs`).
+    jsx: bool,
+    /// Rust's `'a` lifetimes, which open no string.
+    lifetimes: bool,
+    /// Rust's `#[derive(Debug)]` and `#![...]` attributes.
+    attributes: bool,
+    /// Rust's macro calls, `println!`, colored as names.
+    macros: bool,
     keywords: &'static [&'static str],
+    /// More keywords on top of `keywords` (TypeScript's, on top of JavaScript's).
+    extra_keywords: &'static [&'static str],
     /// Keywords whose next word is the name being defined.
     definers: &'static [&'static str],
 }
@@ -41,11 +54,16 @@ pub const PYTHON: Rules = Rules {
     string_prefixes: true,
     decorators: true,
     string_keys: false,
+    jsx: false,
+    lifetimes: false,
+    attributes: false,
+    macros: false,
     keywords: &[
         "False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del",
         "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal",
         "not", "or", "pass", "raise", "return", "try", "while", "with", "yield",
     ],
+    extra_keywords: &[],
     definers: &["def", "class"],
 };
 
@@ -57,6 +75,10 @@ pub const JAVASCRIPT: Rules = Rules {
     string_prefixes: false,
     decorators: false,
     string_keys: false,
+    jsx: true,
+    lifetimes: false,
+    attributes: false,
+    macros: false,
     keywords: &[
         "async",
         "await",
@@ -102,7 +124,81 @@ pub const JAVASCRIPT: Rules = Rules {
         "with",
         "yield",
     ],
+    extra_keywords: &[],
     definers: &["function", "class"],
+};
+
+/// TypeScript: JavaScript plus type keywords, the built-in type names and
+/// decorators. `type` is a keyword but does not name the next word, since
+/// `type` is also a common property name (`{ type: "a" }`).
+pub const TYPESCRIPT: Rules = Rules {
+    decorators: true,
+    extra_keywords: &[
+        "abstract",
+        "accessor",
+        "any",
+        "as",
+        "asserts",
+        "bigint",
+        "boolean",
+        "declare",
+        "enum",
+        "implements",
+        "infer",
+        "interface",
+        "is",
+        "keyof",
+        "module",
+        "namespace",
+        "never",
+        "number",
+        "object",
+        "override",
+        "private",
+        "protected",
+        "public",
+        "readonly",
+        "satisfies",
+        "string",
+        "symbol",
+        "type",
+        "unique",
+        "unknown",
+    ],
+    definers: &["function", "class", "interface", "enum", "namespace"],
+    // Plain `.ts` files have no JSX, and `<Type>value` is a cast there.
+    jsx: false,
+    ..JAVASCRIPT
+};
+
+/// TypeScript with JSX (`.tsx`).
+pub const TSX: Rules = Rules { jsx: true, ..TYPESCRIPT };
+
+/// Rust. Its strings may span lines; `r"..."` and `b"..."` prefixes join
+/// their string. The built-in types are keywords, like TypeScript's.
+pub const RUST: Rules = Rules {
+    line_comment: "//",
+    block_comment: Some(("/*", "*/")),
+    triple_quotes: false,
+    multiline_quotes: b"\"",
+    string_prefixes: true,
+    decorators: false,
+    string_keys: false,
+    jsx: false,
+    lifetimes: true,
+    attributes: true,
+    macros: true,
+    keywords: &[
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "false", "fn",
+        "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self",
+        "Self", "static", "struct", "super", "trait", "true", "type", "union", "unsafe", "use", "where", "while",
+        "yield",
+    ],
+    extra_keywords: &[
+        "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64", "i128", "isize",
+        "f32", "f64",
+    ],
+    definers: &["fn", "struct", "enum", "trait", "type", "mod", "union"],
 };
 
 /// JSON, with the `//` and `/* */` comments that JSONC files allow (they
@@ -115,14 +211,19 @@ pub const JSON: Rules = Rules {
     string_prefixes: false,
     decorators: false,
     string_keys: true,
+    jsx: false,
+    lifetimes: false,
+    attributes: false,
+    macros: false,
     keywords: &["true", "false", "null"],
+    extra_keywords: &[],
     definers: &[],
 };
 
 /// Label every byte of `text` by `rules`. Spans are in order, touch each
 /// other, never empty, and neighbors never share a kind.
 pub fn highlight(text: &str, rules: &Rules) -> Vec<Span> {
-    Scanner { text, rules, out: Spans::default(), position: 0, define_next: false }.run()
+    Scanner { text, rules, out: Spans::default(), position: 0, define_next: false, jsx_depth: 0 }.run()
 }
 
 /// Walks the text once, front to back. Every position it stops at is a char
@@ -134,6 +235,8 @@ struct Scanner<'a> {
     position: usize,
     /// The last word was `def`, `class` or `function`: the next word is a name.
     define_next: bool,
+    /// How many JSX elements the current position is inside.
+    jsx_depth: usize,
 }
 
 impl Scanner<'_> {
@@ -150,7 +253,11 @@ impl Scanner<'_> {
         let start = self.position;
         let rest = &self.text[start..];
         let byte = rest.as_bytes()[0];
-        if rest.starts_with(self.rules.line_comment) {
+        if self.rules.attributes && (rest.starts_with("#[") || rest.starts_with("#![")) {
+            self.mark(bracket_end(self.text, start), Kind::Name);
+        } else if self.rules.lifetimes && byte == b'\'' && is_lifetime(rest) {
+            self.mark(word_end(self.text, start + 1), Kind::Name);
+        } else if rest.starts_with(self.rules.line_comment) {
             self.mark(line_end(self.text, start), Kind::Comment);
         } else if let Some((open, close)) = self.rules.block_comment.filter(|(open, _)| rest.starts_with(open)) {
             let end =
@@ -165,6 +272,9 @@ impl Scanner<'_> {
             self.mark(end, Kind::Name);
         } else if rest.chars().next().is_some_and(is_word_start) {
             self.word(start);
+        } else if byte == b'<' && self.starts_jsx(start) {
+            self.define_next = false;
+            self.jsx_element();
         } else {
             // Plain punctuation or space. A definer keyword only names the
             // word right after it (`function (` is anonymous).
@@ -190,7 +300,11 @@ impl Scanner<'_> {
         let kind = if self.define_next {
             self.define_next = false;
             Kind::Name
-        } else if self.rules.keywords.contains(&word) {
+        } else if self.rules.macros && next == Some(b'!') && self.text.as_bytes().get(end + 1) != Some(&b'=') {
+            // `println!(...)` is a macro call; `a != b` is not.
+            self.mark(end + 1, Kind::Name);
+            return;
+        } else if self.rules.keywords.contains(&word) || self.rules.extra_keywords.contains(&word) {
             self.define_next = self.rules.definers.contains(&word);
             Kind::Keyword
         } else {
@@ -248,6 +362,36 @@ fn is_word_char(character: char) -> bool {
 /// The end of the word that starts at `start`.
 fn word_end(text: &str, start: usize) -> usize {
     text[start..].find(|character| !is_word_char(character)).map_or(text.len(), |offset| start + offset)
+}
+
+/// Whether `text` starts with a Rust lifetime (`'a`, `'static`) rather than
+/// a char literal (`'a'`).
+fn is_lifetime(text: &str) -> bool {
+    if !text[1..].chars().next().is_some_and(is_word_start) {
+        return false;
+    }
+    let end = word_end(text, 1);
+    text.as_bytes().get(end) != Some(&b'\'')
+}
+
+/// Just past the `]` that closes the first `[` at or after `start`
+/// (counting nested brackets), or the end of the line when it never closes.
+fn bracket_end(text: &str, start: usize) -> usize {
+    let line_end = line_end(text, start);
+    let mut depth = 0_usize;
+    for (offset, byte) in text.as_bytes()[start..line_end].iter().enumerate() {
+        match byte {
+            b'[' => depth += 1,
+            b']' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return start + offset + 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    line_end
 }
 
 /// The end of a dotted name like `app.route` (a decorator).
@@ -388,6 +532,50 @@ mod tests {
     }
 
     #[test]
+    fn typescript_types_interfaces_and_decorators() {
+        let text = "@Component\nexport interface Note { title: string; type: 'a' }\nenum Kind {}";
+        assert_eq!(
+            colored(text, &TYPESCRIPT),
+            vec![
+                ("@Component", Kind::Name),
+                ("export", Kind::Keyword),
+                ("interface", Kind::Keyword),
+                ("Note", Kind::Name),
+                ("string", Kind::Keyword),
+                ("type", Kind::Keyword),
+                ("'a'", Kind::String),
+                ("enum", Kind::Keyword),
+                ("Kind", Kind::Name),
+            ]
+        );
+        assert_eq!(colored("let x: string", &JAVASCRIPT), vec![("let", Kind::Keyword)]);
+    }
+
+    #[test]
+    fn rust_items_lifetimes_attributes_and_macros() {
+        let text = "#[derive(Debug)]\npub fn first<'a>(s: &'a str) -> char {\n    println!(\"{s}\");\n    if a != b { 'x' } else { '\\n' }\n}";
+        assert_eq!(
+            colored(text, &RUST),
+            vec![
+                ("#[derive(Debug)]", Kind::Name),
+                ("pub", Kind::Keyword),
+                ("fn", Kind::Keyword),
+                ("first", Kind::Name),
+                ("'a", Kind::Name),
+                ("'a", Kind::Name),
+                ("str", Kind::Keyword),
+                ("char", Kind::Keyword),
+                ("println!", Kind::Name),
+                ("\"{s}\"", Kind::String),
+                ("if", Kind::Keyword),
+                ("'x'", Kind::String),
+                ("else", Kind::Keyword),
+                ("'\\n'", Kind::String),
+            ]
+        );
+    }
+
+    #[test]
     fn anonymous_function_names_nothing() {
         assert_eq!(
             colored("const f = function (x) { x }", &JAVASCRIPT),
@@ -428,7 +616,7 @@ mod tests {
     #[test]
     fn spans_cover_odd_input() {
         for text in ["", "'", "\"\\", "x = '\\", "/*", "@", "1e", "é = 'ü' # ö", "f'", "\"\"\"\\", "`\\\n"] {
-            for rules in [&PYTHON, &JAVASCRIPT, &JSON] {
+            for rules in [&PYTHON, &JAVASCRIPT, &TYPESCRIPT, &TSX, &RUST, &JSON] {
                 assert_covers(text, rules);
             }
         }

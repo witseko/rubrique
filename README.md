@@ -65,8 +65,10 @@ Agents run only when you ask, read-only by default.
 
 <img src="docs/screenshots/themes.png" alt="One Rubrique window shown in five themes: Light, Indigo, Sepia, Midnight and High contrast" width="880">
 
-Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Text size, line
-numbers and other options are in Settings → Accessibility.
+Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Code in Python,
+JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, JSON, XML and YAML is colored with the
+theme's colors or VS Code's (Settings → Appearance → Code colors). Text size, line numbers and other options are in
+Settings → Accessibility.
 
 ## Shortcuts
 

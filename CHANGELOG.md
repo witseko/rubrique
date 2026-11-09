@@ -8,6 +8,23 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **VS Code code colors.** Settings → Appearance → Code colors switches
+  syntax colors from the theme's to Visual Studio Code's: Dark+ on dark
+  themes, Light+ on light ones. It colors the editor and preview code
+  blocks; each choice shows a sample of code on its card.
+- **TypeScript and React colors.** `.ts`, `.tsx` and `.jsx` files and
+  `typescript`/`tsx` code blocks are colored: TypeScript's type keywords,
+  built-in types and decorators, and JSX tags, attributes and the code in
+  their braces.
+- **Angular and HTML colors.** The source view of `.html` files colors
+  tags and attributes, plus Angular templates: `{{ }}` interpolation,
+  `[value]`, `(click)`, `*ngIf` and `#ref` bindings, and `@if`/`@for`
+  blocks.
+- **Rust colors.** `.rs` files and `rust` code blocks are colored:
+  keywords, built-in types, lifetimes, `#[attributes]` and `macro!` calls.
+
 ## [0.9.0] - 2026-11-09
 
 ### Added

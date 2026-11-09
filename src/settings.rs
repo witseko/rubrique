@@ -11,6 +11,7 @@ use crate::settings::accessibility::AccessibilitySettings;
 use crate::settings::layout::LayoutSettings;
 use crate::settings::privacy::PrivacySettings;
 use crate::theme::catalog::ThemeChoice;
+use crate::theme::code_colors::CodeColors;
 use crate::voice::VoiceSettings;
 
 pub mod accessibility;
@@ -35,6 +36,8 @@ pub struct Settings {
     pub window_size: Option<(f32, f32)>,
     /// Color theme, or "system" to follow the OS.
     pub theme: ThemeChoice,
+    /// How syntax is colored: with the theme's colors or VS Code's.
+    pub code_colors: CodeColors,
     /// Text size, editor font size, reduced motion and focus outlines.
     pub accessibility: AccessibilitySettings,
     /// Where new scratch files go; `None` means the default folder.
@@ -111,6 +114,7 @@ impl Settings {
                 "window_width" => width = value.parse::<f32>().ok(),
                 "window_height" => height = value.parse::<f32>().ok(),
                 "theme" => settings.theme = ThemeChoice::parse(value),
+                "code_colors" => settings.code_colors = CodeColors::parse(value),
                 "scratch_folder" => settings.scratch_folder = non_empty_path(value),
                 _ => {}
             }
@@ -146,11 +150,12 @@ impl Settings {
             lines
         });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nmarkdown_only={}\nnote_marks={}\ntheme={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nmarkdown_only={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}",
             last_file,
             self.markdown_only,
             self.note_marks,
             self.theme.id(),
+            self.code_colors.id(),
             path_text(&self.scratch_folder),
             self.accessibility.to_lines(),
             self.ai.to_lines(),
@@ -250,6 +255,7 @@ mod tests {
             note_marks: true,
             window_size: Some((1200.0, 800.5)),
             theme: ThemeChoice::Named("dark".to_string()),
+            code_colors: CodeColors::VsCode,
             accessibility: AccessibilitySettings {
                 text_size: accessibility::TextSize::Larger,
                 editor_font_size: 15,

@@ -13,11 +13,13 @@ use crate::ai::agents::Agent;
 use crate::ai::flags::{self, FlagKind};
 use crate::ai::skills::{Skill, SourceFolder};
 use crate::ai::{AiSettings, AiTool, CommandProblem, PROMPT, SYSTEM, check_command};
+use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::install::view::{InstallAction, install_prompt};
 use crate::install::{InstallStatus, Recipe};
 use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, TextSize};
 use crate::settings::privacy::{LOCK_AFTER_CHOICES, PrivacySettings};
 use crate::theme::catalog::{ThemeChoice, Themes};
+use crate::theme::code_colors::CodeColors;
 use crate::theme::palette::{Base, Palette, Rgb, Theme};
 use crate::voice::VoiceSettings;
 
@@ -29,6 +31,7 @@ use skill_list::{SkillsInfo, skills_section};
 #[derive(Debug)]
 pub enum SettingsAction {
     PickTheme(ThemeChoice),
+    PickCodeColors(CodeColors),
     ReloadThemes,
     /// Text size, editor font, motion or focus outline changed.
     AccessibilityChanged,
@@ -167,6 +170,12 @@ const PREVIEW_BARS: [(f32, f32, BarKind); 4] =
     [(0.55, 5.0, BarKind::Accent), (0.85, 4.0, BarKind::Text), (0.7, 4.0, BarKind::Text), (0.45, 4.0, BarKind::Weak)];
 const PREVIEW_BAR_GAP: f32 = 5.0;
 const CHECK_SIZE: f32 = 12.0;
+/// The code in a Code colors card: a keyword, a defined name, a comment, a
+/// string and a number, so each choice shows its main colors.
+const CODE_PREVIEW_TEXT: &str = "def word_count(note):\n    # words in the body\n    return len(note.split(\" \")) + 1";
+/// Font size and line height of the code in a Code colors card.
+const CODE_PREVIEW_FONT_SIZE: f32 = 11.0;
+const CODE_PREVIEW_LINE_HEIGHT: f32 = 16.0;
 
 #[derive(Clone, Copy)]
 enum BarKind {
@@ -244,6 +253,7 @@ pub fn show_settings(
     group: &mut SettingsGroup,
     themes: &Themes,
     current: &ThemeChoice,
+    code_colors: CodeColors,
     themes_folder: Option<&Path>,
     accessibility: &mut AccessibilitySettings,
     scratch: ScratchInfo,
@@ -291,7 +301,7 @@ pub fn show_settings(
             egui::Frame::new().inner_margin(CONTENT_MARGIN).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let picked = match *group {
-                    SettingsGroup::Appearance => appearance_section(ui, themes, current, themes_folder),
+                    SettingsGroup::Appearance => appearance_section(ui, themes, current, code_colors, themes_folder),
                     SettingsGroup::Accessibility => accessibility_section(ui, accessibility),
                     SettingsGroup::Files => files_section(ui, scratch, note_marks),
                     SettingsGroup::Privacy => privacy_section(ui, privacy),
@@ -350,17 +360,31 @@ fn version_label(ui: &mut Ui) {
     });
 }
 
-/// Appearance: the theme cards and the user's own themes.
+/// Appearance: the theme cards, the code colors and the user's own themes.
 fn appearance_section(
     ui: &mut Ui,
     themes: &Themes,
     current: &ThemeChoice,
+    code_colors: CodeColors,
     themes_folder: Option<&Path>,
 ) -> Option<SettingsAction> {
     let mut action = None;
     ui.label(RichText::new("Theme").strong());
     if let Some(choice) = theme_cards(ui, themes, current) {
         action = Some(SettingsAction::PickTheme(choice));
+    }
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label(RichText::new("Code colors").strong());
+    ui.label(
+        RichText::new(
+            "How code, Markdown and YAML are colored in the editor and preview. \
+             VS Code uses its Dark+ colors on dark themes and Light+ on light ones.",
+        )
+        .weak(),
+    );
+    if let Some(choice) = code_color_cards(ui, code_colors) {
+        action = Some(SettingsAction::PickCodeColors(choice));
     }
     ui.add_space(10.0);
     ui.label(RichText::new("Your themes").strong());
@@ -1257,14 +1281,31 @@ fn theme_cards(ui: &mut Ui, themes: &Themes, current: &ThemeChoice) -> Option<Th
     picked
 }
 
+/// One card per code colors choice, side by side. Returns the clicked choice.
+fn code_color_cards(ui: &mut Ui, current: CodeColors) -> Option<CodeColors> {
+    let card_width = ((ui.available_width() - CARD_GAP) / 2.0).floor();
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = CARD_GAP;
+        for choice in CodeColors::ALL {
+            if theme_card(ui, card_width, choice.name(), &CardLook::Code(choice), choice == current).clicked() {
+                picked = Some(choice);
+            }
+        }
+    });
+    picked
+}
+
 /// What a card's preview shows.
 enum CardLook<'a> {
     One(&'a Theme),
     /// Light on the left, dark on the right.
     Split(&'a Theme, &'a Theme),
+    /// A few lines of code in these code colors, on the current theme.
+    Code(CodeColors),
 }
 
-/// A clickable card: a small picture of the theme and its name.
+/// A clickable card: a small picture of the theme (or code colors) and its name.
 fn theme_card(ui: &mut Ui, width: f32, name: &str, look: &CardLook, selected: bool) -> Response {
     let size = vec2(width, CARD_PADDING * 3.0 + PREVIEW_HEIGHT + NAME_ROW_HEIGHT - CARD_PADDING);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
@@ -1293,6 +1334,7 @@ fn theme_card(ui: &mut Ui, width: f32, name: &str, look: &CardLook, selected: bo
             paint_preview(painter, left_rect, &left.palette, true);
             paint_preview(painter, right_rect, &right.palette, false);
         }
+        CardLook::Code(choice) => paint_code_preview(ui, preview, *choice),
     }
     painter.rect_stroke(preview, 0, visuals.widgets.noninteractive.bg_stroke, StrokeKind::Inside);
 
@@ -1327,6 +1369,18 @@ fn paint_preview(painter: &egui::Painter, rect: Rect, palette: &Palette, sidebar
         painter.rect_filled(bar, height / 2.0, color(bar_color));
         y += height + PREVIEW_BAR_GAP;
     }
+}
+
+/// Python colored with `choice` on the current theme's page color, clipped to `rect`.
+fn paint_code_preview(ui: &Ui, rect: Rect, choice: CodeColors) {
+    let style =
+        HighlightStyle::with_code_colors(ui, choice).with_size(CODE_PREVIEW_FONT_SIZE, CODE_PREVIEW_LINE_HEIGHT);
+    let job = highlighted(ui.ctx(), CODE_PREVIEW_TEXT, &style, Some(Syntax::Python));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 0, ui.visuals().text_edit_bg_color());
+    let galley = painter.layout_job(job);
+    let top = (rect.height() - galley.size().y) / 2.0;
+    painter.galley(rect.min + vec2(PREVIEW_PADDING, top), galley, ui.visuals().text_color());
 }
 
 /// A check mark centered on `center`.
