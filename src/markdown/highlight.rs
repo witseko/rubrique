@@ -46,18 +46,79 @@ pub struct Span {
 }
 
 /// Label every byte of `text`. Spans are in order, touch each other, never
-/// empty, and neighbors never share a kind.
-pub fn highlight(text: &str) -> Vec<Span> {
+/// empty, and neighbors never share a kind. Fenced code keeps the plain
+/// code color (the editor uses `highlight_with_code`).
+#[cfg(test)]
+fn highlight(text: &str) -> Vec<Span> {
+    highlight_with_code(text, |_, _| None)
+}
+
+/// Like `highlight`, but the inside of each fenced code block goes to
+/// `color_code` with the block's info string (` ```sql ` gives `sql`).
+/// Its spans, relative to the code, are used as they are; `None` leaves the
+/// block in the plain code color.
+pub fn highlight_with_code(text: &str, color_code: impl Fn(&str, &str) -> Option<Vec<Span>>) -> Vec<Span> {
     let mut out = Spans::default();
-    let mut fence = None;
+    let mut open: Option<OpenFence> = None;
     let mut line_start = 0;
     for line in text.split_inclusive('\n') {
         let content = line.trim_end_matches(['\n', '\r']);
-        highlight_line(&mut out, line_start, content, &mut fence);
+        if let Some(fence) = &open {
+            if !closes_fence(content, fence.fence) {
+                // Inside the block: labeled all at once when it closes.
+                line_start += line.len();
+                continue;
+            }
+            code_block(&mut out, text, fence, line_start, &color_code);
+            open = None;
+            out.to(line_start + content.len(), Kind::Marker);
+        } else if let Some((fence, info)) = highlight_line(&mut out, line_start, content) {
+            open = Some(OpenFence { fence, info, body_start: line_start + line.len() });
+        }
         line_start += line.len();
         out.to(line_start, Kind::Plain);
     }
+    // An unclosed block runs to the end of the text.
+    if let Some(fence) = &open {
+        code_block(&mut out, text, fence, text.len(), &color_code);
+    }
     out.spans
+}
+
+/// A fenced code block whose closing fence has not been reached yet.
+struct OpenFence<'a> {
+    fence: Fence,
+    /// The info string after the opening fence, trimmed (`rust`, `sql`, or empty).
+    info: &'a str,
+    /// Where the code starts: the line after the opening fence.
+    body_start: usize,
+}
+
+/// Label the code of `fence`, which ends at `body_end`, colored by
+/// `color_code` when it knows the language, else in the plain code color.
+fn code_block(
+    out: &mut Spans,
+    text: &str,
+    fence: &OpenFence,
+    body_end: usize,
+    color_code: &impl Fn(&str, &str) -> Option<Vec<Span>>,
+) {
+    let start = fence.body_start.min(body_end);
+    let code = &text[start..body_end];
+    if let Some(spans) = color_code(fence.info, code) {
+        for span in spans {
+            out.to(start + span.range.end, span.kind);
+        }
+        return;
+    }
+    // Each line in the code color; line breaks stay plain.
+    let mut line_start = start;
+    for line in code.split_inclusive('\n') {
+        let content = line.trim_end_matches(['\n', '\r']);
+        out.to(line_start + content.len(), Kind::Code);
+        line_start += line.len();
+        out.to(line_start, Kind::Plain);
+    }
 }
 
 /// Spans built front to back: each call labels everything up to a position.
@@ -91,42 +152,34 @@ const MIN_FENCE: usize = 3;
 /// Longest ordered-list number, as in CommonMark.
 const MAX_LIST_DIGITS: usize = 9;
 
-/// Label one line (without its line break) that starts at byte `start`.
-fn highlight_line(out: &mut Spans, start: usize, line: &str, fence: &mut Option<Fence>) {
+/// Label one line (without its line break) that starts at byte `start`,
+/// outside any fenced code block. Returns the fence and info string when the
+/// line opens a block.
+fn highlight_line<'a>(out: &mut Spans, start: usize, line: &'a str) -> Option<(Fence, &'a str)> {
     let end = start + line.len();
     let indent = line.len() - line.trim_start_matches(' ').len();
     let rest = &line[indent..];
 
-    if let Some((fence_char, fence_len)) = *fence {
-        let closes =
-            indent <= MAX_MARKER_INDENT && fence_run(rest, fence_char) >= fence_len && is_blank_after_run(rest);
-        if closes {
-            *fence = None;
-            out.to(end, Kind::Marker);
-        } else {
-            out.to(end, Kind::Code);
-        }
-        return;
-    }
     if indent <= MAX_MARKER_INDENT {
         if let Some(opened) = fence_open(rest) {
-            *fence = Some(opened);
             out.to(end, Kind::Marker);
-            return;
+            let info = rest[opened.1..].trim();
+            return Some((opened, info));
         }
         if let Some(level) = heading_level(rest) {
             out.to(start + indent, Kind::Plain);
             out.to(start + indent + level, Kind::Marker);
             out.to(end, Kind::Heading);
-            return;
+            return None;
         }
         if is_rule(rest) {
             out.to(end, Kind::Marker);
-            return;
+            return None;
         }
     }
     let (body, base) = block_markers(out, start, line);
     highlight_inlines(out, start, line, body, base);
+    None
 }
 
 /// Label quote markers (`>`), then a list marker and task box. Returns where
@@ -289,6 +342,14 @@ fn autolink(out: &mut Spans, start: usize, line: &str, i: usize, base: Kind) -> 
     out.to(start + close, Kind::Url);
     out.to(start + close + 1, Kind::Marker);
     Some(close + 1)
+}
+
+/// True when `line` closes a block opened with `fence`: the same character,
+/// at least as many, and nothing else after them.
+fn closes_fence(line: &str, (fence_char, fence_len): Fence) -> bool {
+    let indent = line.len() - line.trim_start_matches(' ').len();
+    let rest = &line[indent..];
+    indent <= MAX_MARKER_INDENT && fence_run(rest, fence_char) >= fence_len && is_blank_after_run(rest)
 }
 
 /// Opening fence: three or more backticks or tildes.
@@ -454,6 +515,38 @@ mod tests {
         assert_eq!(marks[1], ("let a = *b*;", Kind::Code));
         assert_eq!(marks[2], ("```", Kind::Marker));
         assert_eq!(marks[4], ("x", Kind::Emphasis));
+    }
+
+    #[test]
+    fn fenced_code_goes_to_the_colorer_with_its_info_string() {
+        let text = "```sql title=x\nselect 1\n```\n~~~\nplain\n~~~";
+        let color = |info: &str, code: &str| {
+            (info == "sql title=x").then(|| vec![Span { range: 0..code.len(), kind: Kind::Keyword }])
+        };
+        let marks: Vec<_> = highlight_with_code(text, color)
+            .into_iter()
+            .filter(|span| span.kind != Kind::Plain)
+            .map(|span| (&text[span.range], span.kind))
+            .collect();
+        assert_eq!(
+            marks,
+            [
+                ("```sql title=x", Kind::Marker),
+                ("select 1\n", Kind::Keyword),
+                ("```", Kind::Marker),
+                ("~~~", Kind::Marker),
+                ("plain", Kind::Code),
+                ("~~~", Kind::Marker),
+            ]
+        );
+    }
+
+    #[test]
+    fn unclosed_colored_fence_runs_to_the_end() {
+        let text = "```py\nx = 1";
+        let spans = highlight_with_code(text, |_, code| Some(vec![Span { range: 0..code.len(), kind: Kind::Name }]));
+        assert_eq!(spans.last(), Some(&Span { range: 6..text.len(), kind: Kind::Name }));
+        assert_eq!(spans.last().map(|span| span.range.end), Some(text.len()));
     }
 
     #[test]

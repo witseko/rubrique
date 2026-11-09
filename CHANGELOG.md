@@ -8,8 +8,19 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **SQL colors and colored code in the editor.** `.sql` files and `sql`
+  code blocks are colored: keywords in any case, strings, numbers and
+  comments. In a Markdown file's source, fenced code blocks are now
+  colored by their language (Python, JavaScript, TypeScript, SQL, JSON,
+  XML and the others the preview colors) instead of one flat code color.
+
 ### Fixed
 
+- **Revert block in the Changes view.** The Revert, Remove and Restore
+  buttons on a change card work again; a click on them used to scroll to
+  the block instead of undoing the change.
 - **Linux app icon size.** On Ubuntu and other Linux desktops the icon
   fills its space like other apps (Obsidian, for one) instead of looking
   smaller: it no longer carries the margin macOS needs.
