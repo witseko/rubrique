@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Open file highlight in the explorer.** The highlight on the open
+  file's row now starts at its name, without the blank space before it.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added
