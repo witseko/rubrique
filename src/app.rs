@@ -251,6 +251,9 @@ enum GuardedAction {
 #[derive(Clone, Copy, Debug)]
 enum UnsavedChoice {
     Save,
+    /// Close the tab without saving; the edits come back when the file
+    /// opens again.
+    KeepForLater,
     Discard,
     Cancel,
 }
@@ -2455,6 +2458,9 @@ impl RubriqueApp {
                 }
                 true
             }
+            // The tab is closed already; any other action goes on with the
+            // tabs left (closing this one again would close the next tab).
+            UnsavedChoice::KeepForLater => self.close_keeping_edits() && !matches!(action, GuardedAction::CloseTab),
             UnsavedChoice::Cancel => false,
         };
         if proceed {
@@ -2715,13 +2721,22 @@ fn ask_about_unsaved_changes(ctx: &Context, name: &str) -> Option<UnsavedChoice>
     modal.inner.or(closed.then_some(UnsavedChoice::Cancel))
 }
 
-/// The Save / Discard / Cancel buttons; returns the one clicked this frame.
+/// The Save / Keep for later / Discard / Cancel buttons; returns the one
+/// clicked this frame.
 fn unsaved_choice_buttons(ui: &mut Ui) -> Option<UnsavedChoice> {
+    let choices = [
+        ("Save", "Save the file, then close it", UnsavedChoice::Save),
+        (
+            "Keep for later",
+            "Close without saving; the edits come back when you open the file again",
+            UnsavedChoice::KeepForLater,
+        ),
+        ("Discard", "Drop the edits and close the file", UnsavedChoice::Discard),
+        ("Cancel", "Leave the file open", UnsavedChoice::Cancel),
+    ];
     let mut choice = None;
-    for (title, option) in
-        [("Save", UnsavedChoice::Save), ("Discard", UnsavedChoice::Discard), ("Cancel", UnsavedChoice::Cancel)]
-    {
-        if ui.button(title).clicked() {
+    for (title, tip, option) in choices {
+        if ui.button(title).on_hover_text(tip).clicked() {
             choice = Some(option);
         }
     }

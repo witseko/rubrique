@@ -10,6 +10,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Close a tab without saving, keep the edits.** When a tab with unsaved
+  changes closes, "Keep for later" closes it without saving or dropping
+  anything: the edits come back the next time you open the file, marked
+  unsaved. If the file changed on disk in between, the merge screen opens
+  instead of one version replacing the other. Edits of encrypted files
+  are kept encrypted.
 - **Wrap lines setting.** Settings > Accessibility has a Wrap lines box
   next to Line numbers. Turn it off and long lines in the editor stay on
   one line, with the editor scrolling sideways to show the rest. It is on
