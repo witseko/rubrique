@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Open path.** `Cmd+O` (or a right click on the Add folder button) opens
+  a file by typing or pasting its path: `~` is your home folder, a
+  relative path starts at the explorer folder, and `notes.md:12` opens the
+  file on line 12. A folder is shown in the explorer, added to it when it
+  is not there yet. A path that does not exist is named under the field.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added
