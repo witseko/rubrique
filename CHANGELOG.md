@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Close a tab without saving, keep the edits.** When a tab with unsaved
+  changes closes, "Keep for later" closes it without saving or dropping
+  anything: the edits come back the next time you open the file, marked
+  unsaved. If the file changed on disk in between, the merge screen opens
+  instead of one version replacing the other. Edits of encrypted files
+  are kept encrypted.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added

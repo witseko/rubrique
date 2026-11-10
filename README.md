@@ -52,7 +52,8 @@ Agents run only when you ask, read-only by default.
 **Files**
 
 - Several folders in one explorer. Right-click a folder → New file, folder or terminal. Double-click a file, folder or tab to rename it, right-click to delete.
-- Tabs keep unsaved changes, cursor and undo.
+- Tabs keep unsaved changes, cursor and undo. Close one with "Keep for
+  later" and its edits come back when you open the file again.
 - Safe saves: your file is never reformatted; outside changes open a merge.
 - Find in a file or across all folders (`Cmd+F`), match case or whole
   words, and replace one match or all of them (`Cmd+Alt+F`).
