@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Review in merge keeps your block edit.** A block being edited in the
+  preview is saved before the merge screen opens, so it no longer writes
+  its old text over the merged result afterwards.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added
