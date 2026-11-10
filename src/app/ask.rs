@@ -20,6 +20,7 @@ use crate::ai::{self, AiSettings, AiTool, AskKind};
 use crate::document::merge::MergeSession;
 use crate::document::preview_selection;
 use crate::document::view::editor_selection;
+use crate::explorer::tree::is_markdown_path;
 use crate::markdown::notes::{find_notes, locate};
 
 /// Space between the top of the page and the Ask bar.
@@ -303,7 +304,7 @@ impl RubriqueApp {
             return;
         };
         let mut views = Vec::new();
-        let formatted = job.pending.kind == AskKind::Answer;
+        let formatted = shows_as_markdown(job.pending.kind, &job.pending.target.path);
         for tool_run in &mut job.runs {
             let seconds = tool_run.run.elapsed_seconds();
             let state = match tool_run.run.poll() {
@@ -345,6 +346,10 @@ impl RubriqueApp {
 
     /// Open the merge screen with the answer in place of the target text.
     fn review_answer(&mut self) {
+        // Save an open preview block edit first, as `start_merge` does. Left
+        // open, it would write its old text over the merge result later. If
+        // saving it changes the target text, the check below refuses.
+        self.finish_block_edit();
         let Some(job) = &self.ask.job else {
             return;
         };
@@ -506,6 +511,18 @@ fn run_skills<'a>(all: &'a [Skill], agent: Option<&Agent>, picked: Option<&'a Sk
     (skills, missing)
 }
 
+/// True when a run's output is drawn as Markdown in the output panel: an
+/// answer to read always is, and new text for a Markdown file is too, so
+/// `**bold**`, headings, lists and code fences read as they will in the
+/// preview. New text for any other file (code, plain text) is shown as it
+/// is, since Markdown would change its look (a `# comment` as a heading).
+fn shows_as_markdown(kind: AskKind, path: &Path) -> bool {
+    match kind {
+        AskKind::Answer => true,
+        AskKind::Rewrite => is_markdown_path(path),
+    }
+}
+
 /// Tools run in the file's folder, so they can read nearby notes.
 fn run_folder(path: &Path) -> PathBuf {
     path.parent().map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
@@ -517,5 +534,48 @@ fn short(request: &str) -> String {
         format!("{}…", flat.chars().take(TITLE_REQUEST_CHARS).collect::<String>())
     } else {
         flat
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::view::BlockEdit;
+
+    #[test]
+    fn answers_and_markdown_rewrites_are_drawn_as_markdown() {
+        assert!(shows_as_markdown(AskKind::Answer, Path::new("/notes/main.rs")));
+        assert!(shows_as_markdown(AskKind::Rewrite, Path::new("/notes/todo.md")));
+        assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/main.rs")));
+        assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/list.txt")));
+    }
+
+    #[test]
+    fn review_saves_an_open_block_edit_first() {
+        let dir = std::env::temp_dir().join(format!("rubrique-review-block-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.md");
+        std::fs::write(&path, "First\n").unwrap();
+        let ctx = Context::default();
+        let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![dir.clone()], None);
+        app.open_in_tab(path);
+        app.block_edit = Some(BlockEdit {
+            index: 0,
+            range: 0..5,
+            text: "Second".to_string(),
+            focused: false,
+            cell: None,
+            inserting: false,
+        });
+
+        app.review_answer();
+
+        // The edit is saved now, so it cannot write over a merge result later.
+        assert!(app.block_edit.is_none());
+        let OpenFile::Text { document, .. } = &app.open_file else {
+            panic!("the note should be open");
+        };
+        assert_eq!(document.text, "Second\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
