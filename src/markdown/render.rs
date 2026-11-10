@@ -8,10 +8,12 @@ use std::sync::Arc;
 use eframe::egui::cache::{ComputerMut, FrameCache};
 
 use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
-use super::inlines::{Inline, is_openable_url, parse_inlines};
+use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url, parse_inlines};
 use super::table_edit::TableCell;
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::media::{MediaKind, image_uri, media_kind_of_url};
+use crate::theme::palette::Rgb;
+use crate::theme::style::page_fill;
 
 /// Sizes and spacing for one place Markdown is drawn.
 struct Look {
@@ -131,6 +133,21 @@ const TABLE_COLUMN_MIN_WIDTH: f32 = 120.0;
 const TABLE_COLUMN_LEAST_WIDTH: f32 = 40.0;
 /// Opacity of the accent over the table cell under the mouse.
 const CELL_HOVER_TINT: f32 = 0.08;
+/// Least contrast an HTML page's text color keeps against the page (the
+/// WCAG AA level for body text); a color below it is moved toward the
+/// theme's text color until it reads.
+const MIN_TEXT_CONTRAST: f32 = 4.5;
+/// How many steps from an author color to the theme's text color are tried
+/// when the color is too faint on the page.
+const CONTRAST_STEPS: u8 = 10;
+/// Opacity of an HTML page's background color (`<mark>`, `background-color`)
+/// behind text, so the theme's text stays readable on it.
+const HTML_BACKGROUND_TINT: f32 = 0.35;
+/// Size of superscript and subscript text relative to the text around it.
+const SCRIPT_SCALE: f32 = 0.75;
+/// How far superscript rises above the text's top (and subscript drops
+/// below its bottom), as a fraction of the text's height.
+const SCRIPT_LIFT: f32 = 0.1;
 
 /// Render blocks inside `depth` lists (bullets change shape with depth),
 /// `gap` apart. List items use a smaller gap so nested lists stay tight.
@@ -202,6 +219,10 @@ pub fn render_inline_text(ui: &mut Ui, markdown: &str) {
 fn gap_before(look: &Look, block: &Block, gap: f32) -> f32 {
     match block {
         Block::Heading { level, .. } => look.heading_gaps[heading_index(*level)],
+        // An aligned heading keeps the room above a heading.
+        Block::Aligned { blocks, .. } | Block::Html(blocks) => {
+            blocks.first().map_or(gap, |first| gap_before(look, first, gap))
+        }
         _ => gap,
     }
 }
@@ -213,13 +234,18 @@ fn heading_index(level: u8) -> usize {
 
 /// Render one block with the widgets for its kind.
 fn render_block(ui: &mut Ui, look: &Look, block: &Block, depth: usize) {
+    render_aligned_block(ui, look, block, depth, ColumnAlign::Left);
+}
+
+/// Render one block; paragraphs and headings sit as `align` asks.
+fn render_aligned_block(ui: &mut Ui, look: &Look, block: &Block, depth: usize, align: ColumnAlign) {
     match block {
-        Block::Heading { level, content } => render_heading(ui, look, *level, content),
+        Block::Heading { level, content } => render_heading(ui, look, *level, content, align),
         // A paragraph that is only hidden comments takes no room.
         Block::Paragraph(content) if content.iter().all(|inline| matches!(inline, Inline::Note { .. })) => {}
         Block::Paragraph(content) => match crate::voice::memo_link(content).filter(|_| look.file_tools) {
             Some(link) => crate::voice::view::memo_row(ui, &link),
-            None => render_inlines(ui, content, &TextStyle::body(look)),
+            None => aligned_row(ui, align, |ui| render_inlines(ui, content, &TextStyle::body(look))),
         },
         Block::Code { info, code } => render_code(ui, look, info, code),
         Block::Quote(blocks) => render_quote(ui, look, blocks, depth),
@@ -228,14 +254,80 @@ fn render_block(ui: &mut Ui, look: &Look, block: &Block, depth: usize) {
         Block::ThematicBreak => {
             ui.add(egui::Separator::default().spacing(RULE_SPACING));
         }
+        Block::Aligned { align, blocks } => {
+            for (index, block) in blocks.iter().enumerate() {
+                if index > 0 {
+                    ui.add_space(gap_before(look, block, look.block_gap));
+                }
+                render_aligned_block(ui, look, block, depth, *align);
+            }
+        }
+        Block::Details { summary, open, blocks } => render_details(ui, look, summary, *open, blocks, depth),
+        // An HTML block in a Markdown file. Its parts offer no buttons that
+        // change the file (Prettify, memo rows, table cells): those rewrite
+        // Markdown, and this block's source is HTML.
+        Block::Html(blocks) => {
+            let read_only = Look { file_tools: false, ..*look };
+            render_blocks_at(ui, &read_only, blocks, depth, look.block_gap);
+        }
     }
 }
 
-/// Heading text; levels 1 and 2 get a thin line underneath.
-fn render_heading(ui: &mut Ui, look: &Look, level: u8, content: &[Inline]) {
+/// Draw `content` (a paragraph or a heading's text) centered or at the
+/// right, as `align` asks.
+///
+/// egui lays wrapped text out from the left, so the content is shifted by
+/// the room it left free on the previous frame (the first frame is
+/// measured and thrown away). Text that wraps fills the column and so
+/// stays at the left, like a browser's last line would not; short lines,
+/// such as a centered title, logo or row of badges, sit where they should.
+fn aligned_row(ui: &mut Ui, align: ColumnAlign, content: impl FnOnce(&mut Ui)) {
+    if align == ColumnAlign::Left {
+        content(ui);
+        return;
+    }
+    let id = ui.next_auto_id();
+    ui.skip_ahead_auto_ids(1);
+    let available = ui.available_width();
+    let last_width = ui.data(|data| data.get_temp::<f32>(id));
+    let free = last_width.map_or(0.0, |width| (available - width).max(0.0));
+    let indent = if align == ColumnAlign::Center { free / 2.0 } else { free };
+    let width = ui
+        .horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(indent);
+            ui.vertical(content).response.rect.width()
+        })
+        .inner;
+    if last_width.is_none_or(|last| (last - width).abs() > 0.5) {
+        ui.data_mut(|data| data.insert_temp(id, width));
+        ui.ctx().request_discard("aligned HTML text measured");
+    }
+}
+
+/// An HTML `<details>`: a triangle and the summary, and under them the
+/// content once opened (a click on the triangle or the summary).
+fn render_details(ui: &mut Ui, look: &Look, summary: &[Inline], open: bool, blocks: &[Block], depth: usize) {
+    let id = ui.next_auto_id();
+    ui.skip_ahead_auto_ids(1);
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
+    let (_, header, _) = state
+        .show_header(ui, |ui| render_inlines(ui, summary, &TextStyle::body(look)))
+        .body(|ui| render_blocks_at(ui, look, blocks, depth, look.block_gap));
+    // The summary toggles too, as in a browser, not only the triangle.
+    if ui.interact(header.response.rect, id.with("summary"), Sense::click()).clicked() {
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, open);
+        state.toggle(ui);
+        state.store(ui.ctx());
+    }
+}
+
+/// Heading text, placed as `align` asks; levels 1 and 2 get a thin line
+/// underneath.
+fn render_heading(ui: &mut Ui, look: &Look, level: u8, content: &[Inline], align: ColumnAlign) {
     let size = look.heading_sizes[heading_index(level)];
     let style = TextStyle { size, line_height: size * HEADING_LINE_FACTOR, strong: true, ..TextStyle::body(look) };
-    render_inlines(ui, content, &style);
+    aligned_row(ui, align, |ui| render_inlines(ui, content, &style));
     if level <= look.ruled_level {
         ui.add_space(look.rule_gap);
         let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
@@ -588,8 +680,9 @@ fn cell_natural_width(ui: &Ui, cell: &[Inline], style: &TextStyle) -> f32 {
                 );
                 line += galley.size().x;
             }
-            // Images size themselves to the cell, so ask only for a usable width.
-            Span::Image { .. } => line += TABLE_COLUMN_MIN_WIDTH,
+            // Images size themselves to the cell, so ask only for a usable
+            // width, or the width an HTML image asks for.
+            Span::Image { size, .. } => line += size.width.map_or(TABLE_COLUMN_MIN_WIDTH, f32::from),
             Span::LineBreak => {
                 widest = widest.max(line);
                 line = 0.0;
@@ -688,6 +781,8 @@ struct TextStyle {
     link: Option<String>,
     /// What a note says about this text (highlighted, shown on hover).
     note: Option<String>,
+    /// Colors, underline and super/subscript from an HTML page.
+    html: HtmlStyle,
 }
 
 impl TextStyle {
@@ -702,6 +797,7 @@ impl TextStyle {
             code: false,
             link: None,
             note: None,
+            html: HtmlStyle::default(),
         }
     }
 }
@@ -713,6 +809,7 @@ enum Span {
     Image {
         alt: String,
         url: String,
+        size: ImageSize,
         link: Option<String>,
     },
     LineBreak,
@@ -734,7 +831,7 @@ fn render_inlines(ui: &mut Ui, inlines: &[Inline], style: &TextStyle) {
                         render_span(ui, piece, &style);
                     }
                 }
-                Span::Image { alt, url, link } => render_image(ui, &alt, &url, link.as_deref()),
+                Span::Image { alt, url, size, link } => render_image(ui, &alt, &url, size, link.as_deref()),
             }
         }
     });
@@ -791,9 +888,38 @@ fn split_long_words(text: &str, font_size: f32, wrap_width: f32) -> Vec<String> 
 /// One styled run of text; links become clickable.
 fn render_span(ui: &mut Ui, text: String, style: &TextStyle) {
     let mut rich = span_rich_text(text, style);
+    if let Some(color) = style.html.color {
+        rich = rich.color(readable_color(color32(color), page_fill(ui.visuals()), ui.visuals().text_color()));
+    }
     if style.note.is_some() {
         rich = rich.background_color(ui.visuals().warn_fg_color.gamma_multiply(NOTE_TINT));
+    } else if let Some(background) = style.html.background {
+        rich = rich.background_color(color32(background).gamma_multiply(HTML_BACKGROUND_TINT));
     }
+    let Some(script) = style.html.script else {
+        span_widget(ui, rich, style);
+        return;
+    };
+    // egui centers every label in its row, so superscript and subscript
+    // take a full line's room and draw their smaller text near its top or
+    // bottom edge, in a child that does not move the row along.
+    let size = egui::WidgetText::from(rich.clone())
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::FontSelection::Default)
+        .size();
+    let (row, _) = ui.allocate_exact_size(vec2(size.x, style.line_height), Sense::hover());
+    let normal_height = size.y / SCRIPT_SCALE;
+    let lift = normal_height * SCRIPT_LIFT;
+    let top = match script {
+        Script::Superscript => row.center().y - normal_height / 2.0 - lift,
+        Script::Subscript => row.center().y + normal_height / 2.0 - size.y + lift,
+    };
+    let rect = egui::Rect::from_min_size(pos2(row.left(), top), size);
+    span_widget(&mut ui.new_child(egui::UiBuilder::new().max_rect(rect)), rich, style);
+}
+
+/// The widget for one run of text: a link, a local link shown but not
+/// opened, or a label; with the note on hover when it has one.
+fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
     let note_tip = |response: egui::Response| match &style.note {
         Some(note) => response.on_hover_text(format!("Note: {note}")),
         None => response,
@@ -818,10 +944,19 @@ fn render_span(ui: &mut Ui, text: String, style: &TextStyle) {
 fn span_rich_text(text: String, style: &TextStyle) -> RichText {
     // egui draws strike and underline lines from the line box, so a tall
     // line height pushes them too low: those spans keep the font's own height.
-    let decorated = style.strikethrough || style.link.as_ref().is_some_and(|url| !is_openable_url(url));
-    let line_height = (!decorated).then_some(style.line_height);
-    let size = if style.code { style.size * INLINE_CODE_SCALE } else { style.size };
+    let decorated =
+        style.strikethrough || style.html.underline || style.link.as_ref().is_some_and(|url| !is_openable_url(url));
+    // Superscript and subscript are placed by `render_span`, at their
+    // font's own height.
+    let line_height = (!decorated && style.html.script.is_none()).then_some(style.line_height);
+    let mut size = if style.code { style.size * INLINE_CODE_SCALE } else { style.size };
+    if style.html.script.is_some() {
+        size *= SCRIPT_SCALE;
+    }
     let mut rich = RichText::new(text).size(size).line_height(line_height);
+    if style.html.underline {
+        rich = rich.underline();
+    }
     if style.strong {
         rich = rich.strong();
     }
@@ -885,7 +1020,7 @@ fn play_request_id() -> egui::Id {
 
 /// An image from a local file, as wide as the text column at most; a video
 /// as a card with Play. Web images and missing files show their alt text.
-fn render_image(ui: &mut Ui, alt: &str, url: &str, link: Option<&str>) {
+fn render_image(ui: &mut Ui, alt: &str, url: &str, size: ImageSize, link: Option<&str>) {
     let Some(path) = local_media_path(ui.ctx(), url) else {
         image_fallback(
             ui,
@@ -899,11 +1034,19 @@ fn render_image(ui: &mut Ui, alt: &str, url: &str, link: Option<&str>) {
         return;
     }
     let max_width = ui.max_rect().width();
-    let image = egui::Image::new(image_uri(&path))
-        .fit_to_original_size(1.0)
-        .max_width(max_width)
-        .max_height(PREVIEW_IMAGE_MAX_HEIGHT)
-        .corner_radius(IMAGE_RADIUS);
+    let image = egui::Image::new(image_uri(&path)).corner_radius(IMAGE_RADIUS);
+    let image = if size == ImageSize::default() {
+        image.fit_to_original_size(1.0).max_width(max_width).max_height(PREVIEW_IMAGE_MAX_HEIGHT)
+    } else {
+        // The size an HTML image asks for, within the column; with only one
+        // side given the picture keeps its proportions.
+        let width = size.width.map_or(max_width, |width| f32::from(width).min(max_width));
+        let height =
+            size.height.map_or(PREVIEW_IMAGE_MAX_HEIGHT, |height| f32::from(height).min(PREVIEW_IMAGE_MAX_HEIGHT));
+        image
+            .fit_to_exact_size(vec2(width, height))
+            .maintain_aspect_ratio(size.width.is_none() || size.height.is_none())
+    };
     if let Err(error) = image.load_for_size(ui.ctx(), vec2(max_width, PREVIEW_IMAGE_MAX_HEIGHT)) {
         image_fallback(ui, alt, &format!("{}\n{error}", path.display()));
         return;
@@ -996,15 +1139,51 @@ fn collect_spans(inlines: &[Inline], style: &TextStyle, spans: &mut Vec<Span>) {
                 collect_spans(children, &TextStyle { strikethrough: true, ..style.clone() }, spans);
             }
             Inline::Link { content, url } => {
-                collect_spans(content, &TextStyle { link: Some(url.clone()), ..style.clone() }, spans);
+                // Links keep the link color, as a browser draws them, even
+                // inside text an HTML page colors.
+                let html = HtmlStyle { color: None, ..style.html };
+                collect_spans(content, &TextStyle { link: Some(url.clone()), html, ..style.clone() }, spans);
             }
-            Inline::Image { alt, url } => {
-                spans.push(Span::Image { alt: alt.clone(), url: url.clone(), link: style.link.clone() });
+            Inline::Image { alt, url, size } => {
+                spans.push(Span::Image { alt: alt.clone(), url: url.clone(), size: *size, link: style.link.clone() });
             }
             Inline::LineBreak => spans.push(Span::LineBreak),
             Inline::Note { quote, text } => mark_note(spans, quote, text),
+            Inline::Styled { style: html, content } => {
+                collect_spans(content, &TextStyle { html: html.inside(style.html), ..style.clone() }, spans);
+            }
         }
     }
+}
+
+/// A theme color as egui's.
+fn color32(Rgb(red, green, blue): Rgb) -> Color32 {
+    Color32::from_rgb(red, green, blue)
+}
+
+/// An HTML page's text `color`, kept readable on the theme's `page`: a
+/// color with too little contrast (dark blue on a dark theme, yellow on a
+/// light one) is moved step by step toward the theme's `text` color, which
+/// keeps its hue as far as it can.
+fn readable_color(color: Color32, page: Color32, text: Color32) -> Color32 {
+    for step in 0..=CONTRAST_STEPS {
+        let mixed = color.lerp_to_gamma(text, f32::from(step) / f32::from(CONTRAST_STEPS));
+        if contrast_ratio(mixed, page) >= MIN_TEXT_CONTRAST {
+            return mixed;
+        }
+    }
+    text
+}
+
+/// The WCAG contrast ratio of two colors, from 1 (the same) to 21 (black
+/// on white).
+fn contrast_ratio(first: Color32, second: Color32) -> f32 {
+    let luminance = |color: Color32| {
+        let linear = egui::Rgba::from(color);
+        0.2126 * linear.r() + 0.7152 * linear.g() + 0.0722 * linear.b()
+    };
+    let (first, second) = (luminance(first), luminance(second));
+    (first.max(second) + 0.05) / (first.min(second) + 0.05)
 }
 
 #[cfg(test)]
@@ -1013,7 +1192,40 @@ mod tests {
 
     use eframe::egui;
 
-    use super::{TABLE_COLUMN_MIN_WIDTH, cached_blocks, fit_column_widths, parse_blocks, split_long_words};
+    use super::{
+        Color32, MIN_TEXT_CONTRAST, TABLE_COLUMN_MIN_WIDTH, cached_blocks, contrast_ratio, fit_column_widths,
+        parse_blocks, readable_color, split_long_words,
+    };
+
+    const LIGHT_PAGE: Color32 = Color32::from_rgb(0xfd, 0xfc, 0xfa);
+    const LIGHT_TEXT: Color32 = Color32::from_rgb(0x2b, 0x2a, 0x28);
+    const DARK_PAGE: Color32 = Color32::from_rgb(0x1d, 0x1f, 0x23);
+    const DARK_TEXT: Color32 = Color32::from_rgb(0xd4, 0xd4, 0xd4);
+
+    #[test]
+    fn readable_author_colors_stay_as_written() {
+        let dark_red = Color32::from_rgb(0xb0, 0x00, 0x00);
+        assert_eq!(readable_color(dark_red, LIGHT_PAGE, LIGHT_TEXT), dark_red);
+    }
+
+    #[test]
+    fn faint_author_colors_move_toward_the_theme_text() {
+        for (color, page, text) in [
+            (Color32::from_rgb(0xff, 0xff, 0x00), LIGHT_PAGE, LIGHT_TEXT),
+            (Color32::from_rgb(0x00, 0x00, 0x80), DARK_PAGE, DARK_TEXT),
+            (Color32::WHITE, LIGHT_PAGE, LIGHT_TEXT),
+        ] {
+            let shown = readable_color(color, page, text);
+            assert_ne!(shown, color);
+            assert!(contrast_ratio(shown, page) >= MIN_TEXT_CONTRAST, "{color:?} became {shown:?}");
+        }
+    }
+
+    #[test]
+    fn contrast_runs_from_one_to_twenty_one() {
+        assert!((contrast_ratio(Color32::WHITE, Color32::WHITE) - 1.0).abs() < 0.01);
+        assert!((contrast_ratio(Color32::BLACK, Color32::WHITE) - 21.0).abs() < 0.1);
+    }
 
     #[test]
     fn answer_blocks_are_parsed_once_per_text() {

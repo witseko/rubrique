@@ -24,6 +24,24 @@ pub enum Block {
     List(List),
     Table(Table),
     ThematicBreak,
+    /// Blocks HTML centers or right-aligns (`align`, `text-align`,
+    /// `<center>`).
+    Aligned {
+        align: ColumnAlign,
+        blocks: Vec<Block>,
+    },
+    /// An HTML `<details>`: `summary` is always shown, `blocks` only once
+    /// it is opened. `open` is how it starts.
+    Details {
+        summary: Vec<Inline>,
+        open: bool,
+        blocks: Vec<Block>,
+    },
+    /// An HTML block in a Markdown file (lines that start with a tag such
+    /// as `<p align="center">`, up to a blank line), as the blocks the HTML
+    /// reads as. The preview shows it but never rewrites it: its source is
+    /// edited as text, like any block.
+    Html(Vec<Block>),
 }
 
 /// A pipe table (GitHub style): a header row, a delimiter row that sets
@@ -39,6 +57,7 @@ pub struct Table {
 }
 
 /// How a column's cells are aligned, from the colons in the delimiter row.
+/// HTML alignment (`align="center"`) uses it too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColumnAlign {
     Left,
@@ -148,6 +167,9 @@ fn parse_block(lines: &[&str], index: usize) -> (Option<Block>, usize) {
     if let Some(fence) = Fence::open(line) {
         return parse_fenced_code(lines, index, fence);
     }
+    if let Some(start) = HtmlStart::of(trimmed) {
+        return parse_html_block(lines, index, start);
+    }
     if let Some(heading) = parse_atx_heading(trimmed) {
         return (Some(heading), index + 1);
     }
@@ -174,7 +196,11 @@ fn interrupts_paragraph(line: &str) -> bool {
     let trimmed = line.trim_start();
     let list_interrupts = ListMarker::parse(line)
         .is_some_and(|marker| marker.has_content && marker.number.is_none_or(|number| number == 1));
+    // A lone tag (`<img ...>`) inside running text is inline HTML, as in
+    // CommonMark; block tags and raw text elements start a block.
+    let html_interrupts = HtmlStart::of(trimmed).is_some_and(|start| start != HtmlStart::LoneTag);
     Fence::open(line).is_some()
+        || html_interrupts
         || parse_atx_heading(trimmed).is_some()
         || is_thematic_break(trimmed)
         || trimmed.starts_with('>')
@@ -403,6 +429,128 @@ fn parse_indented_code(lines: &[&str], start: usize) -> (Option<Block>, usize) {
         code_lines.pop();
     }
     (Some(Block::Code { info: String::new(), code: code_lines.join("\n") }), index)
+}
+
+// ---------- HTML blocks ----------
+
+/// Tags that start an HTML block (CommonMark's list, plus `<picture>`,
+/// common around README logos). Such a block runs to a blank line.
+const HTML_BLOCK_TAGS: &[&str] = &[
+    "address",
+    "article",
+    "aside",
+    "blockquote",
+    "body",
+    "caption",
+    "center",
+    "dd",
+    "details",
+    "dialog",
+    "div",
+    "dl",
+    "dt",
+    "fieldset",
+    "figcaption",
+    "figure",
+    "footer",
+    "form",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "header",
+    "hr",
+    "html",
+    "li",
+    "main",
+    "menu",
+    "nav",
+    "ol",
+    "p",
+    "picture",
+    "section",
+    "summary",
+    "table",
+    "tbody",
+    "td",
+    "tfoot",
+    "th",
+    "thead",
+    "tr",
+    "ul",
+];
+
+/// Tags whose content may hold blank lines: their HTML block runs to the
+/// line with the end tag.
+const HTML_RAW_TAGS: &[&str] = &["pre", "script", "style", "textarea"];
+
+/// How a line starts an HTML block, which decides where the block ends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HtmlStart {
+    /// `<pre>`, `<script>` and the like: up to the line with the end tag.
+    Raw(&'static str),
+    /// A block tag such as `<div>` or `</p>`: up to a blank line.
+    BlockTag,
+    /// A line that is only one tag of any other name (`<img src=...>`): up
+    /// to a blank line. It does not end a running paragraph.
+    LoneTag,
+}
+
+impl HtmlStart {
+    /// How `trimmed` (a line without its indentation) starts an HTML block,
+    /// if it does.
+    fn of(trimmed: &str) -> Option<Self> {
+        let after = trimmed.strip_prefix('<')?;
+        let closing = after.starts_with('/');
+        let after = after.strip_prefix('/').unwrap_or(after);
+        let name_length = after.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(after.len());
+        let name = after[..name_length].to_ascii_lowercase();
+        let rest = &after[name_length..];
+        // A tag name starts with a letter and ends at a space, `>` or `/`
+        // (so `<https://...>` is an autolink, not a tag).
+        let name_ends = rest.is_empty() || rest.starts_with([' ', '\t', '>', '/']);
+        if !name.starts_with(|c: char| c.is_ascii_alphabetic()) || !name_ends {
+            return None;
+        }
+        if let Some(raw) = HTML_RAW_TAGS.iter().find(|raw| **raw == name).filter(|_| !closing) {
+            return Some(HtmlStart::Raw(raw));
+        }
+        if HTML_BLOCK_TAGS.contains(&name.as_str()) {
+            return Some(HtmlStart::BlockTag);
+        }
+        // Only a whole tag on its own: its first `>` ends the line.
+        let first_close = trimmed.find('>')?;
+        (first_close + 1 == trimmed.trim_end().len()).then_some(HtmlStart::LoneTag)
+    }
+}
+
+/// An HTML block from `lines[start]`, read with the HTML page reader. Its
+/// lines are taken as they are, so nothing in them is lost when the block
+/// is edited.
+fn parse_html_block(lines: &[&str], start: usize, kind: HtmlStart) -> (Option<Block>, usize) {
+    let mut end = start + 1;
+    match kind {
+        HtmlStart::Raw(name) => {
+            let end_tag = format!("</{name}");
+            let mut index = start;
+            while index < lines.len() {
+                end = index + 1;
+                if lines[index].to_ascii_lowercase().contains(&end_tag) {
+                    break;
+                }
+                index += 1;
+            }
+        }
+        HtmlStart::BlockTag | HtmlStart::LoneTag => {
+            while end < lines.len() && !is_blank(lines[end]) {
+                end += 1;
+            }
+        }
+    }
+    let html = lines[start..end].join("\n");
+    (Some(Block::Html(super::html_blocks::parse_html_blocks(&html))), end)
 }
 
 // ---------- block quotes ----------
@@ -804,5 +952,80 @@ mod tests {
         let sources: Vec<&str> = blocks.iter().map(|block| &text[block.range.clone()]).collect();
         assert_eq!(sources, ["# Title", "First line\nsecond line", "- a\n- b", "```\ncode\n```"]);
         assert_eq!(blocks.iter().map(|block| block.block.clone()).collect::<Vec<_>>(), parse_blocks(text));
+    }
+
+    /// The HTML block `source` should read as.
+    fn html(source: &str) -> Block {
+        Block::Html(crate::markdown::html_blocks::parse_html_blocks(source))
+    }
+
+    #[test]
+    fn a_readme_header_is_one_html_block_up_to_the_blank_line() {
+        let header =
+            "<p align=\"center\">\n  <img src=\"logo.png\" width=\"120\">\n</p>\n<h1 align=\"center\">Tool</h1>";
+        let blocks = parse_blocks(&format!("{header}\n\nSome *text*."));
+        assert_eq!(blocks, [html(header), paragraph("Some *text*.")]);
+        let Block::Html(inner) = &blocks[0] else { panic!("{blocks:?}") };
+        assert!(matches!(&inner[0], Block::Aligned { align: ColumnAlign::Center, .. }));
+        assert!(
+            matches!(&inner[1], Block::Aligned { blocks, .. } if matches!(blocks[0], Block::Heading { level: 1, .. }))
+        );
+    }
+
+    #[test]
+    fn block_tags_end_a_paragraph_but_a_lone_tag_does_not() {
+        assert_eq!(parse_blocks("text\n<div>box</div>"), [paragraph("text"), html("<div>box</div>")]);
+        assert_eq!(parse_blocks("text\n<img src=a.png>"), [paragraph("text\n<img src=a.png>")]);
+        assert_eq!(parse_blocks("<img src=a.png>\ntext"), [html("<img src=a.png>\ntext")]);
+    }
+
+    #[test]
+    fn raw_text_blocks_run_to_their_end_tag_across_blank_lines() {
+        assert_eq!(
+            parse_blocks("<pre>\nline\n\nafter blank\n</pre>\nnext"),
+            [html("<pre>\nline\n\nafter blank\n</pre>"), paragraph("next")]
+        );
+        // A script is read and dropped; nothing of it shows.
+        assert_eq!(parse_blocks("<script>\nalert(1)\n\n</script>"), [Block::Html(Vec::new())]);
+    }
+
+    #[test]
+    fn what_is_not_an_html_block() {
+        for text in ["<https://example.com>", "<b>bold</b> text", "1 < 2", "<>", "    <div>indented</div>"] {
+            assert!(!parse_blocks(text).iter().any(|block| matches!(block, Block::Html(_))), "{text}");
+        }
+    }
+
+    #[test]
+    fn html_blocks_keep_their_source_text_exactly() {
+        let text = "# Title\n\n<details>\n<summary>More</summary>\n\nHidden **text**\n</details>\n\n\
+                    <div align=\"center\">\r\n<b>x</b>\r\n</div>\n\nend\n";
+        let blocks = parse_source_blocks(text);
+        let sources: Vec<&str> = blocks.iter().map(|block| &text[block.range.clone()]).collect();
+        assert_eq!(
+            sources,
+            [
+                "# Title",
+                "<details>\n<summary>More</summary>",
+                "Hidden **text**",
+                "</details>",
+                "<div align=\"center\">\r\n<b>x</b>\r\n</div>",
+                "end"
+            ]
+        );
+        assert_eq!(blocks.iter().map(|block| block.block.clone()).collect::<Vec<_>>(), parse_blocks(text));
+        // Every byte between and around the blocks is blank, so editing the
+        // blocks one at a time loses nothing.
+        let mut covered = 0;
+        for block in &blocks {
+            assert_eq!(text[covered..block.range.start].trim(), "");
+            covered = block.range.end;
+        }
+        assert_eq!(text[covered..].trim(), "");
+    }
+
+    #[test]
+    fn html_blocks_work_inside_quotes() {
+        assert_eq!(parse_blocks("> <div>q</div>"), [Block::Quote(vec![html("<div>q</div>")])]);
     }
 }

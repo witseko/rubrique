@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 use super::blocks::{Block, ColumnAlign, List, Table};
-use super::inlines::{Inline, is_openable_url};
+use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url};
 use crate::theme::palette::{Palette, Rgb};
 
 /// A full HTML page for `blocks`, colored like the theme `palette`.
@@ -119,6 +119,31 @@ fn write_block(out: &mut String, block: &Block) {
         Block::List(list) => write_list(out, list),
         Block::Table(table) => write_table(out, table),
         Block::ThematicBreak => out.push_str("<hr>\n"),
+        Block::Aligned { align, blocks } => {
+            let _ = writeln!(out, "<div style=\"text-align: {}\">", align_name(*align));
+            write_blocks(out, blocks);
+            out.push_str("</div>\n");
+        }
+        // Written from what the preview read, never the source as it is,
+        // so no script or style sheet in the file reaches the page.
+        Block::Html(blocks) => write_blocks(out, blocks),
+        Block::Details { summary, open, blocks } => {
+            out.push_str(if *open { "<details open>" } else { "<details>" });
+            out.push_str("<summary>");
+            write_inlines(out, summary);
+            out.push_str("</summary>\n");
+            write_blocks(out, blocks);
+            out.push_str("</details>\n");
+        }
+    }
+}
+
+/// The CSS name of an alignment.
+fn align_name(align: ColumnAlign) -> &'static str {
+    match align {
+        ColumnAlign::Left => "left",
+        ColumnAlign::Center => "center",
+        ColumnAlign::Right => "right",
     }
 }
 
@@ -210,19 +235,58 @@ fn write_inlines(out: &mut String, inlines: &[Inline]) {
                     write_inlines(out, content);
                 }
             }
-            Inline::Image { alt, url } if is_safe_link(url) => {
+            Inline::Image { alt, url, size } if is_safe_link(url) => {
                 if crate::media::media_kind_of_url(url) == Some(crate::media::MediaKind::Video) {
                     let _ = write!(out, "<video controls src=\"{}\" title=\"{}\"></video>", escape(url), escape(alt));
                 } else {
-                    let _ = write!(out, "<img src=\"{}\" alt=\"{}\">", escape(url), escape(alt));
+                    let size = size_attributes(*size);
+                    let _ = write!(out, "<img src=\"{}\" alt=\"{}\"{size}>", escape(url), escape(alt));
                 }
             }
             Inline::Image { alt, .. } => out.push_str(&escape(alt)),
             Inline::LineBreak => out.push_str("<br>\n"),
             // Notes stay private to Rubrique, like the comments they come from.
             Inline::Note { .. } => {}
+            Inline::Styled { style, content } => {
+                let _ = write!(out, "<span style=\"{}\">", style_css(style));
+                write_inlines(out, content);
+                out.push_str("</span>");
+            }
         }
     }
+}
+
+/// ` width="..." height="..."` for the sizes an image asks for.
+fn size_attributes(size: ImageSize) -> String {
+    let mut attributes = String::new();
+    if let Some(width) = size.width {
+        let _ = write!(attributes, " width=\"{width}\"");
+    }
+    if let Some(height) = size.height {
+        let _ = write!(attributes, " height=\"{height}\"");
+    }
+    attributes
+}
+
+/// The CSS declarations for an HTML style (the colors as written, not
+/// adjusted to the theme: the exported page has the author's look).
+fn style_css(style: &HtmlStyle) -> String {
+    let mut declarations = Vec::new();
+    if let Some(color) = style.color {
+        declarations.push(format!("color: {}", css(color)));
+    }
+    if let Some(background) = style.background {
+        declarations.push(format!("background-color: {}", css(background)));
+    }
+    if style.underline {
+        declarations.push("text-decoration: underline".to_string());
+    }
+    match style.script {
+        Some(Script::Superscript) => declarations.push("vertical-align: super; font-size: smaller".to_string()),
+        Some(Script::Subscript) => declarations.push("vertical-align: sub; font-size: smaller".to_string()),
+        None => {}
+    }
+    declarations.join("; ")
 }
 
 fn wrap(out: &mut String, tag: &str, children: &[Inline]) {
@@ -308,9 +372,12 @@ mod tests {
     #[test]
     fn text_is_escaped() {
         assert_eq!(
-            body("<script>alert(1)</script> & \"x\""),
-            "<p>&lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;x&quot;</p>\n"
+            body("a <script>alert(1)</script> & \"x\""),
+            "<p>a &lt;script&gt;alert(1)&lt;/script&gt; &amp; &quot;x&quot;</p>\n"
         );
+        // An HTML block is written from what was read: the script is gone.
+        assert_eq!(body("<script>alert(1)</script> & \"x\""), "<p>&amp; &quot;x&quot;</p>\n");
+        assert_eq!(body("<p onclick=\"x()\">hi <b>there</b></p>"), "<p>hi <strong>there</strong></p>\n");
         assert_eq!(body("```html\n<b>\n```"), "<pre><code class=\"language-html\">&lt;b&gt;</code></pre>\n");
     }
 
