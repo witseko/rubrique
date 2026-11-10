@@ -1,4 +1,4 @@
-//! Text size, editor font size, reduced motion and focus outlines.
+//! Text size, editor font size, line wrapping, reduced motion and focus outlines.
 
 use std::ops::RangeInclusive;
 
@@ -65,6 +65,7 @@ pub const EDITOR_FONT_SIZES: RangeInclusive<u8> = 9..=28;
 
 /// Settings that make Rubrique easier to read and use.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools, reason = "each flag is an independent on/off setting")]
 pub struct AccessibilitySettings {
     /// Zoom of the whole window.
     pub text_size: TextSize,
@@ -76,6 +77,9 @@ pub struct AccessibilitySettings {
     pub strong_focus: bool,
     /// Line numbers to the left of the source editor.
     pub line_numbers: bool,
+    /// Long lines in the source editor wrap at the window edge; when off
+    /// they run on and the editor scrolls sideways.
+    pub wrap_lines: bool,
 }
 
 impl Default for AccessibilitySettings {
@@ -86,6 +90,7 @@ impl Default for AccessibilitySettings {
             reduce_motion: false,
             strong_focus: false,
             line_numbers: false,
+            wrap_lines: true,
         }
     }
 }
@@ -103,6 +108,8 @@ impl AccessibilitySettings {
             "reduce_motion" => self.reduce_motion = value == "true",
             "strong_focus" => self.strong_focus = value == "true",
             "line_numbers" => self.line_numbers = value == "true",
+            // Anything but "false" keeps the default, wrapping.
+            "wrap_lines" => self.wrap_lines = value != "false",
             _ => return false,
         }
         true
@@ -111,12 +118,13 @@ impl AccessibilitySettings {
     /// Settings lines for [`AccessibilitySettings::parse_line`].
     pub fn to_lines(&self) -> String {
         format!(
-            "text_scale={}\neditor_font_size={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\n",
+            "text_scale={}\neditor_font_size={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
             self.text_size.scale(),
             self.editor_font_size,
             self.reduce_motion,
             self.strong_focus,
-            self.line_numbers
+            self.line_numbers,
+            self.wrap_lines
         )
     }
 }
@@ -152,12 +160,22 @@ mod tests {
                 reduce_motion: true,
                 strong_focus: true,
                 line_numbers: true,
+                wrap_lines: false,
             };
             assert_eq!(parse(&settings.to_lines()), settings);
         }
         assert_eq!(parse(&AccessibilitySettings::default().to_lines()), AccessibilitySettings::default());
         assert!(parse("text_scale=1.15\n").to_lines().contains("text_scale=1.15\n"));
         assert!(!AccessibilitySettings::default().parse_line("theme", "dark"));
+    }
+
+    #[test]
+    fn lines_wrap_unless_turned_off() {
+        assert!(AccessibilitySettings::default().wrap_lines);
+        // Settings saved before the option existed keep wrapping.
+        assert!(parse("line_numbers=true\n").wrap_lines);
+        assert!(!parse("wrap_lines=false\n").wrap_lines);
+        assert!(parse("wrap_lines=true\n").wrap_lines);
     }
 
     #[test]

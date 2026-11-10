@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Wrap lines setting.** Settings > Accessibility has a Wrap lines box
+  next to Line numbers. Turn it off and long lines in the editor stay on
+  one line, with the editor scrolling sideways to show the rest. It is on
+  by default, as before.
+
 ### Changed
 
 - **Bigger settings window.** Settings grows with the app window, up to
