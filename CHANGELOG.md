@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Zoom with the mouse wheel.** Hold `Cmd` (`Ctrl` on Linux) and scroll,
+  or pinch on a trackpad, to make the text larger or smaller, in the same
+  steps as `Cmd/Ctrl` + `+` and `-`. The page does not scroll while you
+  zoom, and the size is kept for next time.
+
 ### Changed
 
 - **Bigger settings window.** Settings grows with the app window, up to
