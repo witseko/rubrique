@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent answers read like the preview.** In a Markdown file, the text an
+  agent writes for Ask shows in the output panel with headings, bold and
+  italic, lists, links and code blocks drawn, instead of raw `**` and `#`
+  marks, also while it is still arriving. Copy still copies the text as
+  the agent wrote it. Long answers stay smooth: they are read again only
+  when new text arrives.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added

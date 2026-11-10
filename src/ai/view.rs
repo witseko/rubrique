@@ -646,8 +646,8 @@ pub struct RunView {
     pub output: String,
     pub errors: String,
     pub state: OutputState,
-    /// The output is an answer to read, drawn as Markdown; otherwise it is
-    /// new text for the file, shown as it is.
+    /// Draw the output as Markdown (an answer to read, or new text for a
+    /// Markdown file); otherwise it is shown as it is, in monospace.
     pub formatted: bool,
 }
 

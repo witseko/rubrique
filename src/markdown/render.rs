@@ -3,6 +3,9 @@
 use eframe::egui::{self, Align, Color32, Layout, Margin, Rangef, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use eframe::egui::cache::{ComputerMut, FrameCache};
 
 use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
 use super::inlines::{Inline, is_openable_url, parse_inlines};
@@ -160,10 +163,31 @@ pub fn top_gap(block: &Block) -> f32 {
 /// buttons that change the file. Code blocks still offer Copy (see
 /// `take_code_action`). Partial text, still arriving, is fine.
 pub fn render_answer(ui: &mut Ui, markdown: &str) {
+    let blocks = cached_blocks(ui.ctx(), markdown);
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        render_blocks_at(ui, &COMPACT, &parse_blocks(markdown), 0, COMPACT.block_gap);
+        render_blocks_at(ui, &COMPACT, &blocks, 0, COMPACT.block_gap);
     });
+}
+
+/// The blocks of `markdown`, parsed again only when the text changes: an
+/// answer is drawn every frame, and a long one would otherwise be parsed
+/// every frame while the user reads it. Shared through an `Arc` so the
+/// cache hands it out without copying the blocks.
+fn cached_blocks(ctx: &egui::Context, markdown: &str) -> Arc<Vec<Block>> {
+    ctx.memory_mut(|memory| Arc::clone(memory.caches.cache::<BlockCache>().get(markdown)))
+}
+
+type BlockCache = FrameCache<Arc<Vec<Block>>, BlockParser>;
+
+/// Parses Markdown into blocks for the cache.
+#[derive(Default)]
+struct BlockParser;
+
+impl ComputerMut<&str, Arc<Vec<Block>>> for BlockParser {
+    fn compute(&mut self, markdown: &str) -> Arc<Vec<Block>> {
+        Arc::new(parse_blocks(markdown))
+    }
 }
 
 /// Draw inline Markdown (bold, italic, code, links) at the default text
@@ -985,7 +1009,25 @@ fn collect_spans(inlines: &[Inline], style: &TextStyle, spans: &mut Vec<Span>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TABLE_COLUMN_MIN_WIDTH, fit_column_widths, split_long_words};
+    use std::sync::Arc;
+
+    use eframe::egui;
+
+    use super::{TABLE_COLUMN_MIN_WIDTH, cached_blocks, fit_column_widths, parse_blocks, split_long_words};
+
+    #[test]
+    fn answer_blocks_are_parsed_once_per_text() {
+        let ctx = egui::Context::default();
+        // Still streaming: the code fence is not closed yet.
+        let partial = "# Plan\n\n- **one**\n\n```rust\nfn main() {";
+        let first = cached_blocks(&ctx, partial);
+        assert_eq!(*first, parse_blocks(partial));
+        assert!(Arc::ptr_eq(&first, &cached_blocks(&ctx, partial)));
+        let longer = format!("{partial}\n}}\n```\n");
+        let second = cached_blocks(&ctx, &longer);
+        assert!(!Arc::ptr_eq(&first, &second));
+        assert_eq!(*second, parse_blocks(&longer));
+    }
 
     #[test]
     fn columns_that_fit_keep_their_width() {
