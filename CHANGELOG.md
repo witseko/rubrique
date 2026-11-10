@@ -8,6 +8,22 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Styles in the HTML preview.** An `.html` file's preview shows the
+  text colors, highlights, bold, italic, underline and strikethrough set
+  in `style` attributes, `<mark>`, `<u>`, `<sup>`, `<sub>` and
+  `<font color>`; centered and right-aligned titles, logos and badges
+  (`align`, `text-align`, `<center>`); collapsible `<details>` sections;
+  image width and height; and table cells that span columns. Colors that
+  would be hard to read on your theme are toned toward its text color.
+- **HTML in Markdown.** The preview of a Markdown file shows the HTML in
+  it, the way GitHub does for a README: a centered logo and title, a row
+  of badges, `<details>`, HTML tables, and tags such as `<b>`, `<kbd>`,
+  `<sup>`, `<mark>`, `<br>` and `<img width>` inside a paragraph. Click an
+  HTML block to edit its source like any other block. Scripts and style
+  sheets are never run or loaded, and other tags stay as you wrote them.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added

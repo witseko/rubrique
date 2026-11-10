@@ -3,14 +3,21 @@
 //!
 //! This is not a browser. It knows the tags that have a Markdown
 //! counterpart (headings, paragraphs, bold, italic, links, images, lists,
-//! quotes, code, tables and rules) and keeps only the text of the others.
-//! Styles and scripts are dropped and nothing runs, so any file is safe to
-//! show. Broken markup is read leniently, the way browsers do: unclosed
-//! paragraphs and list items end where the next one starts, and stray end
-//! tags are ignored.
+//! quotes, code, tables and rules), a few that set the look of text
+//! (`<mark>`, `<u>`, `<sup>`, `<sub>`, `<font color>`), `<details>` and
+//! alignment (`align`, `<center>`), and keeps only the text of the others.
+//! Of the CSS, only the text styles of `style` attributes are read (color,
+//! background color, weight, italic, underline and strikethrough, text
+//! alignment, image width and height); style sheets and scripts are
+//! dropped and nothing runs or loads, so any file is safe to show. Broken
+//! markup is read leniently, the way browsers do: unclosed paragraphs and
+//! list items end where the next one starts, and stray end tags are
+//! ignored.
 
 use super::blocks::{Block, ColumnAlign, List, ListItem, SourceBlock, Table};
-use super::inlines::Inline;
+use super::css;
+use super::inlines::{HtmlStyle, ImageSize, Inline, Script};
+use crate::theme::palette::Rgb;
 
 /// Deepest element nesting kept. Deeper tags are ignored (their text
 /// stays), so a hostile file cannot overflow the stack while it is read or
@@ -20,6 +27,20 @@ const MAX_DEPTH: usize = 64;
 /// Longest entity name looked up (`&hellip;` is 6), so a stray `&` does
 /// not scan far ahead for a `;`.
 const MAX_ENTITY_LENGTH: usize = 10;
+
+/// Most columns one table cell spans (`colspan`), so a hostile file cannot
+/// make a table millions of cells wide.
+const MAX_COLSPAN: usize = 64;
+
+/// The highlighter yellow of `<mark>`, as browsers draw it.
+const MARK_COLOR: Rgb = Rgb(0xff, 0xff, 0x00);
+
+/// What `<details>` shows when it has no `<summary>`, as browsers do.
+const DEFAULT_SUMMARY: &str = "Details";
+
+/// Elements whose `align` places them (or that align through their
+/// column), rather than aligning their text.
+const NOT_TEXT_ALIGNED: &[&str] = &["caption", "table", "tbody", "td", "tfoot", "th", "thead", "tr"];
 
 /// Elements that never have content or an end tag.
 const VOID_ELEMENTS: &[&str] =
@@ -107,15 +128,15 @@ enum Token {
 }
 
 /// A start or end tag read by `parse_tag`.
-struct Tag {
+pub(super) struct Tag {
     /// Lowercase tag name.
-    name: String,
+    pub(super) name: String,
     /// Lowercase attribute names with their decoded values.
-    attributes: Vec<(String, String)>,
+    pub(super) attributes: Vec<(String, String)>,
     /// Ends in `/>`.
-    self_closing: bool,
+    pub(super) self_closing: bool,
     /// Bytes from the name to the closing `>`, included.
-    length: usize,
+    pub(super) length: usize,
 }
 
 /// Split the page into tags and text. Comments, doctypes and the content of
@@ -474,8 +495,40 @@ fn push_paragraph(blocks: &mut Vec<Block>, inlines: Vec<Inline>) {
     }
 }
 
-/// Add the blocks for one block element.
+/// Add the blocks for one block element, with the text style and the
+/// alignment it sets.
 fn push_element_blocks(blocks: &mut Vec<Block>, element: &Element) {
+    let mut own = Vec::new();
+    push_element_content(&mut own, element);
+    let mut look = TextLook::of(element);
+    // A block's background is a box behind it, which the preview does not
+    // draw; tinting each run of its text instead would read as highlighting.
+    look.html.background = None;
+    if !look.is_plain() {
+        for block in &mut own {
+            look.apply_to_block(block);
+        }
+    }
+    match block_align(element) {
+        Some(align) if !own.is_empty() => blocks.push(Block::Aligned { align, blocks: own }),
+        _ => blocks.extend(own),
+    }
+}
+
+/// The alignment a block element sets for its text: `text-align` in its
+/// style, else its `align` attribute; `<center>` centers.
+fn block_align(element: &Element) -> Option<ColumnAlign> {
+    if NOT_TEXT_ALIGNED.contains(&element.name.as_str()) {
+        return None;
+    }
+    let from_style = element.attribute("style").and_then(|style| css::property(style, "text-align"));
+    let from_attribute = element.attribute("align");
+    let center = (element.name == "center").then_some(ColumnAlign::Center);
+    from_style.and_then(css::parse_align).or_else(|| from_attribute.and_then(css::parse_align)).or(center)
+}
+
+/// Add the blocks for what one block element holds, before its style.
+fn push_element_content(blocks: &mut Vec<Block>, element: &Element) {
     let children = &element.children;
     match element.name.as_str() {
         "p" => push_paragraph(blocks, inlines_of(children)),
@@ -493,6 +546,7 @@ fn push_element_blocks(blocks: &mut Vec<Block>, element: &Element) {
         "pre" => blocks.push(code_block(element)),
         "hr" => blocks.push(Block::ThematicBreak),
         "table" => push_table(blocks, element),
+        "details" => push_details(blocks, element),
         name => match heading_level(name) {
             Some(level) => {
                 let content = tidy(inlines_of(children));
@@ -504,6 +558,28 @@ fn push_element_blocks(blocks: &mut Vec<Block>, element: &Element) {
             None => blocks.extend(blocks_of(children)),
         },
     }
+}
+
+/// Add a `<details>`: its first `<summary>` (or "Details") over the rest
+/// of its content, which shows once it is opened.
+fn push_details(blocks: &mut Vec<Block>, details: &Element) {
+    let children = &details.children;
+    let summary_at =
+        children.iter().position(|node| matches!(node, Node::Element(element) if element.name == "summary"));
+    let (summary, inner) = match summary_at {
+        Some(index) => {
+            let summary = match &children[index] {
+                Node::Element(summary) => tidy(inlines_of(&summary.children)),
+                Node::Text(_) => Vec::new(),
+            };
+            let mut inner = blocks_of(&children[..index]);
+            inner.extend(blocks_of(&children[index + 1..]));
+            (summary, inner)
+        }
+        None => (Vec::new(), blocks_of(children)),
+    };
+    let summary = if summary.is_empty() { vec![Inline::Text(DEFAULT_SUMMARY.to_string())] } else { summary };
+    blocks.push(Block::Details { summary, open: details.attribute("open").is_some(), blocks: inner });
 }
 
 /// 1 to 6 for `h1` to `h6`.
@@ -590,13 +666,14 @@ fn push_table(blocks: &mut Vec<Block>, table: &Element) {
     }
     let mut rows = Vec::new();
     collect_rows(&table.children, &mut rows);
-    let rows: Vec<Vec<&Element>> = rows.into_iter().map(row_cells).filter(|cells| !cells.is_empty()).collect();
+    let rows: Vec<Vec<Option<&Element>>> = rows.into_iter().map(row_cells).filter(|cells| !cells.is_empty()).collect();
     let Some((header, body)) = rows.split_first() else {
         return;
     };
     let columns = rows.iter().map(Vec::len).max().unwrap_or_default();
-    let align =
-        (0..columns).map(|column| header.get(column).map_or(ColumnAlign::Left, |cell| cell_align(cell))).collect();
+    let align = (0..columns)
+        .map(|column| header.get(column).copied().flatten().map_or(ColumnAlign::Left, cell_align))
+        .collect();
     blocks.push(Block::Table(Table {
         align,
         header: row_content(header, columns),
@@ -619,38 +696,47 @@ fn collect_rows<'a>(nodes: &'a [Node], rows: &mut Vec<&'a Element>) {
     }
 }
 
-/// The `<td>` and `<th>` cells of a row.
-fn row_cells(row: &Element) -> Vec<&Element> {
-    row.children
-        .iter()
-        .filter_map(|node| match node {
-            Node::Element(cell) if cell.name == "td" || cell.name == "th" => Some(cell),
-            _ => None,
-        })
-        .collect()
+/// The `<td>` and `<th>` cells of a row, one entry per column: a cell that
+/// spans several columns (`colspan`) is followed by `None` for each column
+/// it covers, so the cells after it stay in their columns.
+fn row_cells(row: &Element) -> Vec<Option<&Element>> {
+    let mut cells = Vec::new();
+    for node in &row.children {
+        if let Node::Element(cell) = node
+            && (cell.name == "td" || cell.name == "th")
+        {
+            let span = cell.attribute("colspan").and_then(|span| span.trim().parse().ok()).unwrap_or(1);
+            cells.push(Some(cell));
+            cells.extend(std::iter::repeat_n(None, span.clamp(1, MAX_COLSPAN) - 1));
+        }
+    }
+    cells
 }
 
 /// The content of each cell of a row, padded to `columns` cells.
-fn row_content(cells: &[&Element], columns: usize) -> Vec<Vec<Inline>> {
-    let mut content: Vec<Vec<Inline>> = cells.iter().map(|cell| tidy(inlines_of(&cell.children))).collect();
+fn row_content(cells: &[Option<&Element>], columns: usize) -> Vec<Vec<Inline>> {
+    let mut content: Vec<Vec<Inline>> = cells.iter().map(|cell| cell.map(cell_content).unwrap_or_default()).collect();
     content.resize_with(columns, Vec::new);
     content
 }
 
-/// A header cell's alignment, from its `align` attribute or `text-align`
-/// style.
+/// A cell's inline content in the text style the cell sets. As for other
+/// blocks, a cell's background is a box the preview does not draw.
+fn cell_content(cell: &Element) -> Vec<Inline> {
+    let mut look = TextLook::of(cell);
+    look.html.background = None;
+    look.apply(tidy(inlines_of(&cell.children)))
+}
+
+/// A header cell's alignment, from its `text-align` style or `align`
+/// attribute.
 fn cell_align(cell: &Element) -> ColumnAlign {
-    let from_style = || {
-        cell.attribute("style")?.split(';').find_map(|declaration| {
-            let (property, value) = declaration.split_once(':')?;
-            property.trim().eq_ignore_ascii_case("text-align").then_some(value)
-        })
-    };
-    match cell.attribute("align").or_else(from_style).map(|value| value.trim().to_ascii_lowercase()).as_deref() {
-        Some("center") => ColumnAlign::Center,
-        Some("right") => ColumnAlign::Right,
-        _ => ColumnAlign::Left,
-    }
+    let from_attribute = || cell.attribute("align").and_then(css::parse_align);
+    cell.attribute("style")
+        .and_then(|style| css::property(style, "text-align"))
+        .and_then(css::parse_align)
+        .or_else(from_attribute)
+        .unwrap_or(ColumnAlign::Left)
 }
 
 /// All the text inside `nodes`, whitespace as written, with `<br>` as a
@@ -679,39 +765,37 @@ fn inlines_of(nodes: &[Node]) -> Vec<Inline> {
     inlines
 }
 
-/// Add the inline content of one node. Unknown elements add their content;
-/// a block element met inside a paragraph or cell adds its text, set off by
-/// spaces.
+/// Add the inline content of one node, in the look its element sets.
 fn push_inlines(out: &mut Vec<Inline>, node: &Node) {
-    let element = match node {
-        Node::Text(text) => {
-            out.push(Inline::Text(collapse_whitespace(text)));
-            return;
+    match node {
+        Node::Text(text) => out.push(Inline::Text(collapse_whitespace(text))),
+        Node::Element(element) => {
+            let mut content = Vec::new();
+            push_element_inlines(&mut content, element);
+            out.extend(TextLook::of(element).apply(content));
         }
-        Node::Element(element) => element,
-    };
+    }
+}
+
+/// Add the inline content of one element, before its look. Unknown
+/// elements add their content; a block element met inside a paragraph or
+/// cell adds its text, set off by spaces.
+fn push_element_inlines(out: &mut Vec<Inline>, element: &Element) {
     let children = &element.children;
     match element.name.as_str() {
         "br" => out.push(Inline::LineBreak),
-        "strong" | "b" => out.push(Inline::Strong(inlines_of(children))),
-        "em" | "i" | "cite" | "dfn" | "var" => out.push(Inline::Emphasis(inlines_of(children))),
-        "s" | "del" | "strike" => out.push(Inline::Strikethrough(inlines_of(children))),
         "code" | "kbd" | "samp" | "tt" => out.push(Inline::Code(collapse_whitespace(&text_content(children)))),
-        "a" => match non_empty(element.attribute("href")) {
-            Some(url) => out.push(Inline::Link { content: inlines_of(children), url }),
-            None => out.extend(inlines_of(children)),
-        },
         "img" => {
             if let Some(url) = non_empty(element.attribute("src")) {
                 let alt = element.attribute("alt").unwrap_or_default().to_string();
-                out.push(Inline::Image { alt, url });
+                out.push(Inline::Image { alt, url, size: image_size(element) });
             }
         }
         // The preview shows a video for an image whose address names one.
         "video" => {
             if let Some(url) = media_source(element) {
                 let alt = element.attribute("title").unwrap_or_default().to_string();
-                out.push(Inline::Image { alt, url });
+                out.push(Inline::Image { alt, url, size: ImageSize::default() });
             }
         }
         // A voice memo or other sound: a link to the file.
@@ -727,8 +811,178 @@ fn push_inlines(out: &mut Vec<Inline>, node: &Node) {
             out.extend(inlines_of(children));
             out.push(Inline::Text(" ".to_string()));
         }
-        _ => out.extend(inlines_of(children)),
+        _ => out.extend(wrap_in_tag(element, inlines_of(children))),
     }
+}
+
+/// `content` as the inline tag `element` shows it: bold, italic,
+/// strikethrough or a link; other tags show it as it is.
+fn wrap_in_tag(element: &Element, content: Vec<Inline>) -> Vec<Inline> {
+    match element.name.as_str() {
+        "strong" | "b" => vec![Inline::Strong(content)],
+        "em" | "i" | "cite" | "dfn" | "var" => vec![Inline::Emphasis(content)],
+        "s" | "del" | "strike" => vec![Inline::Strikethrough(content)],
+        "a" => match non_empty(element.attribute("href")) {
+            Some(url) => vec![Inline::Link { content, url }],
+            None => content,
+        },
+        _ => content,
+    }
+}
+
+/// A start tag met in Markdown text, read from just after its `<`. `None`
+/// when the text does not start with a whole tag.
+pub(super) fn parse_start_tag(text: &str) -> Option<Tag> {
+    if !text.starts_with(|c: char| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    parse_tag(text)
+}
+
+/// An HTML tag met in Markdown text, as inlines in the tag's look.
+/// `content` is the Markdown read between its start and end tags (none for
+/// `<br>` and `<img>`).
+pub(super) fn inline_tag(name: String, attributes: Vec<(String, String)>, content: Vec<Inline>) -> Vec<Inline> {
+    let element = Element { name, attributes, children: Vec::new() };
+    let inner = match element.name.as_str() {
+        "code" | "kbd" | "samp" | "tt" => vec![Inline::Code(super::inlines::plain_text(&content))],
+        "br" | "img" => {
+            let mut inner = Vec::new();
+            push_element_inlines(&mut inner, &element);
+            inner
+        }
+        _ => wrap_in_tag(&element, content),
+    };
+    TextLook::of(&element).apply(inner)
+}
+
+/// The size an `<img>` asks for, from its `width` and `height` attributes
+/// or the same properties in its style (the style wins, as in CSS).
+fn image_size(image: &Element) -> ImageSize {
+    let style = image.attribute("style").unwrap_or_default();
+    let dimension = |name: &str| pixels(css::property(style, name)).or_else(|| pixels(image.attribute(name)));
+    ImageSize { width: dimension("width"), height: dimension("height") }
+}
+
+/// A length in pixels, such as `200` or `200px`. Percentages, other units
+/// and zero are `None`: the image then keeps its own size.
+fn pixels(value: Option<&str>) -> Option<u16> {
+    let value = value?.trim();
+    let number = value.strip_suffix("px").unwrap_or(value).trim();
+    number.parse().ok().filter(|&pixels| pixels > 0)
+}
+
+/// How an element sets its text: the Markdown styles it turns on and the
+/// look only HTML has.
+#[derive(Debug, Default)]
+struct TextLook {
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+    html: HtmlStyle,
+}
+
+impl TextLook {
+    /// The look an element's tag and its `style` and `color` attributes
+    /// give its text. Tags with a Markdown style of their own (`<b>`,
+    /// `<em>`) get it in `push_element_inlines` instead.
+    fn of(element: &Element) -> Self {
+        let mut look = TextLook::default();
+        match element.name.as_str() {
+            "mark" => look.html.background = Some(MARK_COLOR),
+            "u" | "ins" => look.html.underline = true,
+            "sup" => look.html.script = Some(Script::Superscript),
+            "sub" => look.html.script = Some(Script::Subscript),
+            "font" => look.html.color = element.attribute("color").and_then(css::parse_color),
+            _ => {}
+        }
+        if let Some(style) = element.attribute("style") {
+            look.read_style(style);
+        }
+        look
+    }
+
+    /// Take the text properties of a `style` attribute; the others (sizes,
+    /// fonts, margins, borders) are not drawn.
+    fn read_style(&mut self, style: &str) {
+        for (property, value) in css::declarations(style) {
+            let value = value.to_ascii_lowercase();
+            match property.as_str() {
+                "color" => self.html.color = css::parse_color(&value).or(self.html.color),
+                // `background` may also hold a picture or a gradient: only a
+                // plain color counts.
+                "background-color" | "background" => {
+                    self.html.background = css::parse_color(&value).or(self.html.background);
+                }
+                "font-weight" => self.bold = is_bold_weight(&value),
+                "font-style" => self.italic = value == "italic" || value == "oblique",
+                "text-decoration" | "text-decoration-line" => {
+                    self.html.underline = value.contains("underline");
+                    self.strikethrough = value.contains("line-through");
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// True when the look changes nothing.
+    fn is_plain(&self) -> bool {
+        !self.bold && !self.italic && !self.strikethrough && self.html.is_plain()
+    }
+
+    /// `inlines` in this look.
+    fn apply(&self, inlines: Vec<Inline>) -> Vec<Inline> {
+        if inlines.is_empty() || self.is_plain() {
+            return inlines;
+        }
+        let mut inlines = inlines;
+        if !self.html.is_plain() {
+            inlines = vec![Inline::Styled { style: self.html, content: inlines }];
+        }
+        if self.strikethrough {
+            inlines = vec![Inline::Strikethrough(inlines)];
+        }
+        if self.italic {
+            inlines = vec![Inline::Emphasis(inlines)];
+        }
+        if self.bold {
+            inlines = vec![Inline::Strong(inlines)];
+        }
+        inlines
+    }
+
+    /// Set all the text in `block` (nested blocks and table cells too) in
+    /// this look, as a block element's style reaches the text inside it.
+    fn apply_to_block(&self, block: &mut Block) {
+        let restyle = |content: &mut Vec<Inline>| *content = self.apply(std::mem::take(content));
+        match block {
+            Block::Paragraph(content) | Block::Heading { content, .. } => restyle(content),
+            Block::Quote(blocks) | Block::Aligned { blocks, .. } | Block::Html(blocks) => {
+                for block in blocks {
+                    self.apply_to_block(block);
+                }
+            }
+            Block::Details { summary, blocks, .. } => {
+                restyle(summary);
+                for block in blocks {
+                    self.apply_to_block(block);
+                }
+            }
+            Block::List(list) => {
+                list.items.iter_mut().flat_map(|item| &mut item.blocks).for_each(|block| self.apply_to_block(block));
+            }
+            Block::Table(table) => {
+                table.header.iter_mut().chain(table.rows.iter_mut().flatten()).for_each(restyle);
+            }
+            Block::Code { .. } | Block::ThematicBreak => {}
+        }
+    }
+}
+
+/// True for a `font-weight` that reads as bold: `bold`, `bolder`, or 600
+/// and up.
+fn is_bold_weight(value: &str) -> bool {
+    value == "bold" || value == "bolder" || value.parse::<u16>().is_ok_and(|weight| weight >= 600)
 }
 
 /// The address of an `<audio>` or `<video>`: its `src`, or the first
@@ -785,6 +1039,7 @@ fn join_text(inlines: Vec<Inline>) -> Vec<Inline> {
             Inline::Emphasis(inner) => Inline::Emphasis(join_text(inner)),
             Inline::Strikethrough(inner) => Inline::Strikethrough(join_text(inner)),
             Inline::Link { content, url } => Inline::Link { content: join_text(content), url },
+            Inline::Styled { style, content } => Inline::Styled { style, content: join_text(content) },
             other => other,
         };
         match (out.last_mut(), inline) {
@@ -793,8 +1048,13 @@ fn join_text(inlines: Vec<Inline>) -> Vec<Inline> {
                 previous.push_str(text);
             }
             (_, Inline::Text(text)) if text.is_empty() => {}
-            (_, Inline::Strong(inner) | Inline::Emphasis(inner) | Inline::Strikethrough(inner)) if inner.is_empty() => {
-            }
+            (
+                _,
+                Inline::Strong(inner)
+                | Inline::Emphasis(inner)
+                | Inline::Strikethrough(inner)
+                | Inline::Styled { content: inner, .. },
+            ) if inner.is_empty() => {}
             (_, inline) => out.push(inline),
         }
     }
@@ -918,7 +1178,7 @@ mod tests {
                     url: "notes/a.html".to_string()
                 },
                 Inline::LineBreak,
-                Inline::Image { alt: "A cat".to_string(), url: "pics/cat.png".to_string() },
+                Inline::Image { alt: "A cat".to_string(), url: "pics/cat.png".to_string(), size: ImageSize::default() },
                 text("plain"),
             ])]
         );
@@ -935,7 +1195,7 @@ mod tests {
             [Block::Paragraph(vec![
                 Inline::Link { content: vec![text("Tom's memo")], url: "memos/a.wav".to_string() },
                 text(" "),
-                Inline::Image { alt: String::new(), url: "clip.mp4".to_string() },
+                Inline::Image { alt: String::new(), url: "clip.mp4".to_string(), size: ImageSize::default() },
             ])]
         );
     }
@@ -969,10 +1229,166 @@ mod tests {
                 Block::Table(Table {
                     align: vec![ColumnAlign::Left, ColumnAlign::Right],
                     header: vec![vec![text("Item")], vec![text("Cost")]],
-                    rows: vec![vec![vec![text("Tea")], vec![text("2")]], vec![vec![text("Cake")], vec![]]],
+                    rows: vec![
+                        vec![vec![text("Tea")], vec![styled(red(), vec![text("2")])]],
+                        vec![vec![text("Cake")], vec![]],
+                    ],
                 }),
             ]
         );
+    }
+
+    fn red() -> HtmlStyle {
+        HtmlStyle { color: Some(Rgb(0xff, 0, 0)), ..HtmlStyle::default() }
+    }
+
+    fn styled(style: HtmlStyle, content: Vec<Inline>) -> Inline {
+        Inline::Styled { style, content }
+    }
+
+    #[test]
+    fn style_attributes_set_the_look_of_text() {
+        let blocks = parse_html_blocks(
+            "<p><span style=\"color: #f00; font-weight: 700\">hot</span> \
+             <span style='font-style: italic; text-decoration: underline line-through'>x</span> \
+             <font color=red>old</font> <span style=\"font-size: 40px\">big</span></p>",
+        );
+        let underline = HtmlStyle { underline: true, ..HtmlStyle::default() };
+        assert_eq!(
+            blocks,
+            [Block::Paragraph(vec![
+                Inline::Strong(vec![styled(red(), vec![text("hot")])]),
+                text(" "),
+                Inline::Emphasis(vec![Inline::Strikethrough(vec![styled(underline, vec![text("x")])])]),
+                text(" "),
+                styled(red(), vec![text("old")]),
+                text(" big"),
+            ])]
+        );
+    }
+
+    #[test]
+    fn mark_underline_and_scripts() {
+        let blocks = parse_html_blocks("<p><mark>m</mark><u>u</u><ins>i</ins>H<sub>2</sub>O x<sup>2</sup></p>");
+        let look = |style: HtmlStyle, value: &str| styled(style, vec![text(value)]);
+        let underline = HtmlStyle { underline: true, ..HtmlStyle::default() };
+        assert_eq!(
+            blocks,
+            [Block::Paragraph(vec![
+                look(HtmlStyle { background: Some(MARK_COLOR), ..HtmlStyle::default() }, "m"),
+                look(underline, "u"),
+                look(underline, "i"),
+                text("H"),
+                look(HtmlStyle { script: Some(Script::Subscript), ..HtmlStyle::default() }, "2"),
+                text("O x"),
+                look(HtmlStyle { script: Some(Script::Superscript), ..HtmlStyle::default() }, "2"),
+            ])]
+        );
+    }
+
+    #[test]
+    fn a_block_style_reaches_its_text_but_not_its_background() {
+        let blocks = parse_html_blocks(
+            "<div style=\"color: red; background: yellow\"><p>a</p><ul><li>b</li></ul><pre>code</pre></div>",
+        );
+        assert_eq!(
+            blocks,
+            [
+                Block::Paragraph(vec![styled(red(), vec![text("a")])]),
+                Block::List(List {
+                    start: None,
+                    items: vec![ListItem {
+                        task: None,
+                        blocks: vec![Block::Paragraph(vec![styled(red(), vec![text("b")])])]
+                    }],
+                }),
+                Block::Code { info: String::new(), code: "code".to_string() },
+            ]
+        );
+    }
+
+    #[test]
+    fn alignment_from_attributes_styles_and_center() {
+        let blocks = parse_html_blocks(
+            "<h1 align=\"center\">Title</h1><center>c</center>\
+             <p align=center style=\"text-align: right\">r</p><div align=\"center\"><p align=left>l</p></div>\
+             <p align=\"top\">plain</p>",
+        );
+        assert_eq!(
+            blocks,
+            [
+                Block::Aligned {
+                    align: ColumnAlign::Center,
+                    blocks: vec![Block::Heading { level: 1, content: vec![text("Title")] }]
+                },
+                Block::Aligned { align: ColumnAlign::Center, blocks: vec![paragraph("c")] },
+                Block::Aligned { align: ColumnAlign::Right, blocks: vec![paragraph("r")] },
+                Block::Aligned {
+                    align: ColumnAlign::Center,
+                    blocks: vec![Block::Aligned { align: ColumnAlign::Left, blocks: vec![paragraph("l")] }]
+                },
+                paragraph("plain"),
+            ]
+        );
+    }
+
+    #[test]
+    fn details_keep_their_summary_and_open_state() {
+        let blocks = parse_html_blocks(
+            "<details open><summary>More <b>info</b></summary><p>hidden</p></details>\
+             <details>loose text</details>",
+        );
+        assert_eq!(
+            blocks,
+            [
+                Block::Details {
+                    summary: vec![text("More "), Inline::Strong(vec![text("info")])],
+                    open: true,
+                    blocks: vec![paragraph("hidden")],
+                },
+                Block::Details {
+                    summary: vec![text(DEFAULT_SUMMARY)],
+                    open: false,
+                    blocks: vec![paragraph("loose text")]
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn image_sizes_in_pixels() {
+        let blocks = parse_html_blocks(
+            "<img src=a.png width=\"200\"><img src=b.png height=20px style=\"width: 50px\">\
+             <img src=c.png width=\"50%\" height=0>",
+        );
+        let image = |url: &str, width, height| Inline::Image {
+            alt: String::new(),
+            url: url.to_string(),
+            size: ImageSize { width, height },
+        };
+        assert_eq!(
+            blocks,
+            [Block::Paragraph(vec![
+                image("a.png", Some(200), None),
+                image("b.png", Some(50), Some(20)),
+                image("c.png", None, None),
+            ])]
+        );
+    }
+
+    #[test]
+    fn spanning_cells_keep_the_cells_after_them_in_their_columns() {
+        let blocks = parse_html_blocks(
+            "<table><tr><th colspan=2>Name<th align=right>Cost</tr>\
+             <tr><td>a<td>b<td>1</tr></table>",
+        );
+        let Block::Table(table) = &blocks[0] else { panic!("{blocks:?}") };
+        assert_eq!(table.align, [ColumnAlign::Left, ColumnAlign::Left, ColumnAlign::Right]);
+        assert_eq!(table.header, [vec![text("Name")], vec![], vec![text("Cost")]]);
+        assert_eq!(table.rows[0], [vec![text("a")], vec![text("b")], vec![text("1")]]);
+        let blocks = parse_html_blocks("<table><tr><td colspan=99999>wide</tr></table>");
+        let Block::Table(table) = &blocks[0] else { panic!("{blocks:?}") };
+        assert_eq!(table.header.len(), MAX_COLSPAN);
     }
 
     #[test]

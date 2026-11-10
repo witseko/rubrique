@@ -20,20 +20,31 @@ pub struct Heading {
 
 /// Every top-level heading in `blocks`, in document order. Headings inside
 /// quotes or lists are left out: the preview can only scroll to top-level
-/// blocks, and they are rarely meant as section titles.
+/// blocks, and they are rarely meant as section titles. A heading in HTML
+/// (an HTML block of a Markdown file, or one HTML centers) still counts:
+/// it is all or most of its top-level block.
 pub fn headings(blocks: &[SourceBlock]) -> Vec<Heading> {
     let mut found = Vec::new();
     for (block_index, source) in blocks.iter().enumerate() {
-        if let Block::Heading { level, content } = &source.block {
-            found.push(Heading {
-                level: *level,
-                text: plain_text(content).trim().to_string(),
-                block_index,
-                start: source.range.start,
-            });
-        }
+        push_headings(&mut found, &source.block, block_index, source.range.start);
     }
     found
+}
+
+/// Add the heading `block` is, or the headings an aligned or HTML block
+/// holds.
+fn push_headings(found: &mut Vec<Heading>, block: &Block, block_index: usize, start: usize) {
+    match block {
+        Block::Heading { level, content } => {
+            found.push(Heading { level: *level, text: plain_text(content).trim().to_string(), block_index, start });
+        }
+        Block::Aligned { blocks, .. } | Block::Html(blocks) => {
+            for block in blocks {
+                push_headings(found, block, block_index, start);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Index into `headings` of the section that contains byte `offset` of the
@@ -113,5 +124,14 @@ mod tests {
     fn top_level_is_the_smallest_level_used() {
         assert_eq!(top_level(&outline("## A\n\n### B\n")), 2);
         assert_eq!(top_level(&outline("### A\n\n# B\n")), 1);
+    }
+
+    #[test]
+    fn centered_html_headings_are_in_the_outline() {
+        let html = "<h1 align=center>Title</h1><p>text</p><div style=\"text-align: right\"><h2>Part</h2></div>";
+        let found = headings(&crate::markdown::html_blocks::html_source_blocks(html));
+        let titles: Vec<_> =
+            found.iter().map(|heading| (heading.level, heading.text.as_str(), heading.block_index)).collect();
+        assert_eq!(titles, [(1, "Title", 0), (2, "Part", 2)]);
     }
 }

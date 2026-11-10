@@ -3,6 +3,7 @@
 //! table editor rewrites a table's source text, which the app puts back.
 
 pub mod blocks;
+pub mod css;
 pub mod highlight;
 pub mod html;
 pub mod html_blocks;

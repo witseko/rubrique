@@ -113,7 +113,7 @@ fn plain_text(inlines: &[Inline], out: &mut String) {
             Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
                 plain_text(children, out);
             }
-            Inline::Link { content, .. } => plain_text(content, out),
+            Inline::Link { content, .. } | Inline::Styled { content, .. } => plain_text(content, out),
             Inline::LineBreak => out.push(' '),
             Inline::Note { .. } => {}
         }
