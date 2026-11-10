@@ -411,7 +411,7 @@ fn appearance_section(
     action
 }
 
-/// Accessibility: text size, editor font size, motion and focus outlines.
+/// Accessibility: text size, editor font size, line wrapping, motion and focus outlines.
 fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> Option<SettingsAction> {
     let mut changed = false;
     ui.label(RichText::new("Text size").strong());
@@ -434,6 +434,10 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
     changed |= ui
         .checkbox(&mut settings.line_numbers, "Line numbers")
         .on_hover_text("Number the lines in the source editor")
+        .changed();
+    changed |= ui
+        .checkbox(&mut settings.wrap_lines, "Wrap lines")
+        .on_hover_text("Break long lines at the window edge. Off: they run on and the editor scrolls sideways")
         .changed();
 
     ui.add_space(6.0);

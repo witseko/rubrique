@@ -1706,8 +1706,9 @@ impl RubriqueApp {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
                     let line_numbers = self.settings.accessibility.line_numbers;
+                    let wrap_lines = self.settings.accessibility.wrap_lines;
                     let find = find::highlight(&mut self.find);
-                    if let Some(stats) = show_editor(ui, document, syntax, line_numbers, find, &mentions) {
+                    if let Some(stats) = show_editor(ui, document, syntax, line_numbers, wrap_lines, find, &mentions) {
                         self.stats = Some(stats);
                     }
                     // Any edit invalidates the cached preview.

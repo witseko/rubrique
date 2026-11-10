@@ -16,6 +16,10 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   unsaved. If the file changed on disk in between, the merge screen opens
   instead of one version replacing the other. Edits of encrypted files
   are kept encrypted.
+- **Wrap lines setting.** Settings > Accessibility has a Wrap lines box
+  next to Line numbers. Turn it off and long lines in the editor stay on
+  one line, with the editor scrolling sideways to show the rest. It is on
+  by default, as before.
 - **Open path.** `Cmd+O` (or a right click on the Add folder button) opens
   a file by typing or pasting its path: `~` is your home folder, a
   relative path starts at the explorer folder, and `notes.md:12` opens the
