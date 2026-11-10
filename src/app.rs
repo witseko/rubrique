@@ -18,6 +18,7 @@ mod images;
 mod install;
 mod naming;
 mod new_entry;
+mod open_path;
 mod privacy;
 mod remote;
 mod side_panel;
@@ -62,7 +63,7 @@ use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::scratch::{create_scratch, rename_target};
-use crate::settings::accessibility::TextSize;
+use crate::settings::accessibility::{TextSize, ZoomGesture};
 use crate::settings::view::{
     AiInfo, PrivacyInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
@@ -115,6 +116,7 @@ const TOGGLE_PREVIEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAN
 const ADD_NOTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 const FORMAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
 const OPEN_IN_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::B);
+const OPEN_PATH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const NEW_SCRATCH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const NEW_ENCRYPTED_SCRATCH: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N);
@@ -272,6 +274,8 @@ pub struct RubriqueApp {
     pending: Option<GuardedAction>,
     /// Set once the user agreed to quit, so the next close is not blocked.
     quit_confirmed: bool,
+    /// Cmd/Ctrl + wheel and pinch zoom gathered toward the next text size.
+    zoom_gesture: ZoomGesture,
     /// Message for the status bar and the egui time (seconds) it was first
     /// shown; `NaN` until the next frame fills it in.
     status_message: Option<(String, f64)>,
@@ -336,6 +340,8 @@ pub struct RubriqueApp {
     scroll_to_revealed: bool,
     /// The file the "Delete" dialog asks about, while it is open.
     deleting: Option<PathBuf>,
+    /// The "Open path" dialog, while it is open.
+    open_path: Option<open_path::OpenPathDialog>,
     /// Watches the tmux sessions for the explorer; `None` when tmux is not installed.
     terminals: Option<TerminalMonitor>,
     /// The merge screen for the open file, while it is open.
@@ -396,7 +402,7 @@ impl RubriqueApp {
         apply_theme(ctx, &themes, &settings.theme);
         install_code_colors(ctx, settings.code_colors);
         apply_accessibility(ctx, &settings.accessibility);
-        // Rubrique steps through its own text sizes instead (see `handle_text_size_keys`).
+        // Rubrique steps through its own text sizes instead (see `handle_text_zoom`).
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
         let privacy = privacy::PrivacyState::new(settings.privacy.pin_hash.is_some());
         let mut app = RubriqueApp {
@@ -408,6 +414,7 @@ impl RubriqueApp {
             active_tab: 0,
             pending: None,
             quit_confirmed: false,
+            zoom_gesture: ZoomGesture::default(),
             status_message: None,
             stats: None,
             window_title: String::new(),
@@ -437,6 +444,7 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            open_path: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
             merging: None,
             last_disk_check: 0.0,
@@ -771,7 +779,7 @@ impl RubriqueApp {
     /// Global shortcuts; they run before the panels so widgets never see them.
     fn handle_shortcuts(&mut self, ctx: &Context) {
         self.handle_tab_shortcuts(ctx);
-        self.handle_text_size_keys(ctx);
+        self.handle_text_zoom(ctx);
         if ctx.input_mut(|input| input.consume_shortcut(&COPY_OPEN_PATH))
             && let Some(path) = self.open_file.path()
         {
@@ -806,6 +814,10 @@ impl RubriqueApp {
         }
         self.find_shortcuts(ctx);
         self.side_panel_shortcut(ctx);
+        // After the Structure shortcut: Cmd+O alone would also match Cmd+Shift+O.
+        if ctx.input_mut(|input| input.consume_shortcut(&OPEN_PATH)) {
+            self.start_open_path();
+        }
         if ctx.input_mut(|input| input.consume_shortcut(&ADD_NOTE)) {
             self.start_note(ctx);
         }
@@ -830,6 +842,7 @@ impl RubriqueApp {
             && self.new_entry.is_none()
             && self.tab_rename.is_none()
             && self.deleting.is_none()
+            && self.open_path.is_none()
             && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.settings_open = false;
@@ -883,8 +896,9 @@ impl RubriqueApp {
         }
     }
 
-    /// Cmd/Ctrl + plus, minus and 0: the next text size, the one before, the default.
-    fn handle_text_size_keys(&mut self, ctx: &Context) {
+    /// Cmd/Ctrl + plus, minus and 0: the next text size, the one before, the
+    /// default. Cmd/Ctrl + mouse wheel and trackpad pinch step the same sizes.
+    fn handle_text_zoom(&mut self, ctx: &Context) {
         let current = self.settings.accessibility.text_size;
         let size = if ctx.input_mut(|input| input.consume_shortcut(&TEXT_DEFAULT)) {
             TextSize::Default
@@ -893,7 +907,10 @@ impl RubriqueApp {
         } else if ctx.input_mut(|input| input.consume_shortcut(&TEXT_SMALLER)) {
             current.smaller()
         } else {
-            return;
+            // egui turns the wheel into zoom while Cmd/Ctrl is down (and
+            // leaves the scroll delta at zero, so nothing scrolls), and folds
+            // a pinch into the same factor.
+            self.zoom_gesture.step(current, ctx.input(egui::InputState::zoom_delta))
         };
         if size != current {
             self.settings.accessibility.text_size = size;
@@ -1595,6 +1612,7 @@ impl RubriqueApp {
                 self.settings.terminal_order = names;
             }
             Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
+            Some(ExplorerAction::OpenPath) => self.start_open_path(),
             Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
             Some(ExplorerAction::NewScratch { encrypted }) => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
@@ -2782,6 +2800,7 @@ impl eframe::App for RubriqueApp {
         self.note_dialog(&ctx);
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
+        self.open_path_dialog(&ctx);
         self.add_remote_dialog(&ctx);
         self.secret_dialog(&ctx);
         self.update_title(&ctx);

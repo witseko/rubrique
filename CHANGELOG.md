@@ -14,6 +14,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   next to Line numbers. Turn it off and long lines in the editor stay on
   one line, with the editor scrolling sideways to show the rest. It is on
   by default, as before.
+- **Open path.** `Cmd+O` (or a right click on the Add folder button) opens
+  a file by typing or pasting its path: `~` is your home folder, a
+  relative path starts at the explorer folder, and `notes.md:12` opens the
+  file on line 12. A folder is shown in the explorer, added to it when it
+  is not there yet. A path that does not exist is named under the field.
+- **Zoom with the mouse wheel.** Hold `Cmd` (`Ctrl` on Linux) and scroll,
+  or pinch on a trackpad, to make the text larger or smaller, in the same
+  steps as `Cmd/Ctrl` + `+` and `-`. The page does not scroll while you
+  zoom, and the size is kept for next time.
 
 ### Changed
 
