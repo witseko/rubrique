@@ -26,6 +26,7 @@ mod summary;
 mod tab_groups;
 mod tabs;
 mod terminals;
+mod text_highlight;
 mod voice;
 
 use crate::ai::agents::{self, Agent};
@@ -33,6 +34,7 @@ use crate::ai::mention_list::{self, Suggestion};
 use crate::ai::skills::{self, Skill, SourceFolder};
 use crate::ai::{self, AiTool};
 use crate::document::highlighting::Syntax;
+use crate::document::highlighting::install_text_rules;
 use crate::document::media_view::{MediaEvent, image_pixels, show_image, show_video};
 use crate::document::merge::MergeSession;
 use crate::document::merge_view::{MergeAction, show_merge};
@@ -299,6 +301,8 @@ pub struct RubriqueApp {
     summaries: summary::SummaryState,
     /// Name suggestions for scratch files.
     naming: naming::NamingState,
+    /// Text highlight rules written by AI in Settings.
+    rule_writer: text_highlight::RuleWriterState,
     /// Asks the window to redraw, from background threads.
     repaint: Context,
     /// Where each AI tool's program was found, in [`AiTool::ALL`] order.
@@ -395,6 +399,7 @@ impl RubriqueApp {
         let themes = Themes::load(themes_folder().as_deref());
         apply_theme(ctx, &themes, &settings.theme);
         install_code_colors(ctx, settings.code_colors);
+        install_text_rules(ctx, &settings.text_highlight.rules);
         apply_accessibility(ctx, &settings.accessibility);
         // Rubrique steps through its own text sizes instead (see `handle_text_size_keys`).
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
@@ -421,6 +426,7 @@ impl RubriqueApp {
             agents: Vec::new(),
             summaries: summary::SummaryState::default(),
             naming: naming::NamingState::default(),
+            rule_writer: text_highlight::RuleWriterState::default(),
             repaint: ctx.clone(),
             ai_found: [None, None, None, None],
             renaming: None,
@@ -1071,6 +1077,7 @@ impl RubriqueApp {
             is_default: self.settings.scratch_folder.is_none() || scratch_folder == default_scratch_folder(),
             remote: &mut self.settings.remote,
         };
+        let ask_tool_name = self.settings.ai.default_tool.name();
         let skills_folder = self.settings.ai.skills_folder.clone().or_else(default_skills_folder);
         let agents_folder = self.settings.ai.agents_folder.clone().or_else(default_agents_folder);
         let ai = AiInfo {
@@ -1094,6 +1101,7 @@ impl RubriqueApp {
         };
         let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
         let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
+        let highlight = self.rule_writer.highlight_info(&mut self.settings.text_highlight, ask_tool_name);
         let action = show_settings(
             ui,
             &mut self.settings_group,
@@ -1101,6 +1109,7 @@ impl RubriqueApp {
             &self.settings.theme,
             self.settings.code_colors,
             folder.as_deref(),
+            highlight,
             &mut self.settings.accessibility,
             scratch,
             &mut self.settings.note_marks,
@@ -1109,6 +1118,9 @@ impl RubriqueApp {
             voice,
             terminals,
         );
+        // Rules edited in the Highlights group color plain text at once;
+        // they are compiled again only when they changed.
+        install_text_rules(ui.ctx(), &self.settings.text_highlight.rules);
         let Some(action) = action else {
             return;
         };
@@ -1117,6 +1129,8 @@ impl RubriqueApp {
                 self.appearance_settings_action(ui.ctx(), &action, folder.as_deref());
             }
             SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
+            SettingsAction::WriteHighlightRule => self.write_highlight_rule(),
+            SettingsAction::StopHighlightRule => self.rule_writer.stop(),
             SettingsAction::ChooseScratchFolder => {
                 let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
                 if let Some(current) = &scratch_folder {
@@ -2727,6 +2741,7 @@ impl eframe::App for RubriqueApp {
         self.poll_disk(&ctx);
         self.poll_drafts(&ctx);
         self.poll_naming();
+        self.poll_rule_writer();
         self.poll_voice(&ctx);
         self.poll_install(&ctx);
         self.poll_remote();

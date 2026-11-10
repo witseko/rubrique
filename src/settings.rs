@@ -10,6 +10,7 @@ use crate::remote::settings_text;
 use crate::settings::accessibility::AccessibilitySettings;
 use crate::settings::layout::LayoutSettings;
 use crate::settings::privacy::PrivacySettings;
+use crate::settings::text_highlight::TextHighlightSettings;
 use crate::theme::catalog::ThemeChoice;
 use crate::theme::code_colors::CodeColors;
 use crate::voice::VoiceSettings;
@@ -17,6 +18,7 @@ use crate::voice::VoiceSettings;
 pub mod accessibility;
 pub mod layout;
 pub mod privacy;
+pub mod text_highlight;
 pub mod view;
 
 /// Everything Rubrique remembers between runs.
@@ -38,6 +40,8 @@ pub struct Settings {
     pub theme: ThemeChoice,
     /// How syntax is colored: with the theme's colors or VS Code's.
     pub code_colors: CodeColors,
+    /// Rules that color matches in plain text files.
+    pub text_highlight: TextHighlightSettings,
     /// Text size, editor font size, reduced motion and focus outlines.
     pub accessibility: AccessibilitySettings,
     /// Where new scratch files go; `None` means the default folder.
@@ -100,6 +104,7 @@ impl Settings {
                 || settings.privacy.parse_line(key.trim(), value)
                 || settings.remote.parse_line(key.trim(), value)
                 || settings.layout.parse_line(key.trim(), value)
+                || settings.text_highlight.parse_line(key.trim(), value)
             {
                 continue;
             }
@@ -150,7 +155,7 @@ impl Settings {
             lines
         });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nmarkdown_only={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nmarkdown_only={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}",
             last_file,
             self.markdown_only,
             self.note_marks,
@@ -163,6 +168,7 @@ impl Settings {
             self.privacy.to_lines(),
             self.remote.to_lines(),
             self.layout.to_lines(),
+            self.text_highlight.to_lines(),
         )
     }
 }
@@ -193,6 +199,12 @@ pub fn default_scratch_folder() -> Option<PathBuf> {
 /// Folder for cached file summaries (`cache/summaries` in the config folder).
 pub fn summary_cache_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("cache").join("summaries"))
+}
+
+/// The empty folder an AI tool runs in while it writes a text highlight
+/// rule (`cache/highlight-rule` in the config folder).
+pub fn highlight_rule_folder() -> Option<PathBuf> {
+    config_folder().map(|folder| folder.join("cache").join("highlight-rule"))
 }
 
 /// Default folder for skills (`skills` in the config folder).
@@ -290,6 +302,13 @@ mod tests {
                 terminals_collapsed: true,
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
+            text_highlight: text_highlight::TextHighlightSettings {
+                rules: vec![crate::highlight::text_rules::HighlightRule::new(
+                    "Ticket",
+                    r"\bPROJ-[0-9]+\b",
+                    crate::highlight::text_rules::RuleColor::Key,
+                )],
+            },
         };
         let text = settings.to_text();
         assert!(text.contains("folder=ssh://server/srv/notes\n"), "{text}");
@@ -331,6 +350,12 @@ mod tests {
         assert_eq!(custom.scratch_folder_or_default(), Some(PathBuf::from("/tmp/s")));
         assert_eq!(Settings::default().scratch_folder_or_default(), default_scratch_folder());
         assert_eq!(Settings::parse("scratch_folder=\n").scratch_folder, None);
+    }
+
+    #[test]
+    fn settings_from_before_highlight_rules_get_the_defaults() {
+        let old = Settings::parse("theme=dark\nmarkdown_only=true\n");
+        assert_eq!(old.text_highlight.rules, crate::highlight::text_rules::default_rules());
     }
 
     #[test]

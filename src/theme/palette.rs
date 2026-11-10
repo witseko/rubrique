@@ -1,7 +1,7 @@
 //! Theme colors and the `.theme` file format (`key=value` lines, like settings).
 
 /// A color as red, green, blue.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
 impl Rgb {

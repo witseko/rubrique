@@ -8,6 +8,17 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Text highlights.** Plain text files (`.txt`, `.log` and others without
+  code colors) color IP addresses, UUIDs, hashes, dates, emails and
+  numbers. Settings → Highlights lists the rules: each has a name, a
+  regular expression, a color from the code colors or your own, and a
+  switch; add, reorder, edit or delete them. A pattern that does not work
+  shows why under it and is skipped. Describe what to highlight ("ticket
+  ids like PROJ-123") and the Ask tool writes the pattern as a new rule to
+  check before you add it.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added
