@@ -160,11 +160,17 @@ pub fn show_editor(
     Some(text_stats(&document.text, range.primary.index.0, sorted.start.0..sorted.end.0))
 }
 
+/// The tint behind a find match (not the current one). The find bar's
+/// results list uses it too, so a match looks the same in both.
+pub fn match_fill(visuals: &egui::Visuals) -> Color32 {
+    visuals.warn_fg_color.gamma_multiply(MATCH_TINT)
+}
+
 /// Tint the find matches behind the text, the current one in the accent,
 /// and scroll to the current one when asked.
 fn paint_matches(ui: &Ui, output: &TextEditOutput, text: &str, find: FindHighlight<'_>) {
     let visuals = ui.visuals();
-    let tint = visuals.warn_fg_color.gamma_multiply(MATCH_TINT);
+    let tint = match_fill(visuals);
     let current_tint = visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT);
     let clip = ui.clip_rect();
     // Byte to character conversion, walking forward through the sorted matches.

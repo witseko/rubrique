@@ -32,6 +32,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
+- **Roomier find bar.** The find bar's text, field and buttons grow with
+  the editor font size, and the field stands out on every theme. The
+  count reads "3 of 17", Previous and Next are larger arrow buttons, and
+  the Aa and W toggles show plainly whether they are on. All-files
+  results are grouped under each file's name and folder, one line per
+  match with its line number and the match highlighted; a click on a
+  file name opens the file, a click on a line goes to the match.
 - **Bigger settings window.** Settings grows with the app window, up to
   70% of its width and 80% of its height (at most 1200 by 900), so a big
   screen shows more of each group without scrolling. Small windows keep
