@@ -463,7 +463,7 @@ fn show_file(
     let dirty = context.dirty_files.iter().any(|path| path == &file.path);
     let dirty_marker = if dirty { " •" } else { "" };
     let lock_gap = if file.encrypted { LOCK_GAP } else { "" };
-    let label = format!("{ICON_GAP}{}{}{dirty_marker}{lock_gap}", file.name, link_marker(file));
+    let label = format!("{}{}{dirty_marker}{lock_gap}", file.name, link_marker(file));
     // Unsaved is a state, so it gets a neutral mark (the bullet, in the strong
     // text color), like the dot on an unsaved tab. Hue is kept for telling
     // folders apart; see `paint_root_bar`.
@@ -472,7 +472,8 @@ fn show_file(
     } else {
         egui::RichText::new(label)
     };
-    let response = tree_row(ui, is_open, label);
+    let row = file_row(ui, is_open, label);
+    let response = row.inner;
     scroll_if_revealed(ui, context, &file.path, &response);
     if file.encrypted {
         paint_file_lock(ui, &response);
@@ -481,7 +482,7 @@ fn show_file(
         && is_markdown_path(&file.path)
         && marks.has_notes(&file.path)
     {
-        paint_note_mark(ui, &response);
+        paint_note_mark(ui, row.response.rect);
     }
     if response.double_clicked() {
         *action = Some(ExplorerAction::RenameInTree(file.path.clone()));
@@ -571,6 +572,18 @@ pub(super) fn tree_row(ui: &mut Ui, selected: bool, label: impl Into<egui::Widge
     ui.add(egui::Button::selectable(selected, label.into()))
 }
 
+/// A file's row: the gap where folders have their arrow, then the name as
+/// a button. The gap is left outside the button, so the highlight of the
+/// open file starts at its name rather than at a blank. The inner response
+/// is the button's; the outer one spans the whole row, gap included.
+fn file_row(ui: &mut Ui, selected: bool, label: impl Into<egui::WidgetText>) -> egui::InnerResponse<egui::Response> {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add_space(icon_gap_width(ui));
+        tree_row(ui, selected, label)
+    })
+}
+
 /// Room at the start of each row for the folder arrow, so file names line
 /// up with folder names.
 pub(super) const ICON_GAP: &str = "     ";
@@ -592,14 +605,20 @@ const RENAME_FIELD_WIDTH: f32 = 220.0;
 
 /// Paint the speech bubble in the gap before a file name, where folders
 /// have their arrow.
-fn paint_note_mark(ui: &Ui, response: &egui::Response) {
+/// `row` is the whole row, gap included; the bubble sits outside the
+/// file's button, so it is always drawn over the panel.
+fn paint_note_mark(ui: &Ui, row: egui::Rect) {
     let visuals = ui.visuals();
-    let center = egui::pos2(
-        response.rect.left() + ui.spacing().button_padding.x + NOTE_MARK_SIZE / 2.0,
-        response.rect.center().y,
-    );
-    let behind = if response.hovered() { visuals.widgets.hovered.weak_bg_fill } else { visuals.panel_fill };
+    let center = egui::pos2(row.left() + ui.spacing().button_padding.x + NOTE_MARK_SIZE / 2.0, row.center().y);
+    let behind = visuals.panel_fill;
     paint_icon(ui.painter(), Icon::Bubble, center, visuals.weak_text_color(), visuals.hyperlink_color, behind);
+}
+
+/// Width of [`ICON_GAP`] in the row font: the room a file row leaves before
+/// its button, so file names line up with the names of folders.
+fn icon_gap_width(ui: &Ui) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    ui.fonts_mut(|fonts| fonts.layout_no_wrap(ICON_GAP.to_string(), font, egui::Color32::WHITE).size().x)
 }
 
 /// Paint the padlock at the end of an encrypted file's row, in the room
@@ -791,7 +810,24 @@ fn copy_items(ui: &mut Ui, path: &Path, context: &TreeContext, action: &mut Opti
 
 #[cfg(test)]
 mod tests {
-    use super::name_stem_chars;
+    use super::{file_row, icon_gap_width, name_stem_chars};
+    use eframe::egui::{self, Context, RawInput};
+
+    #[test]
+    fn open_file_highlight_starts_at_its_name() {
+        let ctx = Context::default();
+        let mut offsets = None;
+        let mut output = ctx.run_ui(RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let row = file_row(ui, true, "todo.md");
+                offsets = Some((row.inner.rect.left() - row.response.rect.left(), icon_gap_width(ui)));
+            });
+        });
+        output.textures_delta.clear();
+        let (button_offset, gap) = offsets.expect("the row was drawn");
+        assert!(gap > 0.0);
+        assert_eq!(button_offset, gap);
+    }
 
     #[test]
     fn selects_the_name_before_the_extension() {

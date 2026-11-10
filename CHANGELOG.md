@@ -15,6 +15,25 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   relative path starts at the explorer folder, and `notes.md:12` opens the
   file on line 12. A folder is shown in the explorer, added to it when it
   is not there yet. A path that does not exist is named under the field.
+- **Zoom with the mouse wheel.** Hold `Cmd` (`Ctrl` on Linux) and scroll,
+  or pinch on a trackpad, to make the text larger or smaller, in the same
+  steps as `Cmd/Ctrl` + `+` and `-`. The page does not scroll while you
+  zoom, and the size is kept for next time.
+
+### Changed
+
+- **Bigger settings window.** Settings grows with the app window, up to
+  70% of its width and 80% of its height (at most 1200 by 900), so a big
+  screen shows more of each group without scrolling. Small windows keep
+  the old size or less.
+
+### Fixed
+
+- **Review in merge keeps your block edit.** A block being edited in the
+  preview is saved before the merge screen opens, so it no longer writes
+  its old text over the merged result afterwards.
+- **Open file highlight in the explorer.** The highlight on the open
+  file's row now starts at its name, without the blank space before it.
 
 ## [0.9.2] - 2026-11-09
 
