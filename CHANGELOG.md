@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Bigger settings window.** Settings grows with the app window, up to
+  70% of its width and 80% of its height (at most 1200 by 900), so a big
+  screen shows more of each group without scrolling. Small windows keep
+  the old size or less.
+
 ## [0.9.2] - 2026-11-09
 
 ### Added
