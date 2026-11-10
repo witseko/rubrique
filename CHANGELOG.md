@@ -16,6 +16,36 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   unsaved. If the file changed on disk in between, the merge screen opens
   instead of one version replacing the other. Edits of encrypted files
   are kept encrypted.
+- **Open path.** `Cmd+O` (or a right click on the Add folder button) opens
+  a file by typing or pasting its path: `~` is your home folder, a
+  relative path starts at the explorer folder, and `notes.md:12` opens the
+  file on line 12. A folder is shown in the explorer, added to it when it
+  is not there yet. A path that does not exist is named under the field.
+- **Zoom with the mouse wheel.** Hold `Cmd` (`Ctrl` on Linux) and scroll,
+  or pinch on a trackpad, to make the text larger or smaller, in the same
+  steps as `Cmd/Ctrl` + `+` and `-`. The page does not scroll while you
+  zoom, and the size is kept for next time.
+
+### Changed
+
+- **Bigger settings window.** Settings grows with the app window, up to
+  70% of its width and 80% of its height (at most 1200 by 900), so a big
+  screen shows more of each group without scrolling. Small windows keep
+  the old size or less.
+- **Agent answers read like the preview.** In a Markdown file, the text an
+  agent writes for Ask shows in the output panel with headings, bold and
+  italic, lists, links and code blocks drawn, instead of raw `**` and `#`
+  marks, also while it is still arriving. Copy still copies the text as
+  the agent wrote it. Long answers stay smooth: they are read again only
+  when new text arrives.
+
+### Fixed
+
+- **Review in merge keeps your block edit.** A block being edited in the
+  preview is saved before the merge screen opens, so it no longer writes
+  its old text over the merged result afterwards.
+- **Open file highlight in the explorer.** The highlight on the open
+  file's row now starts at its name, without the blank space before it.
 
 ## [0.9.2] - 2026-11-09
 

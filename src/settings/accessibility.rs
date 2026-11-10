@@ -1,4 +1,5 @@
-//! Text size, editor font size, reduced motion and focus outlines.
+//! Text size (and the zoom gesture that steps it), editor font size,
+//! reduced motion and focus outlines.
 
 use std::ops::RangeInclusive;
 
@@ -55,6 +56,47 @@ impl TextSize {
 
     fn index(self) -> usize {
         Self::ALL.iter().position(|size| *size == self).unwrap_or_default()
+    }
+}
+
+/// How far a Cmd/Ctrl + wheel or pinch gesture has to zoom before the text
+/// size moves one step: about one wheel notch, and close to the ratio
+/// between neighboring sizes.
+const ZOOM_GESTURE_STEP: f32 = 1.15;
+
+/// Gathers the zoom of Cmd/Ctrl + mouse wheel and trackpad pinch, which
+/// arrives as a small factor every frame, into whole [`TextSize`] steps.
+#[derive(Debug)]
+pub struct ZoomGesture {
+    /// Product of the frames' zoom factors since the last step.
+    gathered: f32,
+}
+
+impl Default for ZoomGesture {
+    fn default() -> Self {
+        ZoomGesture { gathered: 1.0 }
+    }
+}
+
+impl ZoomGesture {
+    /// Add one frame's zoom `factor` (1.0 for none) and return the size to
+    /// show: one step larger or smaller than `size` once enough zoom has
+    /// gathered, otherwise `size` itself.
+    pub fn step(&mut self, size: TextSize, factor: f32) -> TextSize {
+        // A broken factor from the platform must not poison the running product.
+        if !factor.is_finite() || factor <= 0.0 {
+            return size;
+        }
+        self.gathered *= factor;
+        if self.gathered >= ZOOM_GESTURE_STEP {
+            self.gathered = 1.0;
+            size.larger()
+        } else if self.gathered <= 1.0 / ZOOM_GESTURE_STEP {
+            self.gathered = 1.0;
+            size.smaller()
+        } else {
+            size
+        }
     }
 }
 
@@ -179,5 +221,31 @@ mod tests {
         assert_eq!(TextSize::Small.smaller(), TextSize::Small);
         assert_eq!(TextSize::nearest(5.0), TextSize::Largest);
         assert_eq!(TextSize::nearest(0.1), TextSize::Small);
+    }
+
+    #[test]
+    fn zoom_gesture_steps_once_enough_has_gathered() {
+        let mut gesture = ZoomGesture::default();
+        // Small frames add up before the size moves.
+        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Default);
+        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Large);
+        // The gathered zoom starts over after a step.
+        assert_eq!(gesture.step(TextSize::Large, 1.1), TextSize::Large);
+        assert_eq!(gesture.step(TextSize::Large, 1.0 / 1.1), TextSize::Large);
+        assert_eq!(gesture.step(TextSize::Large, 0.8), TextSize::Default);
+        // One big frame moves a single step, not several.
+        assert_eq!(gesture.step(TextSize::Default, 10.0), TextSize::Large);
+    }
+
+    #[test]
+    fn zoom_gesture_stops_at_the_ends_and_ignores_bad_factors() {
+        let mut gesture = ZoomGesture::default();
+        assert_eq!(gesture.step(TextSize::Largest, 2.0), TextSize::Largest);
+        assert_eq!(gesture.step(TextSize::Small, 0.5), TextSize::Small);
+        for factor in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            assert_eq!(gesture.step(TextSize::Default, factor), TextSize::Default);
+        }
+        // Still gathering normally afterwards.
+        assert_eq!(gesture.step(TextSize::Default, 1.2), TextSize::Large);
     }
 }
