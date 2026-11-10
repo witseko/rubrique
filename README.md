@@ -88,11 +88,13 @@ Settings → Accessibility.
 | Shortcut | Action |
 | --- | --- |
 | Cmd+S | Save |
+| Cmd+O | Open a file or folder by its path |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (in the preview too) |
 | Cmd+W | Close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Cmd+, | Settings |
 | Cmd++ / Cmd+- / Cmd+0 | Larger / smaller / default text size |
+| Cmd+scroll / pinch | Larger or smaller text size |
 | Cmd+Shift+R | Record a voice memo, or stop |
 | Cmd+Shift+B | Open in browser |
 | Cmd+Shift+F | Format JSON, SQL or XML |

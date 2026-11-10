@@ -227,15 +227,28 @@ impl SettingsGroup {
     }
 }
 
-/// Size of the settings window.
-pub const WINDOW_SIZE: egui::Vec2 = vec2(780.0, 540.0);
+/// Share of the app window's width and height the settings window takes.
+const WINDOW_SHARE: egui::Vec2 = vec2(0.7, 0.8);
+/// Smallest size the settings window takes while the app window has room for it.
+const WINDOW_MIN_SIZE: egui::Vec2 = vec2(780.0, 540.0);
+/// Largest size of the settings window, so lines stay readable on big screens.
+const WINDOW_MAX_SIZE: egui::Vec2 = vec2(1200.0, 900.0);
 /// Space kept between the settings window and the app window's edges.
 const WINDOW_MARGIN: f32 = 40.0;
 
-/// [`WINDOW_SIZE`], made smaller when the app window is (or large text makes it so).
+/// Size of the settings window for the app window's content area.
 fn window_size(ctx: &egui::Context) -> egui::Vec2 {
-    let room = ctx.content_rect().size() - vec2(WINDOW_MARGIN, WINDOW_MARGIN);
-    WINDOW_SIZE.min(room).max(vec2(NAV_WIDTH * 2.0, HEADER_HEIGHT * 4.0))
+    window_size_for(ctx.content_rect().size())
+}
+
+/// Size of the settings window in an app window of `app_size` (in points):
+/// a share of it, kept between [`WINDOW_MIN_SIZE`] and [`WINDOW_MAX_SIZE`].
+/// A small app window (or large text) makes it smaller than the minimum so it
+/// still fits inside the margin, down to room for the group list and a header.
+fn window_size_for(app_size: egui::Vec2) -> egui::Vec2 {
+    let room = app_size - vec2(WINDOW_MARGIN, WINDOW_MARGIN);
+    let wanted = (app_size * WINDOW_SHARE).clamp(WINDOW_MIN_SIZE, WINDOW_MAX_SIZE);
+    wanted.min(room).max(vec2(NAV_WIDTH * 2.0, HEADER_HEIGHT * 4.0))
 }
 
 /// Width of the group list on the left.
@@ -1404,4 +1417,30 @@ pub fn home_relative(folder: &Path) -> String {
 
 fn color(Rgb(red, green, blue): Rgb) -> Color32 {
     Color32::from_rgb(red, green, blue)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_app_window_gets_the_minimum_width_and_a_share_of_the_height() {
+        assert_eq!(window_size_for(vec2(1100.0, 720.0)), vec2(780.0, 576.0));
+    }
+
+    #[test]
+    fn big_app_window_gets_a_share_up_to_the_maximum() {
+        assert_eq!(window_size_for(vec2(1600.0, 1000.0)), vec2(1120.0, 800.0));
+        assert_eq!(window_size_for(vec2(3840.0, 2160.0)), WINDOW_MAX_SIZE);
+    }
+
+    #[test]
+    fn small_app_window_keeps_the_margin() {
+        assert_eq!(window_size_for(vec2(700.0, 500.0)), vec2(660.0, 460.0));
+    }
+
+    #[test]
+    fn tiny_app_window_keeps_room_for_the_group_list() {
+        assert_eq!(window_size_for(vec2(200.0, 100.0)), vec2(NAV_WIDTH * 2.0, HEADER_HEIGHT * 4.0));
+    }
 }

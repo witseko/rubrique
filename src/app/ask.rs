@@ -346,6 +346,10 @@ impl RubriqueApp {
 
     /// Open the merge screen with the answer in place of the target text.
     fn review_answer(&mut self) {
+        // Save an open preview block edit first, as `start_merge` does. Left
+        // open, it would write its old text over the merge result later. If
+        // saving it changes the target text, the check below refuses.
+        self.finish_block_edit();
         let Some(job) = &self.ask.job else {
             return;
         };
@@ -536,6 +540,7 @@ fn short(request: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document::view::BlockEdit;
 
     #[test]
     fn answers_and_markdown_rewrites_are_drawn_as_markdown() {
@@ -543,5 +548,34 @@ mod tests {
         assert!(shows_as_markdown(AskKind::Rewrite, Path::new("/notes/todo.md")));
         assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/main.rs")));
         assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/list.txt")));
+    }
+
+    #[test]
+    fn review_saves_an_open_block_edit_first() {
+        let dir = std::env::temp_dir().join(format!("rubrique-review-block-edit-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("note.md");
+        std::fs::write(&path, "First\n").unwrap();
+        let ctx = Context::default();
+        let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![dir.clone()], None);
+        app.open_in_tab(path);
+        app.block_edit = Some(BlockEdit {
+            index: 0,
+            range: 0..5,
+            text: "Second".to_string(),
+            focused: false,
+            cell: None,
+            inserting: false,
+        });
+
+        app.review_answer();
+
+        // The edit is saved now, so it cannot write over a merge result later.
+        assert!(app.block_edit.is_none());
+        let OpenFile::Text { document, .. } = &app.open_file else {
+            panic!("the note should be open");
+        };
+        assert_eq!(document.text, "Second\n");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
