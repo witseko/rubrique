@@ -2,7 +2,11 @@
 //!
 //! A simplified version of CommonMark's rules: a delimiter run is closed by
 //! the next run of the same character and the same length. Unclosed
-//! delimiters are shown literally.
+//! delimiters are shown literally. Common inline HTML tags (`<b>`, `<kbd>`,
+//! `<br>`, `<img>`, `<span style>` and the like) are read through the HTML
+//! page reader; other tags stay as written.
+
+use crate::theme::palette::Rgb;
 
 /// One piece of inline content.
 #[derive(Clone, Debug, PartialEq)]
@@ -21,6 +25,8 @@ pub enum Inline {
     Image {
         alt: String,
         url: String,
+        /// The size an HTML `<img>` asks for; Markdown images have none.
+        size: ImageSize,
     },
     /// Hard line break (two trailing spaces or a trailing backslash).
     LineBreak,
@@ -30,24 +36,106 @@ pub enum Inline {
         quote: String,
         text: String,
     },
+    /// Text with a look only HTML gives (a color, a highlight, underline,
+    /// superscript), from an HTML page's `style` attributes and tags such
+    /// as `<mark>` and `<sup>`. Markdown never makes one.
+    Styled {
+        style: HtmlStyle,
+        content: Vec<Inline>,
+    },
 }
+
+/// The width and height in pixels an `<img>` asks for. With one of them
+/// the picture keeps its proportions; with both it is drawn at that size.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageSize {
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+}
+
+/// The look an HTML page sets on a run of text, beyond bold, italic and
+/// strikethrough (which become the Markdown styles). The preview keeps
+/// author colors readable on the theme's page, see `render.rs`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HtmlStyle {
+    /// Text color (`color`, `<font color>`).
+    pub color: Option<Rgb>,
+    /// Color behind the text (`background-color`, `<mark>`).
+    pub background: Option<Rgb>,
+    /// `text-decoration: underline`, `<u>` and `<ins>`.
+    pub underline: bool,
+    /// `<sup>` and `<sub>`.
+    pub script: Option<Script>,
+}
+
+impl HtmlStyle {
+    /// True when the style changes nothing.
+    pub fn is_plain(&self) -> bool {
+        *self == HtmlStyle::default()
+    }
+
+    /// This style inside `outer`: what this one sets wins, the rest comes
+    /// from `outer`, as in CSS.
+    pub fn inside(self, outer: HtmlStyle) -> HtmlStyle {
+        HtmlStyle {
+            color: self.color.or(outer.color),
+            background: self.background.or(outer.background),
+            underline: self.underline || outer.underline,
+            script: self.script.or(outer.script),
+        }
+    }
+}
+
+/// Text set smaller, above or below the line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Script {
+    Superscript,
+    Subscript,
+}
+
+/// Deepest nesting of inlines read as markup (links, emphasis, inline
+/// HTML); text nested deeper stays as written, so a hostile file cannot
+/// overflow the stack.
+const MAX_INLINE_DEPTH: usize = 32;
+
+/// Inline HTML tags read in Markdown text, with their end tag. Other tags
+/// stay as written: `<T>` or `<name>` in prose is more often text than
+/// markup, and showing it loses nothing.
+const INLINE_HTML_TAGS: &[&str] = &[
+    "a", "b", "cite", "code", "del", "em", "font", "i", "ins", "kbd", "mark", "s", "samp", "span", "strike", "strong",
+    "sub", "sup", "u", "var",
+];
+
+/// Inline HTML tags that have no end tag.
+const INLINE_VOID_TAGS: &[&str] = &["br", "img"];
+
+/// Longest start tag looked for, in characters, so a stray `<` does not
+/// copy the rest of a long paragraph.
+const MAX_INLINE_TAG_LENGTH: usize = 2048;
 
 /// Parse the text of a paragraph or heading. Lines are joined with `\n`.
 pub fn parse_inlines(text: &str) -> Vec<Inline> {
     let chars: Vec<char> = text.chars().collect();
-    parse_chars(&chars)
+    parse_chars(&chars, 0)
 }
 
-/// Parse a slice of characters; also used for the content of nested inlines.
-fn parse_chars(chars: &[char]) -> Vec<Inline> {
-    let mut output = Output::default();
+/// Parse a slice of characters, `depth` levels inside other inlines; also
+/// used for the content of nested inlines.
+fn parse_chars(chars: &[char], depth: usize) -> Vec<Inline> {
+    let mut output = Output { depth, ..Output::default() };
+    if depth > MAX_INLINE_DEPTH {
+        output.text.extend(chars);
+        return output.finish();
+    }
     let mut index = 0;
     while index < chars.len() {
         let next = match chars[index] {
             '\\' => parse_escape(chars, index, &mut output),
             '\n' => Some(parse_newline(index, &mut output)),
             '`' => Some(parse_code_span(chars, index, &mut output)),
-            '<' => parse_comment(chars, index, &mut output).or_else(|| parse_autolink(chars, index, &mut output)),
+            '<' => parse_comment(chars, index, &mut output)
+                .or_else(|| parse_autolink(chars, index, &mut output))
+                .or_else(|| parse_inline_html(chars, index, &mut output)),
             '[' => parse_link(chars, index, &mut output),
             '!' if chars.get(index + 1) == Some(&'[') => parse_image(chars, index, &mut output),
             '*' | '_' | '~' => Some(parse_delimiter_run(chars, index, &mut output)),
@@ -69,6 +157,8 @@ fn parse_chars(chars: &[char]) -> Vec<Inline> {
 struct Output {
     text: String,
     inlines: Vec<Inline>,
+    /// How many inlines this text is nested in.
+    depth: usize,
 }
 
 impl Output {
@@ -76,6 +166,12 @@ impl Output {
     fn push(&mut self, inline: Inline) {
         self.flush_text();
         self.inlines.push(inline);
+    }
+
+    /// Add several non-text inlines after any pending text.
+    fn extend(&mut self, inlines: Vec<Inline>) {
+        self.flush_text();
+        self.inlines.extend(inlines);
     }
 
     /// Turn the pending text into an `Inline::Text`.
@@ -173,10 +269,70 @@ fn parse_autolink(chars: &[char], index: usize, output: &mut Output) -> Option<u
     Some(close + 1)
 }
 
+/// An HTML tag in Markdown text: `<br>` and `<img ...>`, or one of
+/// `INLINE_HTML_TAGS` with its matching end tag and the Markdown between
+/// them. `None` (the `<` stays text) for other tags and unclosed ones.
+fn parse_inline_html(chars: &[char], index: usize, output: &mut Output) -> Option<usize> {
+    let window = &chars[index + 1..chars.len().min(index + 1 + MAX_INLINE_TAG_LENGTH)];
+    let text: String = window.iter().collect();
+    let tag = super::html_blocks::parse_start_tag(&text)?;
+    let content_start = index + 1 + text[..tag.length].chars().count();
+    if INLINE_VOID_TAGS.contains(&tag.name.as_str()) {
+        output.extend(super::html_blocks::inline_tag(tag.name, tag.attributes, Vec::new()));
+        return Some(content_start);
+    }
+    if !INLINE_HTML_TAGS.contains(&tag.name.as_str()) {
+        return None;
+    }
+    if tag.self_closing {
+        // `<span/>` holds nothing.
+        return Some(content_start);
+    }
+    let (close, next) = find_end_tag(chars, content_start, &tag.name)?;
+    let content = parse_chars(&chars[content_start..close], output.depth + 1);
+    output.extend(super::html_blocks::inline_tag(tag.name, tag.attributes, content));
+    Some(next)
+}
+
+/// Where the end tag `</name>` that matches a start tag ending at `from`
+/// begins and ends; tags of the same name in between nest.
+fn find_end_tag(chars: &[char], from: usize, name: &str) -> Option<(usize, usize)> {
+    let name: Vec<char> = name.chars().collect();
+    // `<name` followed by the end of the name, after `at`.
+    let tag_named = |at: usize| {
+        let name_end = at + name.len();
+        name_end <= chars.len()
+            && chars[at..name_end].iter().zip(&name).all(|(a, b)| a.eq_ignore_ascii_case(b))
+            && chars.get(name_end).is_some_and(|c| c.is_whitespace() || *c == '>' || *c == '/')
+    };
+    let mut open = 0usize;
+    let mut at = from;
+    while at < chars.len() {
+        if chars[at] == '<' {
+            if chars.get(at + 1) == Some(&'/') && tag_named(at + 2) {
+                let close = at + 2 + chars[at + 2..].iter().position(|&c| c == '>')?;
+                if open == 0 {
+                    return Some((at, close + 1));
+                }
+                open -= 1;
+            } else if tag_named(at + 1) {
+                open += 1;
+                // Deeper than the parser reads anyway: stop here, so a run
+                // of unclosed tags is not scanned to its end once per tag.
+                if open > MAX_INLINE_DEPTH {
+                    return None;
+                }
+            }
+        }
+        at += 1;
+    }
+    None
+}
+
 /// `[text](url "optional title")`
 fn parse_link(chars: &[char], index: usize, output: &mut Output) -> Option<usize> {
     let (text_close, url, next) = link_parts(chars, index)?;
-    let content = parse_chars(&chars[index + 1..text_close]);
+    let content = parse_chars(&chars[index + 1..text_close], output.depth + 1);
     output.push(Inline::Link { content, url });
     Some(next)
 }
@@ -184,8 +340,8 @@ fn parse_link(chars: &[char], index: usize, output: &mut Output) -> Option<usize
 /// `![alt](url "optional title")`; the alt text is kept as plain text.
 fn parse_image(chars: &[char], index: usize, output: &mut Output) -> Option<usize> {
     let (text_close, url, next) = link_parts(chars, index + 1)?;
-    let alt = plain_text(&parse_chars(&chars[index + 2..text_close]));
-    output.push(Inline::Image { alt, url });
+    let alt = plain_text(&parse_chars(&chars[index + 2..text_close], output.depth + 1));
+    output.push(Inline::Image { alt, url, size: ImageSize::default() });
     Some(next)
 }
 
@@ -213,7 +369,7 @@ pub fn plain_text(inlines: &[Inline]) -> String {
             Inline::Emphasis(children) | Inline::Strong(children) | Inline::Strikethrough(children) => {
                 text.push_str(&plain_text(children));
             }
-            Inline::Link { content, .. } => text.push_str(&plain_text(content)),
+            Inline::Link { content, .. } | Inline::Styled { content, .. } => text.push_str(&plain_text(content)),
             Inline::Image { alt, .. } => text.push_str(alt),
             Inline::LineBreak => text.push(' '),
             Inline::Note { .. } => {}
@@ -244,7 +400,7 @@ fn parse_delimiter_run(chars: &[char], index: usize, output: &mut Output) -> usi
         return literal(output);
     };
 
-    let content = parse_chars(&chars[content_start..close]);
+    let content = parse_chars(&chars[content_start..close], output.depth + 1);
     let inline = match (delimiter, run) {
         ('~', _) => Inline::Strikethrough(content),
         (_, 1) => Inline::Emphasis(content),
@@ -360,7 +516,8 @@ mod tests {
 
     #[test]
     fn images_keep_alt_text_and_url() {
-        let image = |alt: &str, url: &str| Image { alt: alt.to_string(), url: url.to_string() };
+        let image =
+            |alt: &str, url: &str| Image { alt: alt.to_string(), url: url.to_string(), size: ImageSize::default() };
         assert_eq!(parse_inlines("![a *cat*](img/cat.png)"), vec![image("a cat", "img/cat.png")]);
         assert_eq!(
             parse_inlines("see ![](clip.mp4 \"Demo\") here"),
@@ -467,5 +624,81 @@ mod tests {
         assert_eq!(parse_inlines("a\nb"), vec![text("a b")]);
         assert_eq!(parse_inlines("a  \nb"), vec![text("a"), LineBreak, text("b")]);
         assert_eq!(parse_inlines("a\\\nb"), vec![text("a"), LineBreak, text("b")]);
+    }
+
+    #[test]
+    fn inline_html_tags_take_markdown_inside() {
+        assert_eq!(
+            parse_inlines("<b>bold *and* it</b>, <I>i</I>, <s>s</s>, <del>d</del>"),
+            vec![
+                Strong(vec![text("bold "), Emphasis(vec![text("and")]), text(" it")]),
+                text(", "),
+                Emphasis(vec![text("i")]),
+                text(", "),
+                Strikethrough(vec![text("s")]),
+                text(", "),
+                Strikethrough(vec![text("d")]),
+            ]
+        );
+        assert_eq!(
+            parse_inlines("Press <kbd>Ctrl</kbd>+<code>C</code>"),
+            vec![text("Press "), Code("Ctrl".into()), text("+"), Code("C".into())]
+        );
+        // Nested tags of the same name match their own end tags.
+        assert_eq!(
+            parse_inlines("<b>a<b>b</b>c</b>"),
+            vec![Strong(vec![text("a"), Strong(vec![text("b")]), text("c")])]
+        );
+    }
+
+    #[test]
+    fn inline_html_styles_links_images_and_breaks() {
+        let look = |style: HtmlStyle, value: &str| Styled { style, content: vec![text(value)] };
+        let underline = HtmlStyle { underline: true, ..HtmlStyle::default() };
+        let sup = HtmlStyle { script: Some(Script::Superscript), ..HtmlStyle::default() };
+        let red = HtmlStyle { color: Some(Rgb(0xff, 0, 0)), ..HtmlStyle::default() };
+        assert_eq!(
+            parse_inlines("<u>u</u> x<sup>2</sup> <span style=\"color: red\">r</span><br/>next"),
+            vec![look(underline, "u"), text(" x"), look(sup, "2"), text(" "), look(red, "r"), LineBreak, text("next")]
+        );
+        let mark = parse_inlines("<mark>m</mark>");
+        assert!(matches!(&mark[..], [Styled { style, .. }] if style.background.is_some()));
+        assert_eq!(
+            parse_inlines("<a href=\"https://x.org\"><img src=\"logo.png\" alt=\"Logo\" height=\"20\"></a>"),
+            vec![Link {
+                content: vec![Image {
+                    alt: "Logo".into(),
+                    url: "logo.png".into(),
+                    size: ImageSize { width: None, height: Some(20) }
+                }],
+                url: "https://x.org".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn other_tags_and_unclosed_ones_stay_as_written() {
+        for source in
+            ["Vec<String> and <T>", "<details>x</details>", "<b>never closed", "a </b> b", "<script>x()</script>"]
+        {
+            assert_eq!(parse_inlines(source), vec![text(source)], "{source}");
+        }
+    }
+
+    #[test]
+    fn comments_are_hidden() {
+        assert_eq!(parse_inlines("a <!-- hidden --> b"), vec![text("a  b")]);
+    }
+
+    #[test]
+    fn deep_nesting_stays_text_past_the_limit() {
+        let source = format!("{}x{}", "<b>".repeat(10_000), "</b>".repeat(10_000));
+        let mut inlines = parse_inlines(&source);
+        let mut depth = 0;
+        while let [Strong(inner)] = inlines.as_slice() {
+            depth += 1;
+            inlines = inner.clone();
+        }
+        assert!(depth <= MAX_INLINE_DEPTH + 1, "{depth}");
     }
 }

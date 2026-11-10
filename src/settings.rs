@@ -274,6 +274,7 @@ mod tests {
                 reduce_motion: true,
                 strong_focus: true,
                 line_numbers: true,
+                wrap_lines: false,
             },
             scratch_folder: Some(PathBuf::from("/home/a/scratch")),
             ai: {

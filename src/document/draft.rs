@@ -4,6 +4,8 @@
 //! One file per document, named after a hash of its absolute path. It holds
 //! a short header, then the text the edits started from, then the edited text.
 //! Drafts of encrypted scratches are sealed whole with the same key.
+//! Edits kept when a tab closes unsaved wait in a second store of the same
+//! kind (the `closed` folder inside the drafts folder) until the file opens.
 
 use std::fs;
 use std::io;
@@ -182,20 +184,40 @@ impl DraftStore {
             .flatten()
             .map(|entry| entry.path())
             .filter(|file| file.extension().is_some_and(|extension| extension == EXTENSION))
-            // A file renamed by hand, or a hash collision: not this path's draft.
-            .filter_map(|file| {
-                let bytes = fs::read(&file).ok()?;
-                let draft = if crypto::is_encrypted(&bytes) {
-                    Draft { sealed: true, ..parse(&vault?.decrypt(&bytes).ok()?)? }
-                } else {
-                    parse(&bytes)?
-                };
-                (file.file_name()? == file_name(&draft.path).as_str()).then_some(draft)
-            })
+            .filter_map(|file| read_draft_file(&file, vault))
             .collect();
         drafts.sort_by(|a, b| a.path.cmp(&b.path));
         drafts
     }
+
+    /// The draft kept for `path`, if there is a readable one (an encrypted
+    /// one needs `vault`).
+    pub fn read(&self, path: &Path, vault: Option<&Vault>) -> Option<Draft> {
+        read_draft_file(&self.file_for(path), vault)
+    }
+
+    /// Move the draft of `path` into `other`, replacing one kept there.
+    ///
+    /// # Errors
+    ///
+    /// Fails when there is no draft for `path` or it cannot be moved.
+    pub fn move_to(&self, path: &Path, other: &DraftStore) -> io::Result<()> {
+        fs::create_dir_all(&other.folder)?;
+        fs::rename(self.file_for(path), other.file_for(path))
+    }
+}
+
+/// Read one draft file, decrypting it with `vault` when it is sealed.
+/// `None` when it cannot be read or is not a draft, and for a file renamed
+/// by hand or a hash collision: its name does not match the path inside.
+fn read_draft_file(file: &Path, vault: Option<&Vault>) -> Option<Draft> {
+    let bytes = fs::read(file).ok()?;
+    let draft = if crypto::is_encrypted(&bytes) {
+        Draft { sealed: true, ..parse(&vault?.decrypt(&bytes).ok()?)? }
+    } else {
+        parse(&bytes)?
+    };
+    (file.file_name()? == file_name(&draft.path).as_str()).then_some(draft)
 }
 
 #[cfg(test)]
@@ -262,6 +284,27 @@ mod tests {
         assert_eq!(store.all(None), vec![second]);
         // Only the draft itself: no temp files left behind.
         assert_eq!(fs::read_dir(temp.path().join("drafts")).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn read_finds_one_draft_and_move_to_hands_it_over() {
+        let temp = TempFolder::new();
+        let store = DraftStore::new(temp.path().join("drafts"));
+        let closed = DraftStore::new(temp.path().join("drafts/closed"));
+        let edits = draft("/notes/a.md", "old", "mine");
+        assert_eq!(closed.read(&edits.path, None), None, "nothing kept yet");
+        assert!(closed.move_to(&edits.path, &store).is_err(), "nothing to move");
+
+        closed.write(&edits, None).unwrap();
+        assert_eq!(closed.read(&edits.path, None), Some(edits.clone()));
+        assert_eq!(closed.read(Path::new("/notes/b.md"), None), None);
+        // The closed folder sits inside the drafts folder, yet its drafts
+        // are not among the ones reopened at start.
+        assert_eq!(store.all(None), Vec::<Draft>::new());
+
+        closed.move_to(&edits.path, &store).unwrap();
+        assert_eq!(closed.read(&edits.path, None), None);
+        assert_eq!(store.all(None), vec![edits]);
     }
 
     #[test]

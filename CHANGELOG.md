@@ -18,6 +18,66 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   shows why under it and is skipped. Describe what to highlight ("ticket
   ids like PROJ-123") and the Ask tool writes the pattern as a new rule to
   check before you add it.
+- **Styles in the HTML preview.** An `.html` file's preview shows the
+  text colors, highlights, bold, italic, underline and strikethrough set
+  in `style` attributes, `<mark>`, `<u>`, `<sup>`, `<sub>` and
+  `<font color>`; centered and right-aligned titles, logos and badges
+  (`align`, `text-align`, `<center>`); collapsible `<details>` sections;
+  image width and height; and table cells that span columns. Colors that
+  would be hard to read on your theme are toned toward its text color.
+- **HTML in Markdown.** The preview of a Markdown file shows the HTML in
+  it, the way GitHub does for a README: a centered logo and title, a row
+  of badges, `<details>`, HTML tables, and tags such as `<b>`, `<kbd>`,
+  `<sup>`, `<mark>`, `<br>` and `<img width>` inside a paragraph. Click an
+  HTML block to edit its source like any other block. Scripts and style
+  sheets are never run or loaded, and other tags stay as you wrote them.
+- **Close a tab without saving, keep the edits.** When a tab with unsaved
+  changes closes, "Keep for later" closes it without saving or dropping
+  anything: the edits come back the next time you open the file, marked
+  unsaved. If the file changed on disk in between, the merge screen opens
+  instead of one version replacing the other. Edits of encrypted files
+  are kept encrypted.
+- **Wrap lines setting.** Settings > Accessibility has a Wrap lines box
+  next to Line numbers. Turn it off and long lines in the editor stay on
+  one line, with the editor scrolling sideways to show the rest. It is on
+  by default, as before.
+- **Open path.** `Cmd+O` (or a right click on the Add folder button) opens
+  a file by typing or pasting its path: `~` is your home folder, a
+  relative path starts at the explorer folder, and `notes.md:12` opens the
+  file on line 12. A folder is shown in the explorer, added to it when it
+  is not there yet. A path that does not exist is named under the field.
+- **Zoom with the mouse wheel.** Hold `Cmd` (`Ctrl` on Linux) and scroll,
+  or pinch on a trackpad, to make the text larger or smaller, in the same
+  steps as `Cmd/Ctrl` + `+` and `-`. The page does not scroll while you
+  zoom, and the size is kept for next time.
+
+### Changed
+
+- **Roomier find bar.** The find bar's text, field and buttons grow with
+  the editor font size, and the field stands out on every theme. The
+  count reads "3 of 17", Previous and Next are larger arrow buttons, and
+  the Aa and W toggles show plainly whether they are on. All-files
+  results are grouped under each file's name and folder, one line per
+  match with its line number and the match highlighted; a click on a
+  file name opens the file, a click on a line goes to the match.
+- **Bigger settings window.** Settings grows with the app window, up to
+  70% of its width and 80% of its height (at most 1200 by 900), so a big
+  screen shows more of each group without scrolling. Small windows keep
+  the old size or less.
+- **Agent answers read like the preview.** In a Markdown file, the text an
+  agent writes for Ask shows in the output panel with headings, bold and
+  italic, lists, links and code blocks drawn, instead of raw `**` and `#`
+  marks, also while it is still arriving. Copy still copies the text as
+  the agent wrote it. Long answers stay smooth: they are read again only
+  when new text arrives.
+
+### Fixed
+
+- **Review in merge keeps your block edit.** A block being edited in the
+  preview is saved before the merge screen opens, so it no longer writes
+  its old text over the merged result afterwards.
+- **Open file highlight in the explorer.** The highlight on the open
+  file's row now starts at its name, without the blank space before it.
 
 ## [0.9.2] - 2026-11-09
 
