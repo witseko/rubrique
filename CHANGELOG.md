@@ -26,6 +26,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   70% of its width and 80% of its height (at most 1200 by 900), so a big
   screen shows more of each group without scrolling. Small windows keep
   the old size or less.
+- **Agent answers read like the preview.** In a Markdown file, the text an
+  agent writes for Ask shows in the output panel with headings, bold and
+  italic, lists, links and code blocks drawn, instead of raw `**` and `#`
+  marks, also while it is still arriving. Copy still copies the text as
+  the agent wrote it. Long answers stay smooth: they are read again only
+  when new text arrives.
 
 ### Fixed
 

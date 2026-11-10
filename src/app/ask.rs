@@ -20,6 +20,7 @@ use crate::ai::{self, AiSettings, AiTool, AskKind};
 use crate::document::merge::MergeSession;
 use crate::document::preview_selection;
 use crate::document::view::editor_selection;
+use crate::explorer::tree::is_markdown_path;
 use crate::markdown::notes::{find_notes, locate};
 
 /// Space between the top of the page and the Ask bar.
@@ -303,7 +304,7 @@ impl RubriqueApp {
             return;
         };
         let mut views = Vec::new();
-        let formatted = job.pending.kind == AskKind::Answer;
+        let formatted = shows_as_markdown(job.pending.kind, &job.pending.target.path);
         for tool_run in &mut job.runs {
             let seconds = tool_run.run.elapsed_seconds();
             let state = match tool_run.run.poll() {
@@ -510,6 +511,18 @@ fn run_skills<'a>(all: &'a [Skill], agent: Option<&Agent>, picked: Option<&'a Sk
     (skills, missing)
 }
 
+/// True when a run's output is drawn as Markdown in the output panel: an
+/// answer to read always is, and new text for a Markdown file is too, so
+/// `**bold**`, headings, lists and code fences read as they will in the
+/// preview. New text for any other file (code, plain text) is shown as it
+/// is, since Markdown would change its look (a `# comment` as a heading).
+fn shows_as_markdown(kind: AskKind, path: &Path) -> bool {
+    match kind {
+        AskKind::Answer => true,
+        AskKind::Rewrite => is_markdown_path(path),
+    }
+}
+
 /// Tools run in the file's folder, so they can read nearby notes.
 fn run_folder(path: &Path) -> PathBuf {
     path.parent().map_or_else(|| PathBuf::from("/"), Path::to_path_buf)
@@ -528,6 +541,14 @@ fn short(request: &str) -> String {
 mod tests {
     use super::*;
     use crate::document::view::BlockEdit;
+
+    #[test]
+    fn answers_and_markdown_rewrites_are_drawn_as_markdown() {
+        assert!(shows_as_markdown(AskKind::Answer, Path::new("/notes/main.rs")));
+        assert!(shows_as_markdown(AskKind::Rewrite, Path::new("/notes/todo.md")));
+        assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/main.rs")));
+        assert!(!shows_as_markdown(AskKind::Rewrite, Path::new("/notes/list.txt")));
+    }
 
     #[test]
     fn review_saves_an_open_block_edit_first() {
