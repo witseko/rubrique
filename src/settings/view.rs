@@ -23,8 +23,11 @@ use crate::theme::code_colors::CodeColors;
 use crate::theme::palette::{Base, Palette, Rgb, Theme};
 use crate::voice::VoiceSettings;
 
+mod highlight_rules;
 mod skill_list;
 
+use highlight_rules::highlights_section;
+pub use highlight_rules::{HighlightInfo, RuleWriter};
 use skill_list::{SkillsInfo, skills_section};
 
 /// Something the user asked for in the settings panel.
@@ -33,6 +36,10 @@ pub enum SettingsAction {
     PickTheme(ThemeChoice),
     PickCodeColors(CodeColors),
     ReloadThemes,
+    /// Ask the AI for a text highlight rule from the description.
+    WriteHighlightRule,
+    /// Stop the AI writing a text highlight rule.
+    StopHighlightRule,
     /// Text size, editor font, motion or focus outline changed.
     AccessibilityChanged,
     /// Pick another folder for scratch files.
@@ -189,6 +196,7 @@ enum BarKind {
 pub enum SettingsGroup {
     #[default]
     Appearance,
+    Highlights,
     Accessibility,
     Files,
     Privacy,
@@ -200,8 +208,9 @@ pub enum SettingsGroup {
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 9] = [
+    pub const ALL: [SettingsGroup; 10] = [
         Self::Appearance,
+        Self::Highlights,
         Self::Accessibility,
         Self::Files,
         Self::Privacy,
@@ -215,6 +224,7 @@ impl SettingsGroup {
     pub fn name(self) -> &'static str {
         match self {
             Self::Appearance => "Appearance",
+            Self::Highlights => "Highlights",
             Self::Accessibility => "Accessibility",
             Self::Files => "Files",
             Self::Privacy => "Privacy",
@@ -268,6 +278,7 @@ pub fn show_settings(
     current: &ThemeChoice,
     code_colors: CodeColors,
     themes_folder: Option<&Path>,
+    highlight: HighlightInfo,
     accessibility: &mut AccessibilitySettings,
     scratch: ScratchInfo,
     note_marks: &mut bool,
@@ -315,6 +326,7 @@ pub fn show_settings(
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let picked = match *group {
                     SettingsGroup::Appearance => appearance_section(ui, themes, current, code_colors, themes_folder),
+                    SettingsGroup::Highlights => highlights_section(ui, highlight),
                     SettingsGroup::Accessibility => accessibility_section(ui, accessibility),
                     SettingsGroup::Files => files_section(ui, scratch, note_marks),
                     SettingsGroup::Privacy => privacy_section(ui, privacy),

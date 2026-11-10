@@ -71,7 +71,8 @@ Agents run only when you ask, read-only by default.
 
 Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Code in Python,
 JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, JSON, XML and YAML is colored with the
-theme's colors or VS Code's (Settings → Appearance → Code colors). Text size, line numbers and other options are in
+theme's colors or VS Code's (Settings → Appearance → Code colors). Plain text files color IP addresses, UUIDs,
+hashes, numbers and whatever else your own regular expressions match (Settings → Highlights). Text size, line numbers and other options are in
 Settings → Accessibility.
 
 ## Shortcuts

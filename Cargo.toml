@@ -45,6 +45,10 @@ getrandom = "0.4"
 # "Delete" in the explorer moves local files to the system Trash (macOS
 # Finder Trash, the freedesktop.org trash on Linux), so a delete can be undone.
 trash = "5.3"
+# The user's text highlight rules (Settings → Appearance) are regular
+# expressions. This crate matches in linear time, so no pattern can hang the
+# editor on a long line.
+regex = "1.13.1"
 
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than
 # `forbid` because date.rs needs one FFI call (`localtime_r`); that single

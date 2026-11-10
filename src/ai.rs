@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 pub mod agents;
 pub mod flags;
+pub mod highlight_rule;
 pub mod mention_list;
 pub mod naming;
 pub mod preview;

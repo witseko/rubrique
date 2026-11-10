@@ -1,6 +1,7 @@
 //! Color Markdown, YAML, Helm template and code syntax (Python, JavaScript,
 //! TypeScript, Rust, JSON, XML, HTML, SQL) in the editor and in preview code blocks with the current
-//! theme, and lay plain text out with the same line height.
+//! theme, and lay plain text out with the same line height, colored by the
+//! user's text highlight rules.
 
 use eframe::egui::cache::{ComputerMut, FrameCache};
 use eframe::egui::emath::OrderedFloat;
@@ -8,8 +9,10 @@ use eframe::egui::text::LayoutJob;
 use eframe::egui::{Color32, Context, FontId, Stroke, TextFormat, TextStyle, Ui};
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::format::Language;
+use crate::highlight::text_rules::{CompiledRules, HighlightRule, RuleColor};
 use crate::highlight::{code, xml};
 use crate::markdown::highlight::{Kind, Span};
 use crate::theme::code_colors::{CodeColors, SyntaxColors, installed_code_colors};
@@ -113,6 +116,8 @@ pub struct HighlightStyle {
     code_background: Color32,
     /// Keywords, strings, comments and the other kinds the Code colors setting changes.
     syntax: SyntaxColors,
+    /// The text highlight rules, for plain text.
+    text_rules: Arc<CompiledRules>,
 }
 
 impl HighlightStyle {
@@ -135,6 +140,7 @@ impl HighlightStyle {
             accent: visuals.hyperlink_color,
             code_background: visuals.code_bg_color,
             syntax: SyntaxColors::new(code_colors, visuals),
+            text_rules: installed_text_rules(ui.ctx()),
         }
     }
 
@@ -176,6 +182,44 @@ impl HighlightStyle {
     }
 }
 
+impl HighlightStyle {
+    /// The color of text matched by a highlight rule.
+    pub fn rule_color(&self, color: RuleColor) -> Color32 {
+        let syntax = &self.syntax;
+        match color {
+            RuleColor::Keyword => syntax.keyword,
+            RuleColor::String => syntax.string,
+            RuleColor::Number => syntax.number,
+            RuleColor::Name => syntax.name,
+            RuleColor::Key => syntax.key,
+            RuleColor::Comment => syntax.comment,
+            RuleColor::Custom(rgb) => Color32::from_rgb(rgb.0, rgb.1, rgb.2),
+        }
+    }
+}
+
+/// Where the compiled text highlight rules are kept in egui's memory.
+fn text_rules_id() -> eframe::egui::Id {
+    eframe::egui::Id::unique("rubrique-text-rules")
+}
+
+/// Make `rules` color plain text from the next frame on. They are compiled
+/// only when they differ from the installed ones, so this is cheap to call
+/// every frame the rules may have changed.
+pub fn install_text_rules(ctx: &Context, rules: &[HighlightRule]) {
+    if installed_text_rules(ctx).source() == rules {
+        return;
+    }
+    let compiled = Arc::new(CompiledRules::new(rules));
+    ctx.data_mut(|data| data.insert_temp(text_rules_id(), compiled));
+    ctx.request_repaint();
+}
+
+/// The rules installed with [`install_text_rules`] (none before that).
+fn installed_text_rules(ctx: &Context) -> Arc<CompiledRules> {
+    ctx.data(|data| data.get_temp(text_rules_id())).unwrap_or_default()
+}
+
 /// The height of one line of `font` in the source editor and the block
 /// editor: taller than the font's own rows, so lines of text breathe.
 pub fn editor_line_height(font: &FontId) -> f32 {
@@ -209,9 +253,26 @@ fn layout_job(text: &str, style: &HighlightStyle, syntax: Option<Syntax>) -> Lay
                 job.append(&text[span.range], 0.0, style.format(span.kind));
             }
         }
-        None => job.append(text, 0.0, style.format(Kind::Plain)),
+        None => append_plain_text(&mut job, text, style),
     }
     job
+}
+
+/// Plain text with the pieces the text highlight rules match in their colors.
+fn append_plain_text(job: &mut LayoutJob, text: &str, style: &HighlightStyle) {
+    let plain = style.format(Kind::Plain);
+    let mut done = 0;
+    for (range, color) in style.text_rules.spans(text) {
+        if done < range.start {
+            job.append(&text[done..range.start], 0.0, plain.clone());
+        }
+        job.append(&text[range.clone()], 0.0, TextFormat { color: style.rule_color(color), ..plain.clone() });
+        done = range.end;
+    }
+    // Always at least one section, so an empty text keeps its line height.
+    if done < text.len() || job.sections.is_empty() {
+        job.append(&text[done..], 0.0, plain);
+    }
 }
 
 #[cfg(test)]
@@ -283,6 +344,31 @@ mod tests {
         assert_eq!(first_python_color(None, "def f(): pass"), accent);
         assert_eq!(first_python_color(Some(CodeColors::Theme), "def f(): pass"), accent);
         assert_eq!(first_python_color(Some(CodeColors::VsCode), "def f(): pass"), Color32::from_rgb(0x56, 0x9c, 0xd6));
+    }
+
+    #[test]
+    fn plain_text_is_colored_by_the_installed_rules() {
+        let ctx = Context::default();
+        ctx.set_visuals(eframe::egui::Visuals::dark());
+        let rules = [HighlightRule::new("IP", r"[0-9]+(?:\.[0-9]+){3}", RuleColor::Number)];
+        install_text_rules(&ctx, &rules);
+        let mut output = ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let style = HighlightStyle::from_ui(ui);
+            let job = layout_job("ping 10.0.0.1 now", &style, None);
+            let pieces: Vec<&str> = job
+                .sections
+                .iter()
+                .map(|section| &job.text[section.byte_range.start.0..section.byte_range.end.0])
+                .collect();
+            assert_eq!(pieces, ["ping ", "10.0.0.1", " now"]);
+            assert_eq!(job.sections[1].format.color, ui.visuals().error_fg_color);
+            assert_eq!(job.sections[0].format.color, ui.visuals().text_color());
+            // Code keeps its own colors: the rules are for plain text only.
+            let code = layout_job("x = 10.0.0.1", &style, Some(Syntax::Python));
+            assert!(code.sections.iter().all(|section| section.format.color != Color32::PLACEHOLDER));
+            assert_eq!(layout_job("", &style, None).sections.len(), 1);
+        });
+        output.textures_delta.clear();
     }
 
     #[test]
