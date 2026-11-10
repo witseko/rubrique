@@ -20,6 +20,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Review in merge keeps your block edit.** A block being edited in the
   preview is saved before the merge screen opens, so it no longer writes
   its old text over the merged result afterwards.
+- **Open file highlight in the explorer.** The highlight on the open
+  file's row now starts at its name, without the blank space before it.
 
 ## [0.9.2] - 2026-11-09
 
