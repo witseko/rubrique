@@ -1,4 +1,5 @@
-//! Text size, editor font size, reduced motion and focus outlines.
+//! Text size (and the zoom gesture that steps it), editor font size,
+//! line wrapping, reduced motion and focus outlines.
 
 use std::ops::RangeInclusive;
 
@@ -58,6 +59,47 @@ impl TextSize {
     }
 }
 
+/// How far a Cmd/Ctrl + wheel or pinch gesture has to zoom before the text
+/// size moves one step: about one wheel notch, and close to the ratio
+/// between neighboring sizes.
+const ZOOM_GESTURE_STEP: f32 = 1.15;
+
+/// Gathers the zoom of Cmd/Ctrl + mouse wheel and trackpad pinch, which
+/// arrives as a small factor every frame, into whole [`TextSize`] steps.
+#[derive(Debug)]
+pub struct ZoomGesture {
+    /// Product of the frames' zoom factors since the last step.
+    gathered: f32,
+}
+
+impl Default for ZoomGesture {
+    fn default() -> Self {
+        ZoomGesture { gathered: 1.0 }
+    }
+}
+
+impl ZoomGesture {
+    /// Add one frame's zoom `factor` (1.0 for none) and return the size to
+    /// show: one step larger or smaller than `size` once enough zoom has
+    /// gathered, otherwise `size` itself.
+    pub fn step(&mut self, size: TextSize, factor: f32) -> TextSize {
+        // A broken factor from the platform must not poison the running product.
+        if !factor.is_finite() || factor <= 0.0 {
+            return size;
+        }
+        self.gathered *= factor;
+        if self.gathered >= ZOOM_GESTURE_STEP {
+            self.gathered = 1.0;
+            size.larger()
+        } else if self.gathered <= 1.0 / ZOOM_GESTURE_STEP {
+            self.gathered = 1.0;
+            size.smaller()
+        } else {
+            size
+        }
+    }
+}
+
 /// Editor font size when nothing is set.
 pub const DEFAULT_EDITOR_FONT_SIZE: u8 = 14;
 /// Smallest and largest editor font size.
@@ -65,6 +107,7 @@ pub const EDITOR_FONT_SIZES: RangeInclusive<u8> = 9..=28;
 
 /// Settings that make Rubrique easier to read and use.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools, reason = "each flag is an independent on/off setting")]
 pub struct AccessibilitySettings {
     /// Zoom of the whole window.
     pub text_size: TextSize,
@@ -76,6 +119,9 @@ pub struct AccessibilitySettings {
     pub strong_focus: bool,
     /// Line numbers to the left of the source editor.
     pub line_numbers: bool,
+    /// Long lines in the source editor wrap at the window edge; when off
+    /// they run on and the editor scrolls sideways.
+    pub wrap_lines: bool,
 }
 
 impl Default for AccessibilitySettings {
@@ -86,6 +132,7 @@ impl Default for AccessibilitySettings {
             reduce_motion: false,
             strong_focus: false,
             line_numbers: false,
+            wrap_lines: true,
         }
     }
 }
@@ -103,6 +150,8 @@ impl AccessibilitySettings {
             "reduce_motion" => self.reduce_motion = value == "true",
             "strong_focus" => self.strong_focus = value == "true",
             "line_numbers" => self.line_numbers = value == "true",
+            // Anything but "false" keeps the default, wrapping.
+            "wrap_lines" => self.wrap_lines = value != "false",
             _ => return false,
         }
         true
@@ -111,12 +160,13 @@ impl AccessibilitySettings {
     /// Settings lines for [`AccessibilitySettings::parse_line`].
     pub fn to_lines(&self) -> String {
         format!(
-            "text_scale={}\neditor_font_size={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\n",
+            "text_scale={}\neditor_font_size={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
             self.text_size.scale(),
             self.editor_font_size,
             self.reduce_motion,
             self.strong_focus,
-            self.line_numbers
+            self.line_numbers,
+            self.wrap_lines
         )
     }
 }
@@ -152,12 +202,22 @@ mod tests {
                 reduce_motion: true,
                 strong_focus: true,
                 line_numbers: true,
+                wrap_lines: false,
             };
             assert_eq!(parse(&settings.to_lines()), settings);
         }
         assert_eq!(parse(&AccessibilitySettings::default().to_lines()), AccessibilitySettings::default());
         assert!(parse("text_scale=1.15\n").to_lines().contains("text_scale=1.15\n"));
         assert!(!AccessibilitySettings::default().parse_line("theme", "dark"));
+    }
+
+    #[test]
+    fn lines_wrap_unless_turned_off() {
+        assert!(AccessibilitySettings::default().wrap_lines);
+        // Settings saved before the option existed keep wrapping.
+        assert!(parse("line_numbers=true\n").wrap_lines);
+        assert!(!parse("wrap_lines=false\n").wrap_lines);
+        assert!(parse("wrap_lines=true\n").wrap_lines);
     }
 
     #[test]
@@ -179,5 +239,31 @@ mod tests {
         assert_eq!(TextSize::Small.smaller(), TextSize::Small);
         assert_eq!(TextSize::nearest(5.0), TextSize::Largest);
         assert_eq!(TextSize::nearest(0.1), TextSize::Small);
+    }
+
+    #[test]
+    fn zoom_gesture_steps_once_enough_has_gathered() {
+        let mut gesture = ZoomGesture::default();
+        // Small frames add up before the size moves.
+        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Default);
+        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Large);
+        // The gathered zoom starts over after a step.
+        assert_eq!(gesture.step(TextSize::Large, 1.1), TextSize::Large);
+        assert_eq!(gesture.step(TextSize::Large, 1.0 / 1.1), TextSize::Large);
+        assert_eq!(gesture.step(TextSize::Large, 0.8), TextSize::Default);
+        // One big frame moves a single step, not several.
+        assert_eq!(gesture.step(TextSize::Default, 10.0), TextSize::Large);
+    }
+
+    #[test]
+    fn zoom_gesture_stops_at_the_ends_and_ignores_bad_factors() {
+        let mut gesture = ZoomGesture::default();
+        assert_eq!(gesture.step(TextSize::Largest, 2.0), TextSize::Largest);
+        assert_eq!(gesture.step(TextSize::Small, 0.5), TextSize::Small);
+        for factor in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
+            assert_eq!(gesture.step(TextSize::Default, factor), TextSize::Default);
+        }
+        // Still gathering normally afterwards.
+        assert_eq!(gesture.step(TextSize::Default, 1.2), TextSize::Large);
     }
 }

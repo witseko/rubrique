@@ -107,10 +107,14 @@ impl RubriqueApp {
     }
 
     /// Show `path`: switch to its tab when it is open, otherwise open it in
-    /// a new tab right after the active one.
+    /// a new tab right after the active one, with the unsaved edits kept
+    /// when its tab was last closed, if any.
     pub(super) fn open_in_tab(&mut self, path: PathBuf) {
         if let Some(index) = self.find_tab(&path) {
             self.switch_to_tab(index);
+            return;
+        }
+        if self.reopen_kept_edits(&path) {
             return;
         }
         if let Some(file) = self.load_file(path) {

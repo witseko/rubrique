@@ -3,40 +3,61 @@
 //! the explorer's folders, and replaces matches in the open file.
 
 use std::ops::Range;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use eframe::egui::text::{CCursor, CCursorRange};
+use eframe::egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::text_edit::TextEditState;
-use eframe::egui::{self, Context, Id, Key, Modifiers, RichText, Ui, pos2};
+use eframe::egui::{
+    self, Align, Color32, Context, FontId, Id, Key, Modifiers, RichText, Sense, Stroke, TextStyle, Ui, Vec2,
+    WidgetInfo, pos2, vec2,
+};
 
 use super::{OpenFile, RubriqueApp, char_to_byte};
-use crate::document::view::{FindHighlight, apply_with_undo, editor_selection, focus_editor, select_editor_range};
+use crate::document::view::{
+    FindHighlight, apply_with_undo, editor_selection, focus_editor, match_fill, select_editor_range,
+};
 use crate::explorer::paths::name_text;
 use crate::find::{
     FileHit, HitKind, Query, SearchOptions, SearchResults, char_index, find_all, replace_all, search_files,
     search_remote_files,
 };
 use crate::remote::task::{Task, spawn_with_repaint};
+use crate::theme::style::page_fill;
 
-const FIND_WIDTH: f32 = 440.0;
 const FIND_RADIUS: u8 = 8;
 /// Space between the bar and the page's top and right edges.
 const FIND_MARGIN: f32 = 12.0;
-/// Width of the match count ("12 of 40").
-const COUNT_WIDTH: f32 = 72.0;
-/// Width of the Aa and W toggles.
-const TOGGLE_WIDTH: f32 = 30.0;
-/// Width of the Previous and Next buttons, and of Replace.
-const STEP_WIDTH: f32 = 64.0;
-/// Width of the Replace all button.
-const REPLACE_ALL_WIDTH: f32 = 86.0;
-/// Width of the close cross.
-const CLOSE_WIDTH: f32 = 24.0;
-/// Tallest the all-files results list gets before it scrolls.
-const RESULTS_HEIGHT: f32 = 320.0;
+/// Width of the bar as a multiple of its text size: room for a comfortable
+/// field next to the count and the buttons.
+const WIDTH_PER_TEXT_SIZE: f32 = 40.0;
+/// Narrowest the bar gets when the page has room for it.
+const MIN_WIDTH: f32 = 340.0;
+/// Height of fields, buttons and result rows as a multiple of the text size.
+const ROW_PER_TEXT_SIZE: f32 = 2.0;
+/// Size of secondary text (the results summary, folder names and line
+/// numbers) as a share of the bar's text size.
+const SMALL_TEXT_SHARE: f32 = 0.86;
+/// Space inside the bar's edge, as a share of the text size.
+const PADDING_SHARE: f32 = 0.8;
+/// Space between controls, as a share of the text size.
+const GAP_SHARE: f32 = 0.45;
+/// Space inside fields, buttons and result rows (left and right), as a
+/// share of the text size.
+const INNER_PADDING_SHARE: f32 = 0.6;
+/// Tallest the results list gets before it scrolls, as a share of the page height.
+const RESULTS_HEIGHT_SHARE: f32 = 0.6;
+/// The match count is sized for this text, so the buttons after it do not
+/// move as the numbers change.
+const COUNT_SAMPLE: &str = "888 of 888";
+/// The line numbers in the results are sized for this many digits.
+const LINE_NUMBER_SAMPLE: &str = "88888";
+/// Outline of a field with focus and of a switched on option.
+const ACCENT_STROKE: f32 = 1.5;
+/// Opacity of the weak text color used as the outline of fields and of
+/// switched off options: plainly visible in every theme, softer than text.
+const OUTLINE_OPACITY: f32 = 0.6;
 /// Hits an all-files search stops at.
 const RESULT_LIMIT: usize = 300;
-const SMALL_TEXT: f32 = 11.5;
 
 /// The open find bar.
 #[derive(Debug, Default)]
@@ -253,24 +274,32 @@ impl RubriqueApp {
         if self.find.is_none() {
             return;
         }
-        let at = pos2(page.right() - FIND_WIDTH - FIND_MARGIN, page.top() + FIND_MARGIN);
+        let style = ctx.global_style();
+        let metrics =
+            bar_metrics(TextStyle::Monospace.resolve(&style).size, TextStyle::Body.resolve(&style).size, page.size());
+        let at = pos2(page.right() - metrics.width - FIND_MARGIN, page.top() + FIND_MARGIN);
         let mut event = None;
         egui::Area::new(Id::unique("find-bar")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
-            let fill = ui.visuals().extreme_bg_color;
-            egui::Frame::popup(ui.style()).fill(fill).corner_radius(FIND_RADIUS).inner_margin(10).show(ui, |ui| {
-                ui.set_width(FIND_WIDTH);
-                ui.spacing_mut().item_spacing.y = 6.0;
+            scale_style(ui, &metrics);
+            let padding = metrics.text * PADDING_SHARE;
+            let frame = egui::Frame::popup(ui.style())
+                .fill(ui.visuals().panel_fill)
+                .corner_radius(FIND_RADIUS)
+                .inner_margin(padding);
+            frame.show(ui, |ui| {
+                // The frame's padding and outline sit around this width.
+                ui.set_width(metrics.width - 2.0 * padding - 2.0 * frame.stroke.width);
                 let Some(bar) = &mut self.find else {
                     return;
                 };
-                event = find_row(ui, bar);
-                options_row(ui, bar);
+                event = find_row(ui, bar, &metrics);
+                options_row(ui, bar, &metrics);
                 if bar.replacing && !bar.all_files && event.is_none() {
-                    event = replace_row(ui, bar);
+                    event = replace_row(ui, bar, &metrics);
                 }
                 if bar.all_files {
                     let roots: Vec<PathBuf> = self.roots.iter().map(|root| root.path.clone()).collect();
-                    if let Some(hit) = results_list(ui, bar, &roots) {
+                    if let Some(hit) = results_list(ui, bar, &roots, &metrics) {
                         event = Some(FindEvent::Open(hit));
                     }
                 }
@@ -333,20 +362,114 @@ fn query_field_id() -> Id {
     Id::unique("find-bar-query")
 }
 
-/// The field, the Aa and W toggles, the count, Previous / Next and the cross.
-fn find_row(ui: &mut Ui, bar: &mut FindBar) -> Option<FindEvent> {
+fn replacement_field_id() -> Id {
+    Id::unique("find-bar-replacement")
+}
+
+/// Sizes in the bar, worked out from the editor font size so the bar reads
+/// as comfortably as the text it searches.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BarMetrics {
+    /// Size of the bar's text, of the query and of the result lines.
+    text: f32,
+    /// Size of secondary text: the results summary, folder names and line numbers.
+    small: f32,
+    /// Height of fields, buttons and result rows.
+    row: f32,
+    /// Width of the whole bar, its padding included.
+    width: f32,
+    /// Tallest the results list gets before it scrolls.
+    results_height: f32,
+}
+
+/// The bar's sizes for an editor font of `editor_size` points and interface
+/// text of `body_size` points (the bar's text is never smaller than that),
+/// on a page of `page` size. The bar never gets wider than the page.
+fn bar_metrics(editor_size: f32, body_size: f32, page: Vec2) -> BarMetrics {
+    let text = editor_size.max(body_size);
+    let room = (page.x - 2.0 * FIND_MARGIN).max(0.0);
+    BarMetrics {
+        text,
+        small: (text * SMALL_TEXT_SHARE).round(),
+        row: (text * ROW_PER_TEXT_SIZE).round(),
+        width: (text * WIDTH_PER_TEXT_SIZE).max(MIN_WIDTH).min(room),
+        results_height: page.y * RESULTS_HEIGHT_SHARE,
+    }
+}
+
+/// Size the bar's text, controls and spacing from `metrics`: egui's own
+/// sizes are fixed and read small next to a large editor font.
+fn scale_style(ui: &mut Ui, metrics: &BarMetrics) {
+    let style = ui.style_mut();
+    for text_style in [TextStyle::Body, TextStyle::Button] {
+        style.text_styles.insert(text_style, FontId::proportional(metrics.text));
+    }
+    style.text_styles.insert(TextStyle::Small, FontId::proportional(metrics.small));
+    let gap = metrics.text * GAP_SHARE;
+    let spacing = &mut style.spacing;
+    spacing.item_spacing = vec2(gap, gap);
+    spacing.interact_size.y = metrics.row;
+    spacing.button_padding = vec2(metrics.text * INNER_PADDING_SHARE, gap / 2.0);
+    // The All files checkbox: a box the size of a letter, the tick half of it.
+    spacing.icon_width = metrics.text;
+    spacing.icon_width_inner = metrics.text / 2.0;
+    spacing.icon_spacing = gap;
+}
+
+/// The width `text` takes in `font`.
+fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
+    ui.painter().layout_no_wrap(text.to_owned(), font, Color32::PLACEHOLDER).size().x
+}
+
+/// The outline of a field and of a switched off option: the weak text
+/// color, softened, which stands out from the bar in every theme (the
+/// theme's border color is too faint on the dark ones).
+fn outline_color(visuals: &egui::Visuals) -> Color32 {
+    visuals.weak_text_color().gamma_multiply(OUTLINE_OPACITY)
+}
+
+/// A single-line field in the editor's font at the bar's text size, on the
+/// page color, with an outline that turns to the accent while it has focus.
+/// `width` includes the outline and the padding.
+fn bar_field<'t>(
+    ui: &Ui,
+    text: &'t mut String,
+    id: Id,
+    hint: &str,
+    width: f32,
+    metrics: &BarMetrics,
+) -> egui::TextEdit<'t> {
+    let visuals = ui.visuals();
+    let stroke = if ui.memory(|memory| memory.has_focus(id)) {
+        Stroke::new(ACCENT_STROKE, visuals.hyperlink_color)
+    } else {
+        Stroke::new(1.0, outline_color(visuals))
+    };
+    let frame = egui::Frame::new()
+        .fill(page_fill(visuals))
+        .stroke(stroke)
+        .corner_radius(visuals.widgets.inactive.corner_radius)
+        .inner_margin(vec2(metrics.text * INNER_PADDING_SHARE, 0.0));
+    egui::TextEdit::singleline(text)
+        .id(id)
+        .hint_text(hint)
+        .font(FontId::monospace(metrics.text))
+        .frame(frame)
+        .desired_width(width)
+        .min_size(vec2(0.0, metrics.row))
+        .align(egui::Align2::LEFT_CENTER)
+}
+
+/// The field, the count, the Aa and W toggles, Previous / Next and the cross.
+fn find_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) -> Option<FindEvent> {
     let mut event = None;
     ui.horizontal(|ui| {
         let hint = if bar.all_files { "Find in all files" } else { "Find in this file" };
-        let field_width = ui.available_width()
-            - 2.0 * TOGGLE_WIDTH
-            - COUNT_WIDTH
-            - 2.0 * STEP_WIDTH
-            - CLOSE_WIDTH
-            - 7.0 * ui.spacing().item_spacing.x;
-        let field = ui.add(
-            egui::TextEdit::singleline(&mut bar.query).id(query_field_id()).hint_text(hint).desired_width(field_width),
-        );
+        let count_width = text_width(ui, COUNT_SAMPLE, FontId::proportional(metrics.text));
+        // Five square buttons (two toggles, two arrows, the cross) and the
+        // six gaps between the seven controls.
+        let field_width = ui.available_width() - count_width - 5.0 * metrics.row - 6.0 * ui.spacing().item_spacing.x;
+        let field = ui.add(bar_field(ui, &mut bar.query, query_field_id(), hint, field_width, metrics));
         if matches!(bar.focus, FocusRequest::Query | FocusRequest::QuerySelected) {
             field.request_focus();
             if bar.focus == FocusRequest::QuerySelected {
@@ -362,51 +485,83 @@ fn find_row(ui: &mut Ui, bar: &mut FindBar) -> Option<FindEvent> {
             event = Some(FindEvent::Next);
             bar.focus = FocusRequest::Query;
         }
-        if option_toggle(ui, bar.options.match_case, "Aa", "Match case").clicked() {
-            bar.options.match_case = !bar.options.match_case;
-        }
-        if option_toggle(ui, bar.options.whole_word, "W", "Whole word").clicked() {
-            bar.options.whole_word = !bar.options.whole_word;
-        }
         let count = if bar.all_files { String::new() } else { count_text(bar) };
-        ui.add_sized([COUNT_WIDTH, ui.spacing().interact_size.y], egui::Label::new(RichText::new(count).weak()));
-        let has_matches = !bar.all_files && !bar.matches.is_empty();
-        let size = [STEP_WIDTH, ui.spacing().interact_size.y];
-        if ui
-            .add_enabled(has_matches, egui::Button::new("Previous").min_size(size.into()))
-            .on_hover_text("Shift+Enter, Cmd+Shift+G")
-            .clicked()
-        {
-            event = Some(FindEvent::Previous);
-        }
-        if ui
-            .add_enabled(has_matches, egui::Button::new("Next").min_size(size.into()))
-            .on_hover_text("Enter, Cmd+G")
-            .clicked()
-        {
-            event = Some(FindEvent::Next);
-        }
-        if ui.small_button("×").on_hover_text("Close (Esc)").clicked() {
-            event = Some(FindEvent::Close);
+        let visuals = ui.visuals();
+        let count_color = if count == NO_MATCHES { visuals.error_fg_color } else { visuals.text_color() };
+        ui.add_sized([count_width, metrics.row], egui::Label::new(RichText::new(count).color(count_color)));
+        option_toggles(ui, &mut bar.options, metrics);
+        if let Some(step) = step_buttons(ui, !bar.all_files && !bar.matches.is_empty(), metrics) {
+            event = Some(step);
         }
     });
     event
 }
 
+/// Shown as the count when the query matches nothing.
+const NO_MATCHES: &str = "No matches";
+
 /// "3 of 12", the total while no match is current, or "No matches".
 fn count_text(bar: &FindBar) -> String {
     match (bar.current, bar.matches.len()) {
         (_, 0) if bar.query.is_empty() => String::new(),
-        (_, 0) => "No matches".to_string(),
+        (_, 0) => NO_MATCHES.to_string(),
         (Some(current), total) => format!("{} of {total}", current + 1),
         (None, total) => format!("{total}"),
     }
 }
 
-/// A small on / off button for a search option.
-fn option_toggle(ui: &mut Ui, on: bool, label: &str, hover: &str) -> egui::Response {
-    let size = [TOGGLE_WIDTH, ui.spacing().interact_size.y];
-    ui.add_sized(size, egui::Button::selectable(on, label)).on_hover_text(hover)
+/// The Aa (match case) and W (whole word) toggles.
+fn option_toggles(ui: &mut Ui, options: &mut SearchOptions, metrics: &BarMetrics) {
+    let square = Vec2::splat(metrics.row);
+    let match_case = option_toggle(ui, options.match_case, "Aa", square);
+    if match_case.on_hover_text(option_tip("Match case", options.match_case)).clicked() {
+        options.match_case = !options.match_case;
+    }
+    let whole_word = option_toggle(ui, options.whole_word, "W", square);
+    if whole_word.on_hover_text(option_tip("Whole word", options.whole_word)).clicked() {
+        options.whole_word = !options.whole_word;
+    }
+}
+
+/// The hover tip of an option toggle: its name and whether it is on.
+fn option_tip(name: &str, on: bool) -> String {
+    format!("{name}: {}", if on { "on" } else { "off" })
+}
+
+/// An on / off button at least `min_size`: filled and outlined in the
+/// accent while on, only outlined while off, so the state reads at a glance.
+fn option_toggle(ui: &mut Ui, on: bool, label: &str, min_size: Vec2) -> egui::Response {
+    let visuals = ui.visuals();
+    let (fill, stroke, color) = if on {
+        (visuals.selection.bg_fill, Stroke::new(ACCENT_STROKE, visuals.hyperlink_color), visuals.strong_text_color())
+    } else {
+        (Color32::TRANSPARENT, Stroke::new(1.0, outline_color(visuals)), visuals.text_color())
+    };
+    let button =
+        egui::Button::new(RichText::new(label).color(color)).selected(on).fill(fill).stroke(stroke).min_size(min_size);
+    ui.add(button)
+}
+
+/// Previous, Next and the close cross: square buttons as tall as the field.
+fn step_buttons(ui: &mut Ui, has_matches: bool, metrics: &BarMetrics) -> Option<FindEvent> {
+    let buttons = [
+        (has_matches, "↑", "Previous match", "Previous match (Shift+Enter, Cmd+Shift+G)", FindEvent::Previous),
+        (has_matches, "↓", "Next match", "Next match (Enter, Cmd+G)", FindEvent::Next),
+        (true, "×", "Close", "Close (Esc)", FindEvent::Close),
+    ];
+    let mut event = None;
+    for (enabled, glyph, name, tip, clicked) in buttons {
+        let response = ui
+            .add_enabled(enabled, egui::Button::new(glyph).min_size(Vec2::splat(metrics.row)))
+            .on_hover_text(tip)
+            .on_disabled_hover_text(tip);
+        // Screen readers announce the name, not the arrow.
+        response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, enabled, name));
+        if response.clicked() {
+            event = Some(clicked);
+        }
+    }
+    event
 }
 
 /// Select every character of the single-line field `id`, whose text is `text`.
@@ -418,7 +573,7 @@ fn select_all(ctx: &Context, id: Id, text: &str) {
 }
 
 /// The All files switch and the Replace switch.
-fn options_row(ui: &mut Ui, bar: &mut FindBar) {
+fn options_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) {
     ui.horizontal(|ui| {
         if ui
             .checkbox(&mut bar.all_files, "All files")
@@ -428,11 +583,12 @@ fn options_row(ui: &mut Ui, bar: &mut FindBar) {
             bar.focus = FocusRequest::Query;
         }
         let hover = if bar.all_files { "Replace works in the open file" } else { "Cmd+Alt+F (Ctrl+H on Linux)" };
-        if ui
-            .add_enabled(!bar.all_files, egui::Button::selectable(bar.replacing, "Replace"))
-            .on_hover_text(hover)
-            .clicked()
-        {
+        let replace = ui
+            .add_enabled_ui(!bar.all_files, |ui| {
+                option_toggle(ui, bar.replacing, "Replace", vec2(metrics.row, metrics.row))
+            })
+            .inner;
+        if replace.on_hover_text(hover).on_disabled_hover_text(hover).clicked() {
             bar.replacing = !bar.replacing;
             bar.focus = if bar.replacing { FocusRequest::Replacement } else { FocusRequest::Query };
         }
@@ -440,12 +596,16 @@ fn options_row(ui: &mut Ui, bar: &mut FindBar) {
 }
 
 /// The replacement field, Replace and Replace all.
-fn replace_row(ui: &mut Ui, bar: &mut FindBar) -> Option<FindEvent> {
+fn replace_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) -> Option<FindEvent> {
     let mut event = None;
     ui.horizontal(|ui| {
-        let field_width = ui.available_width() - STEP_WIDTH - REPLACE_ALL_WIDTH - 2.0 * ui.spacing().item_spacing.x;
-        let field = ui
-            .add(egui::TextEdit::singleline(&mut bar.replacement).hint_text("Replace with").desired_width(field_width));
+        let button_font = TextStyle::Button.resolve(ui.style());
+        let button_padding = 2.0 * ui.spacing().button_padding.x;
+        let replace_width = text_width(ui, "Replace", button_font.clone()) + button_padding;
+        let replace_all_width = text_width(ui, "Replace all", button_font) + button_padding;
+        let field_width = ui.available_width() - replace_width - replace_all_width - 2.0 * ui.spacing().item_spacing.x;
+        let hint = "Replace with";
+        let field = ui.add(bar_field(ui, &mut bar.replacement, replacement_field_id(), hint, field_width, metrics));
         if bar.focus == FocusRequest::Replacement {
             field.request_focus();
             bar.focus = FocusRequest::Nowhere;
@@ -462,19 +622,17 @@ fn replace_row(ui: &mut Ui, bar: &mut FindBar) -> Option<FindEvent> {
             event = has_current.then_some(FindEvent::Replace);
             bar.focus = FocusRequest::Replacement;
         }
-        let height = ui.spacing().interact_size.y;
+        let size = vec2(replace_width, metrics.row);
         if ui
-            .add_enabled(has_current, egui::Button::new("Replace").min_size([STEP_WIDTH, height].into()))
+            .add_enabled(has_current, egui::Button::new("Replace").min_size(size))
             .on_hover_text("Replace this match and go to the next (Enter)")
             .clicked()
         {
             event = Some(FindEvent::Replace);
         }
+        let size = vec2(replace_all_width, metrics.row);
         if ui
-            .add_enabled(
-                !bar.matches.is_empty(),
-                egui::Button::new("Replace all").min_size([REPLACE_ALL_WIDTH, height].into()),
-            )
+            .add_enabled(!bar.matches.is_empty(), egui::Button::new("Replace all").min_size(size))
             .on_hover_text("Replace every match, one Undo brings them back (Cmd+Enter)")
             .clicked()
         {
@@ -485,7 +643,7 @@ fn replace_row(ui: &mut Ui, bar: &mut FindBar) -> Option<FindEvent> {
 }
 
 /// The all-files results under the field; a click opens the hit.
-fn results_list(ui: &mut Ui, bar: &mut FindBar, roots: &[PathBuf]) -> Option<FileHit> {
+fn results_list(ui: &mut Ui, bar: &mut FindBar, roots: &[PathBuf], metrics: &BarMetrics) -> Option<FileHit> {
     let (remote_roots, local_roots): (Vec<PathBuf>, Vec<PathBuf>) =
         roots.iter().cloned().partition(|root| crate::remote::is_mirror(root));
     if bar.results.as_ref().is_none_or(|(query, options, _)| !bar.is_current(query, *options)) {
@@ -518,36 +676,198 @@ fn results_list(ui: &mut Ui, bar: &mut FindBar, roots: &[PathBuf]) -> Option<Fil
         _ => {}
     }
     ui.separator();
-    let summary = if results.hits.is_empty() {
-        format!("No matches in {} files", results.files_searched)
-    } else {
-        format!(
-            "{}{} matches in {} files",
-            if results.truncated { "First " } else { "" },
-            results.hits.len(),
-            results.file_count()
-        )
-    };
     ui.horizontal(|ui| {
-        ui.label(RichText::new(summary).size(SMALL_TEXT).weak());
+        ui.label(RichText::new(results_summary(&results)).small().weak());
         if searching_remote {
-            ui.add(egui::Spinner::new().size(10.0));
-            ui.label(RichText::new("searching remote folders…").size(SMALL_TEXT).weak());
+            ui.add(egui::Spinner::new().size(metrics.small));
+            ui.label(RichText::new("searching remote folders…").small().weak());
         }
     });
     if let Some(error) = remote_error {
-        ui.label(RichText::new(format!("Remote folders: {error}")).size(SMALL_TEXT).color(ui.visuals().warn_fg_color));
+        ui.label(RichText::new(format!("Remote folders: {error}")).small().color(ui.visuals().warn_fg_color));
     }
+    let line_number_width = text_width(ui, LINE_NUMBER_SAMPLE, FontId::monospace(metrics.small));
     let mut clicked = None;
-    egui::ScrollArea::vertical().id_salt("find-results").max_height(RESULTS_HEIGHT).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.y = 2.0;
-        for hit in &results.hits {
-            if result_row(ui, hit).clicked() {
-                clicked = Some(hit.clone());
+    egui::ScrollArea::vertical().id_salt("find-results").max_height(metrics.results_height).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        for (index, group) in group_by_file(&results.hits).iter().enumerate() {
+            if index > 0 {
+                ui.add_space(metrics.text * GAP_SHARE);
+            }
+            if file_header(ui, group, metrics).clicked() {
+                let kind = HitKind::Name;
+                clicked = Some(FileHit { path: group.path.to_path_buf(), root: group.root.to_path_buf(), kind });
+            }
+            for hit in &group.lines {
+                let HitKind::Text { line, excerpt, highlight, .. } = &hit.kind else {
+                    continue;
+                };
+                let found = LineMatch { line: *line, excerpt, highlight };
+                if line_row(ui, &found, line_number_width, metrics).clicked() {
+                    clicked = Some((*hit).clone());
+                }
             }
         }
     });
     clicked
+}
+
+/// "12 matches in 3 files", "First 300 matches in 40 files" when the search
+/// stopped at its limit, or "No matches in 25 files".
+fn results_summary(results: &SearchResults) -> String {
+    if results.hits.is_empty() {
+        return format!("No matches in {}", plural(results.files_searched, "file", "files"));
+    }
+    let first = if results.truncated { "First " } else { "" };
+    let matches = plural(results.hits.len(), "match", "matches");
+    format!("{first}{matches} in {}", plural(results.file_count(), "file", "files"))
+}
+
+/// "1 match", "2 matches".
+fn plural(count: usize, one: &str, many: &str) -> String {
+    format!("{count} {}", if count == 1 { one } else { many })
+}
+
+/// One file's hits in the results list.
+#[derive(Debug, PartialEq, Eq)]
+struct FileGroup<'a> {
+    path: &'a Path,
+    /// The explorer folder the file was found under.
+    root: &'a Path,
+    /// The file's name contains the query.
+    name_matches: bool,
+    /// Hits on lines of the file, in order.
+    lines: Vec<&'a FileHit>,
+}
+
+/// The hits grouped by file, files in the order of their first hit.
+fn group_by_file(hits: &[FileHit]) -> Vec<FileGroup<'_>> {
+    let mut groups: Vec<FileGroup<'_>> = Vec::new();
+    for hit in hits {
+        let index = if let Some(index) = groups.iter().position(|group| group.path == hit.path) {
+            index
+        } else {
+            groups.push(FileGroup { path: &hit.path, root: &hit.root, name_matches: false, lines: Vec::new() });
+            groups.len() - 1
+        };
+        let group = &mut groups[index];
+        match hit.kind {
+            HitKind::Name => group.name_matches = true,
+            HitKind::Text { .. } => group.lines.push(hit),
+        }
+    }
+    groups
+}
+
+/// What a file's header says about its hits: "3 matches", "file name", or
+/// "file name, 2 matches".
+fn group_note(group: &FileGroup<'_>) -> String {
+    let lines = plural(group.lines.len(), "match", "matches");
+    match (group.name_matches, group.lines.is_empty()) {
+        (true, true) => "file name".to_string(),
+        (true, false) => format!("file name, {lines}"),
+        (false, _) => lines,
+    }
+}
+
+/// Where a file is: its explorer folder's name and the folders below it
+/// that hold the file, like `notes/2024/march`.
+fn folder_text(path: &Path, root: &Path) -> String {
+    let root_name = name_text(root);
+    match path.strip_prefix(root).ok().and_then(Path::parent) {
+        Some(parent) if !parent.as_os_str().is_empty() => Path::new(&root_name).join(parent).display().to_string(),
+        _ => root_name,
+    }
+}
+
+/// A file's header in the results: its name, the folder it is in, and what
+/// matched. A click opens the file.
+fn file_header(ui: &mut Ui, group: &FileGroup<'_>, metrics: &BarMetrics) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), metrics.row), Sense::click());
+    let name = name_text(group.path);
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, format!("Open {name}")));
+    let visuals = ui.visuals();
+    let painter = ui.painter();
+    let fill = if response.hovered() { visuals.widgets.hovered.weak_bg_fill } else { visuals.faint_bg_color };
+    painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, fill);
+
+    let padding = metrics.text * INNER_PADDING_SHARE;
+    let note =
+        painter.layout_no_wrap(group_note(group), FontId::proportional(metrics.small), visuals.weak_text_color());
+    let note_left = rect.right() - padding - note.size().x;
+    let format = |size: f32, color: Color32| TextFormat {
+        font_id: FontId::proportional(size),
+        color,
+        valign: Align::Center,
+        ..TextFormat::default()
+    };
+    let mut job = LayoutJob::default();
+    job.append(&name, 0.0, format(metrics.text, visuals.strong_text_color()));
+    job.append(&folder_text(group.path, group.root), padding, format(metrics.small, visuals.weak_text_color()));
+    job.wrap = TextWrapping::truncate_at_width(note_left - rect.left() - 2.0 * padding);
+    let title = painter.layout_job(job);
+    let title_top = rect.center().y - title.size().y / 2.0;
+    painter.galley(pos2(rect.left() + padding, title_top), title, Color32::PLACEHOLDER);
+    let note_top = rect.center().y - note.size().y / 2.0;
+    painter.galley(pos2(note_left, note_top), note, Color32::PLACEHOLDER);
+    response.on_hover_text(crate::remote::display(group.path))
+}
+
+/// A matching line in a file, as the results list shows it.
+struct LineMatch<'a> {
+    /// 1-based line number.
+    line: usize,
+    excerpt: &'a str,
+    /// Byte range of the match in `excerpt`.
+    highlight: &'a Range<usize>,
+}
+
+/// One matching line under its file's header: the line number, then the
+/// line with the match highlighted. A click goes to the match.
+fn line_row(ui: &mut Ui, found: &LineMatch<'_>, line_number_width: f32, metrics: &BarMetrics) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), metrics.row), Sense::click());
+    let label = format!("Line {}: {}", found.line, found.excerpt);
+    response.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, &label));
+    let visuals = ui.visuals();
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, visuals.widgets.hovered.weak_bg_fill);
+    }
+    let padding = metrics.text * INNER_PADDING_SHARE;
+    let number_font = FontId::monospace(metrics.small);
+    let number = painter.layout_no_wrap(found.line.to_string(), number_font, visuals.weak_text_color());
+    // Right-aligned, so the lines of a file start in one column.
+    let number_right = rect.left() + padding + line_number_width;
+    let number_top = rect.center().y - number.size().y / 2.0;
+    painter.galley(pos2(number_right - number.size().x, number_top), number, Color32::PLACEHOLDER);
+
+    let text_left = number_right + padding;
+    let mut job = excerpt_job(found.excerpt, found.highlight, FontId::monospace(metrics.text), visuals);
+    job.wrap = TextWrapping::truncate_at_width(rect.right() - padding - text_left);
+    let text = painter.layout_job(job);
+    let text_top = rect.center().y - text.size().y / 2.0;
+    painter.galley(pos2(text_left, text_top), text, Color32::PLACEHOLDER);
+    response
+}
+
+/// `excerpt` in `font`, with the `highlight` part on the same tint as a
+/// match in the editor, in the strong text color.
+fn excerpt_job(excerpt: &str, highlight: &Range<usize>, font: FontId, visuals: &egui::Visuals) -> LayoutJob {
+    let plain = TextFormat::simple(font.clone(), visuals.text_color());
+    let marked =
+        TextFormat { background: match_fill(visuals), ..TextFormat::simple(font, visuals.strong_text_color()) };
+    let mut job = LayoutJob::default();
+    let parts = (excerpt.get(..highlight.start), excerpt.get(highlight.clone()), excerpt.get(highlight.end..));
+    if let (Some(before), Some(found), Some(after)) = parts {
+        job.append(before, 0.0, plain.clone());
+        job.append(found, 0.0, marked);
+        job.append(after, 0.0, plain);
+    } else {
+        // Not expected (the search gives a range inside the excerpt), but
+        // the line still shows, without a highlight.
+        job.append(excerpt, 0.0, plain);
+    }
+    job
 }
 
 /// Keep the remote search in step with the query: pick up a finished one,
@@ -577,18 +897,123 @@ fn poll_remote_search(ctx: &Context, bar: &mut FindBar, remote_roots: Vec<PathBu
     true
 }
 
-/// One hit: the file's path under its folder, then the line and its text.
-fn result_row(ui: &mut Ui, hit: &FileHit) -> egui::Response {
-    let relative = hit.path.strip_prefix(&hit.root).unwrap_or(&hit.path);
-    let place = match &hit.kind {
-        HitKind::Name => format!("{}  (file name)", relative.display()),
-        HitKind::Text { line, .. } => format!("{}:{line}", relative.display()),
-    };
-    let text = match &hit.kind {
-        HitKind::Name => name_text(&hit.path),
-        HitKind::Text { excerpt, .. } => excerpt.clone(),
-    };
-    let label = format!("{place}\n{text}");
-    ui.add(egui::Button::new(RichText::new(label).size(SMALL_TEXT)).frame(false).wrap())
-        .on_hover_text(crate::remote::display(&hit.path))
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAGE: Vec2 = vec2(1200.0, 800.0);
+
+    #[test]
+    fn bar_grows_with_the_editor_font_and_fits_the_page() {
+        let default = bar_metrics(14.0, 14.0, PAGE);
+        let large = bar_metrics(20.0, 14.0, PAGE);
+        assert_eq!(default.text, 14.0);
+        assert_eq!(large.text, 20.0);
+        assert!(large.row > default.row && large.width > default.width && large.small > default.small);
+        assert_eq!(default.results_height, PAGE.y * RESULTS_HEIGHT_SHARE);
+        // A small editor font does not shrink the bar below interface text.
+        assert_eq!(bar_metrics(10.0, 14.0, PAGE), default);
+        // A narrow page caps the width: the bar stays on the page.
+        let narrow = bar_metrics(28.0, 14.0, vec2(500.0, 800.0));
+        assert_eq!(narrow.width, 500.0 - 2.0 * FIND_MARGIN);
+    }
+
+    #[test]
+    fn count_shows_the_current_match_of_the_total() {
+        let mut bar = FindBar::default();
+        assert_eq!(count_text(&bar), "");
+        bar.query = "milk".into();
+        assert_eq!(count_text(&bar), NO_MATCHES);
+        bar.matches = vec![0..4, 10..14, 20..24];
+        assert_eq!(count_text(&bar), "3");
+        bar.current = Some(1);
+        assert_eq!(count_text(&bar), "2 of 3");
+    }
+
+    #[test]
+    fn option_tips_say_whether_the_option_is_on() {
+        assert_eq!(option_tip("Match case", true), "Match case: on");
+        assert_eq!(option_tip("Whole word", false), "Whole word: off");
+    }
+
+    fn text_hit(path: &str, line: usize) -> FileHit {
+        let kind = HitKind::Text { line, excerpt: "milk".into(), highlight: 0..4, range: 0..4 };
+        FileHit { path: PathBuf::from(path), root: PathBuf::from("/notes"), kind }
+    }
+
+    fn name_hit(path: &str) -> FileHit {
+        FileHit { path: PathBuf::from(path), root: PathBuf::from("/notes"), kind: HitKind::Name }
+    }
+
+    #[test]
+    fn results_are_grouped_by_file_in_order() {
+        let hits = vec![
+            name_hit("/notes/a.md"),
+            text_hit("/notes/a.md", 2),
+            text_hit("/notes/a.md", 9),
+            text_hit("/notes/sub/b.md", 1),
+            name_hit("/notes/c.md"),
+        ];
+        let groups = group_by_file(&hits);
+        let summary: Vec<(&Path, bool, Vec<usize>)> = groups
+            .iter()
+            .map(|group| {
+                let lines = group
+                    .lines
+                    .iter()
+                    .filter_map(|hit| match hit.kind {
+                        HitKind::Text { line, .. } => Some(line),
+                        HitKind::Name => None,
+                    })
+                    .collect();
+                (group.path, group.name_matches, lines)
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (Path::new("/notes/a.md"), true, vec![2, 9]),
+                (Path::new("/notes/sub/b.md"), false, vec![1]),
+                (Path::new("/notes/c.md"), true, vec![]),
+            ]
+        );
+        let notes: Vec<String> = groups.iter().map(group_note).collect();
+        assert_eq!(notes, ["file name, 2 matches", "1 match", "file name"]);
+    }
+
+    #[test]
+    fn folder_text_names_the_explorer_folder_and_the_folders_below() {
+        let root = Path::new("/home/me/notes");
+        assert_eq!(folder_text(&root.join("a.md"), root), "notes");
+        assert_eq!(
+            folder_text(&root.join("2024/march/a.md"), root),
+            Path::new("notes/2024/march").display().to_string()
+        );
+    }
+
+    #[test]
+    fn summary_counts_matches_and_files() {
+        let mut results = SearchResults { hits: Vec::new(), files_searched: 1, truncated: false };
+        assert_eq!(results_summary(&results), "No matches in 1 file");
+        results.hits = vec![text_hit("/notes/a.md", 1)];
+        assert_eq!(results_summary(&results), "1 match in 1 file");
+        results.hits.push(text_hit("/notes/b.md", 1));
+        results.truncated = true;
+        assert_eq!(results_summary(&results), "First 2 matches in 2 files");
+    }
+
+    #[test]
+    fn excerpt_job_marks_the_match() {
+        let visuals = egui::Visuals::dark();
+        let job = excerpt_job("buy milk today", &(4..8), FontId::monospace(14.0), &visuals);
+        assert_eq!(job.text, "buy milk today");
+        let ranges: Vec<Range<usize>> =
+            job.sections.iter().map(|section| section.byte_range.start.0..section.byte_range.end.0).collect();
+        assert_eq!(ranges, vec![0..4, 4..8, 8..14]);
+        assert_eq!(job.sections[1].format.background, match_fill(&visuals));
+        assert_eq!(job.sections[0].format.background, Color32::TRANSPARENT);
+        // A range outside the excerpt shows the line without a highlight.
+        let job = excerpt_job("milk", &(2..9), FontId::monospace(14.0), &visuals);
+        assert_eq!(job.sections.len(), 1);
+    }
 }

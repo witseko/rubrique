@@ -55,7 +55,8 @@ Agents run only when you ask, read-only by default.
 **Files**
 
 - Several folders in one explorer. Right-click a folder → New file, folder or terminal. Double-click a file, folder or tab to rename it, right-click to delete.
-- Tabs keep unsaved changes, cursor and undo.
+- Tabs keep unsaved changes, cursor and undo. Close one with "Keep for
+  later" and its edits come back when you open the file again.
 - Safe saves: your file is never reformatted; outside changes open a merge.
 - Find in a file or across all folders (`Cmd+F`), match case or whole
   words, and replace one match or all of them (`Cmd+Alt+F`).
@@ -91,11 +92,13 @@ Settings → Accessibility.
 | Shortcut | Action |
 | --- | --- |
 | Cmd+S | Save |
+| Cmd+O | Open a file or folder by its path |
 | Cmd+Z / Cmd+Shift+Z | Undo / redo (in the preview too) |
 | Cmd+W | Close tab |
 | Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
 | Cmd+, | Settings |
 | Cmd++ / Cmd+- / Cmd+0 | Larger / smaller / default text size |
+| Cmd+scroll / pinch | Larger or smaller text size |
 | Cmd+Shift+R | Record a voice memo, or stop |
 | Cmd+Shift+B | Open in browser |
 | Cmd+Shift+F | Format JSON, SQL or XML |

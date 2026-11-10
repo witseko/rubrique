@@ -83,13 +83,15 @@ pub fn restore_editor_state(ctx: &Context, state: Option<EditorState>) {
 }
 
 /// Draw the text editor, coloring `syntax` when there is one, numbering
-/// the lines when `line_numbers` is set, and tinting the `find` matches.
-/// Typing `@ai-` or `@tmux-` suggests `mentions`. Returns status-bar stats for the cursor.
+/// the lines when `line_numbers` is set, wrapping long lines when
+/// `wrap_lines` is set (otherwise they scroll sideways), and tinting the
+/// `find` matches. Typing `@ai-` or `@tmux-` suggests `mentions`. Returns status-bar stats for the cursor.
 pub fn show_editor(
     ui: &mut Ui,
     document: &mut Document,
     syntax: Option<Syntax>,
     line_numbers: bool,
+    wrap_lines: bool,
     find: Option<FindHighlight<'_>>,
     mentions: &[Suggestion],
 ) -> Option<TextStats> {
@@ -119,7 +121,9 @@ pub fn show_editor(
             // Plain text goes through the layouter too, for the editor's line height.
             let mut layouter = |ui: &Ui, buffer: &dyn TextBuffer, wrap_width: f32| {
                 let mut job = highlighted(ui.ctx(), buffer.as_str(), &style, syntax);
-                job.wrap.max_width = wrap_width;
+                // Unwrapped lines make the text wider than the page, and the
+                // scroll area around the editor scrolls sideways to them.
+                job.wrap.max_width = if wrap_lines { wrap_width } else { f32::INFINITY };
                 ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
             };
             let output = editor.layouter(&mut layouter).show(ui);
@@ -156,11 +160,17 @@ pub fn show_editor(
     Some(text_stats(&document.text, range.primary.index.0, sorted.start.0..sorted.end.0))
 }
 
+/// The tint behind a find match (not the current one). The find bar's
+/// results list uses it too, so a match looks the same in both.
+pub fn match_fill(visuals: &egui::Visuals) -> Color32 {
+    visuals.warn_fg_color.gamma_multiply(MATCH_TINT)
+}
+
 /// Tint the find matches behind the text, the current one in the accent,
 /// and scroll to the current one when asked.
 fn paint_matches(ui: &Ui, output: &TextEditOutput, text: &str, find: FindHighlight<'_>) {
     let visuals = ui.visuals();
-    let tint = visuals.warn_fg_color.gamma_multiply(MATCH_TINT);
+    let tint = match_fill(visuals);
     let current_tint = visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT);
     let clip = ui.clip_rect();
     // Byte to character conversion, walking forward through the sorted matches.
