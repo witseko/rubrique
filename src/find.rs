@@ -10,6 +10,12 @@ use std::path::{Path, PathBuf};
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 /// Longest excerpt shown for a hit, in characters.
 const EXCERPT_CHARS: usize = 100;
+/// Characters kept before a match that would fall past the end of the
+/// excerpt: the excerpt then starts this far before the match instead of at
+/// the start of the line, so the match stays in view.
+const EXCERPT_CONTEXT_CHARS: usize = 30;
+/// Marks text cut from the start or the end of an excerpt.
+const ELLIPSIS: char = '\u{2026}';
 
 /// How a query is compared with the text.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,8 +123,11 @@ pub enum HitKind {
     Text {
         /// 1-based line number.
         line: usize,
-        /// The line, trimmed and cut to [`EXCERPT_CHARS`].
+        /// The line, trimmed and cut to [`EXCERPT_CHARS`] around the match,
+        /// with an ellipsis where text was cut.
         excerpt: String,
+        /// Byte range of the match in `excerpt`, to highlight it.
+        highlight: Range<usize>,
         /// Byte range of the match in the whole file.
         range: Range<usize>,
     },
@@ -221,8 +230,8 @@ fn search_file(
         if results.truncated {
             return;
         }
-        let (line, excerpt) = line_of(text, range.start);
-        let kind = HitKind::Text { line, excerpt, range };
+        let (line, excerpt, highlight) = excerpt_of(text, &range);
+        let kind = HitKind::Text { line, excerpt, highlight, range };
         push_hit(results, FileHit { path: path.to_path_buf(), root: root.to_path_buf(), kind }, limit);
     }
 }
@@ -298,13 +307,48 @@ fn push_hit(results: &mut SearchResults, hit: FileHit, limit: usize) {
     }
 }
 
-/// The 1-based line number of byte `at` and that line as an excerpt.
-fn line_of(text: &str, at: usize) -> (usize, String) {
+/// The 1-based line number of `range` (a match in `text`), its line as an
+/// excerpt, and the match's byte range in that excerpt.
+///
+/// The excerpt is the trimmed line cut to [`EXCERPT_CHARS`]. When the match
+/// would fall past that cut, the excerpt starts [`EXCERPT_CONTEXT_CHARS`]
+/// before the match instead, so the match is always shown with some text
+/// around it.
+fn excerpt_of(text: &str, range: &Range<usize>) -> (usize, String, Range<usize>) {
+    let at = range.start;
     let line_start = text[..at].rfind('\n').map_or(0, |index| index + 1);
     let line_end = text[at..].find('\n').map_or(text.len(), |index| at + index);
-    let line = text[..at].matches('\n').count() + 1;
-    let excerpt: String = text[line_start..line_end].trim().chars().take(EXCERPT_CHARS).collect();
-    (line, excerpt)
+    let line_number = text[..at].matches('\n').count() + 1;
+    let line = &text[line_start..line_end];
+    let trimmed_start = line_start + (line.len() - line.trim_start().len());
+    let trimmed_end = (line_start + line.trim_end().len()).max(trimmed_start);
+    // The part of the match inside the trimmed line (a match on the spaces
+    // at the edge of a line has none, and gets an empty highlight).
+    let match_start = at.clamp(trimmed_start, trimmed_end);
+    let match_end = range.end.clamp(match_start, trimmed_end);
+
+    let chars_to_match_end = text[trimmed_start..match_end].chars().count();
+    let excerpt_start = if chars_to_match_end <= EXCERPT_CHARS {
+        trimmed_start
+    } else {
+        let before_match = &text[trimmed_start..match_start];
+        let skip = before_match.chars().count().saturating_sub(EXCERPT_CONTEXT_CHARS);
+        before_match.char_indices().nth(skip).map_or(match_start, |(offset, _)| trimmed_start + offset)
+    };
+    let mut excerpt = String::new();
+    if excerpt_start > trimmed_start {
+        excerpt.push(ELLIPSIS);
+    }
+    let prefix_len = excerpt.len();
+    excerpt.extend(text[excerpt_start..trimmed_end].chars().take(EXCERPT_CHARS));
+    let kept_end = excerpt_start + (excerpt.len() - prefix_len);
+    if kept_end < trimmed_end {
+        excerpt.push(ELLIPSIS);
+    }
+    // A match longer than the excerpt is highlighted up to the cut.
+    let highlight_start = prefix_len + (match_start - excerpt_start);
+    let highlight_end = prefix_len + (match_end.min(kept_end) - excerpt_start);
+    (line_number, excerpt, highlight_start..highlight_end.max(highlight_start))
 }
 
 /// The character index of byte `at` in `text`.
@@ -331,11 +375,11 @@ mod tests {
             results.hits[1],
             FileHit { path: mirror.join("Plan.md"), root: mirror.clone(), kind: HitKind::Name }
         );
-        let HitKind::Text { line, excerpt, range } = &results.hits[0].kind else {
+        let HitKind::Text { line, excerpt, highlight, range } = &results.hits[0].kind else {
             panic!("text hit expected");
         };
         assert_eq!(results.hits[0].path, mirror.join("docs/b.md"));
-        assert_eq!((*line, excerpt.as_str(), range.clone()), (2, "the PLAN is here", 13..17));
+        assert_eq!((*line, excerpt.as_str(), highlight.clone(), range.clone()), (2, "the PLAN is here", 4..8, 13..17));
     }
 
     /// A query with the default options: without case, not whole words.
@@ -400,10 +444,31 @@ mod tests {
     #[test]
     fn line_numbers_and_excerpts() {
         let text = "first\n  second line here \nthird";
-        assert_eq!(line_of(text, 0), (1, "first".to_string()));
-        assert_eq!(line_of(text, 10), (2, "second line here".to_string()));
-        assert_eq!(line_of(text, 27), (3, "third".to_string()));
+        assert_eq!(excerpt_of(text, &(0..5)), (1, "first".to_string(), 0..5));
+        assert_eq!(excerpt_of(text, &(15..19)), (2, "second line here".to_string(), 7..11));
+        assert_eq!(excerpt_of(text, &(26..31)), (3, "third".to_string(), 0..5));
+        // A match on the spaces at the edge of a line gets an empty highlight.
+        assert_eq!(excerpt_of(text, &(6..8)), (2, "second line here".to_string(), 0..0));
         assert_eq!(char_index("héllo", 3), 2);
+    }
+
+    #[test]
+    fn long_lines_keep_the_match_in_the_excerpt() {
+        // Near the start: the line is cut at the end only.
+        let long = format!("milk {}", "é".repeat(200));
+        let (_, excerpt, highlight) = excerpt_of(&long, &(0..4));
+        assert_eq!(excerpt.chars().count(), EXCERPT_CHARS + 1);
+        assert!(excerpt.ends_with(ELLIPSIS));
+        assert_eq!(&excerpt[highlight], "milk");
+
+        // Far along: the excerpt starts a little before the match.
+        let text = format!("{}milk tail", "é".repeat(150));
+        let start = text.find("milk").unwrap();
+        let (_, excerpt, highlight) = excerpt_of(&text, &(start..start + 4));
+        assert!(excerpt.starts_with(ELLIPSIS));
+        assert!(!excerpt.ends_with(ELLIPSIS));
+        assert_eq!(&excerpt[highlight.clone()], "milk");
+        assert_eq!(excerpt[..highlight.start].chars().count(), EXCERPT_CONTEXT_CHARS + 1);
     }
 
     #[test]
@@ -419,8 +484,8 @@ mod tests {
         assert_eq!(
             kinds,
             vec![
-                &HitKind::Text { line: 2, excerpt: "buy milk".into(), range: 11..15 },
-                &HitKind::Text { line: 3, excerpt: "Milk is white".into(), range: 16..20 },
+                &HitKind::Text { line: 2, excerpt: "buy milk".into(), highlight: 4..8, range: 11..15 },
+                &HitKind::Text { line: 3, excerpt: "Milk is white".into(), highlight: 0..4, range: 16..20 },
             ]
         );
         assert_eq!(results.hits[0].path, folder.path().join("notes/Plan.md"));
@@ -430,7 +495,10 @@ mod tests {
 
         let by_name = search_files(&roots, plain("plan"), 10);
         assert_eq!(by_name.hits[0].kind, HitKind::Name);
-        assert_eq!(by_name.hits[1].kind, HitKind::Text { line: 1, excerpt: "# Plan".into(), range: 2..6 });
+        assert_eq!(
+            by_name.hits[1].kind,
+            HitKind::Text { line: 1, excerpt: "# Plan".into(), highlight: 2..6, range: 2..6 }
+        );
 
         let capped = search_files(&roots, plain("milk"), 1);
         assert_eq!(capped.hits.len(), 1);
@@ -440,7 +508,10 @@ mod tests {
         // The options apply to the text of the files; names ignore the case.
         let exact = search_files(&roots, Query { text: "Milk", options: MATCH_CASE }, 10);
         assert_eq!(exact.hits.len(), 1);
-        assert_eq!(exact.hits[0].kind, HitKind::Text { line: 3, excerpt: "Milk is white".into(), range: 16..20 });
+        assert_eq!(
+            exact.hits[0].kind,
+            HitKind::Text { line: 3, excerpt: "Milk is white".into(), highlight: 0..4, range: 16..20 }
+        );
         let by_name = search_files(&roots, Query { text: "PLAN", options: MATCH_CASE }, 10);
         assert_eq!(
             by_name.hits,
