@@ -18,6 +18,7 @@ mod images;
 mod install;
 mod naming;
 mod new_entry;
+mod open_path;
 mod privacy;
 mod remote;
 mod side_panel;
@@ -115,6 +116,7 @@ const TOGGLE_PREVIEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAN
 const ADD_NOTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 const FORMAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
 const OPEN_IN_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::B);
+const OPEN_PATH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::O);
 const NEW_SCRATCH: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::N);
 const NEW_ENCRYPTED_SCRATCH: KeyboardShortcut =
     KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::N);
@@ -338,6 +340,8 @@ pub struct RubriqueApp {
     scroll_to_revealed: bool,
     /// The file the "Delete" dialog asks about, while it is open.
     deleting: Option<PathBuf>,
+    /// The "Open path" dialog, while it is open.
+    open_path: Option<open_path::OpenPathDialog>,
     /// Watches the tmux sessions for the explorer; `None` when tmux is not installed.
     terminals: Option<TerminalMonitor>,
     /// The merge screen for the open file, while it is open.
@@ -440,6 +444,7 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            open_path: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
             merging: None,
             last_disk_check: 0.0,
@@ -809,6 +814,10 @@ impl RubriqueApp {
         }
         self.find_shortcuts(ctx);
         self.side_panel_shortcut(ctx);
+        // After the Structure shortcut: Cmd+O alone would also match Cmd+Shift+O.
+        if ctx.input_mut(|input| input.consume_shortcut(&OPEN_PATH)) {
+            self.start_open_path();
+        }
         if ctx.input_mut(|input| input.consume_shortcut(&ADD_NOTE)) {
             self.start_note(ctx);
         }
@@ -833,6 +842,7 @@ impl RubriqueApp {
             && self.new_entry.is_none()
             && self.tab_rename.is_none()
             && self.deleting.is_none()
+            && self.open_path.is_none()
             && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.settings_open = false;
@@ -1602,6 +1612,7 @@ impl RubriqueApp {
                 self.settings.terminal_order = names;
             }
             Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
+            Some(ExplorerAction::OpenPath) => self.start_open_path(),
             Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
             Some(ExplorerAction::NewScratch { encrypted }) => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
@@ -2788,6 +2799,7 @@ impl eframe::App for RubriqueApp {
         self.note_dialog(&ctx);
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
+        self.open_path_dialog(&ctx);
         self.add_remote_dialog(&ctx);
         self.secret_dialog(&ctx);
         self.update_title(&ctx);

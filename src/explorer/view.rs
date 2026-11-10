@@ -33,6 +33,8 @@ pub enum ExplorerAction {
     RemoveRoot(PathBuf),
     /// Ask the system for a folder to add as a root.
     AddFolder,
+    /// Show the "Open path" dialog, to open a file or folder by its path.
+    OpenPath,
     /// Ask for a folder on another computer to add as a root.
     AddRemoteFolder,
     /// Create a new scratch file and open it: encrypted or plain, or
@@ -322,10 +324,16 @@ fn files_header(
             {
                 *action = Some(ExplorerAction::AddRemoteFolder);
             }
-            let folder_tip = "Add a folder to the explorer";
-            if small_icon_button(ui, Icon::FolderPlus, HEADER_BUTTON_SIZE, "Add folder", folder_tip).clicked() {
+            let folder_tip = "Add a folder to the explorer (right click to type a path)";
+            let folder = small_icon_button(ui, Icon::FolderPlus, HEADER_BUTTON_SIZE, "Add folder", folder_tip);
+            if folder.clicked() {
                 *action = Some(ExplorerAction::AddFolder);
             }
+            folder.context_menu(|ui| {
+                if ui.button("Open path... (Cmd+O)").clicked() {
+                    *action = Some(ExplorerAction::OpenPath);
+                }
+            });
         },
     )
 }
