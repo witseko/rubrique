@@ -382,6 +382,24 @@ fn folder_is_shown(folder: &FsNode, context: &TreeContext) -> bool {
     !context.filter.unsaved_only || context.dirty_files.iter().any(|path| path.starts_with(&folder.path))
 }
 
+/// True when a folder's entries are drawn under it: when it is expanded,
+/// and with "Unsaved edits only" also when it holds an unsaved file, so the
+/// file is in sight without opening every folder on the way (the filter
+/// already hides the folders that hold none). Reads the folder from disk
+/// the first time it is shown that way.
+fn shows_contents(folder: &mut FsNode, context: &TreeContext) -> bool {
+    if folder.expanded {
+        return true;
+    }
+    let holds_unsaved = context.filter.unsaved_only
+        && folder.kind == NodeKind::Folder
+        && context.dirty_files.iter().any(|path| path.starts_with(&folder.path));
+    if holds_unsaved && matches!(folder.children, Children::NotLoaded) {
+        folder.load_children();
+    }
+    holds_unsaved
+}
+
 /// What the tree shows before any folder is added (the first run): a
 /// hint and a button for the same folder picker as the header button.
 fn show_no_folders(ui: &mut Ui, action: &mut Option<ExplorerAction>) {
@@ -408,7 +426,8 @@ fn show_root(
     }
     let response = response.on_hover_text(absolute_path_text(&root.path));
     scroll_if_revealed(ui, context, &root.path, &response);
-    paint_arrow(ui, &response, root.expanded);
+    let open = shows_contents(root, context);
+    paint_arrow(ui, &response, open);
     if let Some(color) = context.root_color {
         paint_root_bar(ui, &response, color);
     }
@@ -416,7 +435,7 @@ fn show_root(
         root.toggle_expanded();
     }
     root_menu(&response, &root.path, context, action);
-    if root.expanded {
+    if open {
         let indent_id = root.path.clone();
         ui.indent(indent_id, |ui| show_children(ui, root, context, edits, action));
     }
@@ -473,7 +492,7 @@ fn show_folder(
     if folder.kind == NodeKind::SymlinkLoop {
         response.clone().on_hover_text("Link to a parent folder; not expanded to avoid a loop");
     } else {
-        paint_arrow(ui, &response, folder.expanded);
+        paint_arrow(ui, &response, shows_contents(folder, context));
     }
     if toggles_fold(&response) {
         folder.toggle_expanded();
@@ -482,7 +501,7 @@ fn show_folder(
         *action = Some(ExplorerAction::RenameInTree(folder.path.clone()));
     }
     folder_menu(&response, &folder.path, context, action);
-    if folder.expanded {
+    if shows_contents(folder, context) {
         let indent_id = folder.path.clone();
         ui.indent(indent_id, |ui| show_children(ui, folder, context, edits, action));
     }
