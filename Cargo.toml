@@ -50,6 +50,11 @@ trash = "5.3"
 # editor on a long line.
 regex = "1.13.1"
 
+# The menu bar at the top of the screen on macOS (File, View, Settings), in
+# place of the menu bar drawn inside the window on other systems.
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = { version = "0.21.2", default-features = false }
+
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than
 # `forbid` because date.rs needs one FFI call (`localtime_r`); that single
 # use carries a narrow `#[expect(unsafe_code, reason = ...)]`.

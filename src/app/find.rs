@@ -539,7 +539,20 @@ fn option_toggle(ui: &mut Ui, on: bool, label: &str, min_size: Vec2) -> egui::Re
     };
     let button =
         egui::Button::new(RichText::new(label).color(color)).selected(on).fill(fill).stroke(stroke).min_size(min_size);
-    ui.add(button)
+    add_steady(ui, button)
+}
+
+/// Add `widget` without egui's hover growth: a hovered or pressed button is
+/// drawn one point larger on every side, which makes the outlined buttons
+/// of the bar look like they jump. Only the hover fill changes here.
+fn add_steady(ui: &mut Ui, widget: impl egui::Widget) -> egui::Response {
+    ui.scope(|ui| {
+        let widgets = &mut ui.visuals_mut().widgets;
+        widgets.hovered.expansion = 0.0;
+        widgets.active.expansion = 0.0;
+        ui.add(widget)
+    })
+    .inner
 }
 
 /// Previous, Next and the close cross: square buttons as tall as the field.
@@ -551,8 +564,10 @@ fn step_buttons(ui: &mut Ui, has_matches: bool, metrics: &BarMetrics) -> Option<
     ];
     let mut event = None;
     for (enabled, glyph, name, tip, clicked) in buttons {
+        let button = egui::Button::new(glyph).min_size(Vec2::splat(metrics.row));
         let response = ui
-            .add_enabled(enabled, egui::Button::new(glyph).min_size(Vec2::splat(metrics.row)))
+            .add_enabled_ui(enabled, |ui| add_steady(ui, button))
+            .inner
             .on_hover_text(tip)
             .on_disabled_hover_text(tip);
         // Screen readers announce the name, not the arrow.

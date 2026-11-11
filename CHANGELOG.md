@@ -15,6 +15,18 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   running session stay in the explorer, so you can delete the ones you no
   longer need. Untick it to hide them. A saved Hide closed terminals choice
   carries over.
+- **Menus in the macOS menu bar.** On macOS the File, View and Settings
+  menus are in the system menu bar at the top of the screen, after the
+  Rubrique menu (About, Settings, Hide, Quit), instead of a bar inside the
+  window. Other systems keep the bar in the window, which Settings can hide.
+
+### Fixed
+
+- **Unsaved edits only.** With this filter on, the explorer showed only the
+  top folders; the folders holding unsaved files now open on their own, so
+  the files are in sight.
+- **Steady find bar buttons.** The Aa, W and arrow buttons in the find bar
+  no longer grow by two points when the pointer is over them.
 
 ### Fixed
 
