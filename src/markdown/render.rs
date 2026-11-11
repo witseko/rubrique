@@ -1029,11 +1029,15 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
 fn span_rich_text(text: String, style: &TextStyle) -> RichText {
     // egui draws strike and underline lines from the line box, so a tall
     // line height pushes them too low: those spans keep the font's own height.
-    let decorated =
-        style.strikethrough || style.html.underline || style.link.as_ref().is_some_and(|url| !is_openable_url(url));
+    // Code spans too: egui paints their background from the top of the text
+    // down by the full line height, which leaves empty space under the code.
+    let own_height = style.code
+        || style.strikethrough
+        || style.html.underline
+        || style.link.as_ref().is_some_and(|url| !is_openable_url(url));
     // Superscript and subscript are placed by `render_span`, at their
     // font's own height.
-    let line_height = (!decorated && style.html.script.is_none()).then_some(style.line_height);
+    let line_height = (!own_height && style.html.script.is_none()).then_some(style.line_height);
     let mut size = if style.code { style.size * INLINE_CODE_SCALE } else { style.size };
     if style.html.script.is_some() {
         size *= SCRIPT_SCALE;

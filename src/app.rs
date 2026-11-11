@@ -18,6 +18,8 @@ mod images;
 mod install;
 mod menu_bar;
 mod naming;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod new_entry;
 mod open_path;
 mod privacy;
@@ -292,6 +294,9 @@ pub struct RubriqueApp {
     zoom_gesture: ZoomGesture,
     /// The same for the text area, when the pointer is over it.
     page_zoom_gesture: ZoomGesture,
+    /// The menus in the macOS menu bar, installed on the first frame.
+    #[cfg(target_os = "macos")]
+    native_menu: native_menu::NativeMenuState,
     /// Message for the status bar and the egui time (seconds) it was first
     /// shown; `NaN` until the next frame fills it in.
     status_message: Option<(String, f64)>,
@@ -435,6 +440,8 @@ impl RubriqueApp {
             quit_confirmed: false,
             zoom_gesture: ZoomGesture::default(),
             page_zoom_gesture: ZoomGesture::default(),
+            #[cfg(target_os = "macos")]
+            native_menu: native_menu::NativeMenuState::NotYet,
             status_message: None,
             stats: None,
             window_title: String::new(),
@@ -2855,6 +2862,8 @@ impl eframe::App for RubriqueApp {
             return;
         }
         self.handle_shortcuts(&ctx);
+        #[cfg(target_os = "macos")]
+        self.native_menu(&ctx);
         // The preview reads the text area zoom while it draws.
         crate::markdown::render::set_page_zoom(self.settings.accessibility.page_scale());
         self.poll_disk(&ctx);
@@ -2873,6 +2882,8 @@ impl eframe::App for RubriqueApp {
         // The page fills the whole central area; editor and preview add their own margins.
         let page_frame = egui::Frame::central_panel(&style).fill(page_fill(&style.visuals)).inner_margin(0);
 
+        // macOS has the menus in its own bar at the top of the screen.
+        #[cfg(not(target_os = "macos"))]
         if self.settings.accessibility.show_menu_bar {
             egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
         }
