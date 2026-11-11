@@ -460,10 +460,14 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
         .on_hover_text("Break long lines at the window edge. Off: they run on and the editor scrolls sideways")
         .changed();
 
-    changed |= ui
-        .checkbox(&mut settings.show_menu_bar, "Show menu bar")
-        .on_hover_text("The File, View and Settings menus along the top. Off: more room for the page")
-        .changed();
+    // macOS shows the menus in its own bar at the top of the screen.
+    #[cfg(not(target_os = "macos"))]
+    {
+        changed |= ui
+            .checkbox(&mut settings.show_menu_bar, "Show menu bar")
+            .on_hover_text("The File, View and Settings menus along the top. Off: more room for the page")
+            .changed();
+    }
 
     ui.add_space(6.0);
     ui.separator();

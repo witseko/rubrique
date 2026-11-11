@@ -13,6 +13,31 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Icons in the side panel switch.** Structure, Notes, Tasks and Changes
   are icons now, with the count after them, so the switch fits a narrow
   panel. Hover an icon to see its name.
+- **Preview uses the whole page.** The preview text now fills the page
+  width instead of stopping at a narrow reading column, so hiding the side
+  panels gives the text the room.
+- **Show closed terminals.** The file filter's Hide closed terminals box is
+  now Show closed terminals, ticked by default: `.tmux` files with no
+  running session stay in the explorer, so you can delete the ones you no
+  longer need. Untick it to hide them. A saved Hide closed terminals choice
+  carries over.
+- **Menus in the macOS menu bar.** On macOS the File, View and Settings
+  menus are in the system menu bar at the top of the screen, after the
+  Rubrique menu (About, Settings, Hide, Quit), instead of a bar inside the
+  window. Other systems keep the bar in the window, which Settings can hide.
+
+### Fixed
+
+- **Unsaved edits only.** With this filter on, the explorer showed only the
+  top folders; the folders holding unsaved files now open on their own, so
+  the files are in sight.
+- **Steady find bar buttons.** The Aa, W and arrow buttons in the find bar
+  no longer grow by two points when the pointer is over them.
+
+### Fixed
+
+- **Inline code in the preview.** The shaded box behind `code` now fits
+  the text, without the empty strip it left underneath.
 
 ## [0.9.4] - 2026-11-11
 
