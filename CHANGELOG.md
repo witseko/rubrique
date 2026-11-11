@@ -52,6 +52,17 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   a full-width **Unlock** button under it (and **Use Touch ID** under that
   when it is on). Before, the field had no visible box in most themes, so
   only a faint "Password" showed, far from the button.
+- **A clearer Settings > Privacy.** A card at the top says whether the
+  encrypted scratches are locked and holds the one button that matters
+  now: Set password, Unlock or Lock now. Each option is one row with a
+  short line on what it does and its switch or button on the right:
+  Encrypt new scratches, Open with Touch ID, Encrypt existing scratches
+  and the password, then the PIN, Lock after and Lock now. The paragraphs
+  of text are gone.
+- **No settings gear.** Settings open from the Settings menu (the macOS
+  menu bar, or the bar in the window elsewhere) or with `Cmd/Ctrl+,`. On
+  Linux with the menu bar turned off, the gear stays at the bottom of the
+  file list so Settings can still be found.
 
 ### Fixed
 

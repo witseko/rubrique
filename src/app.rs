@@ -2889,18 +2889,23 @@ impl eframe::App for RubriqueApp {
             egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
         }
         egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
+        // Settings open from the menus (the macOS menu bar, or the bar in the
+        // window). Only where that bar is switched off does a gear at the
+        // bottom of the explorer stay, so Settings can still be found.
+        let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
         egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
-            // Settings sit at the bottom of the explorer, out of the way.
-            egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let gear = icon_button(ui, Icon::Gear, "Settings", "Settings (Cmd+,)", self.settings_open);
-                    if gear.clicked() {
-                        self.toggle_settings();
-                    }
+            if menu_hidden {
+                egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let gear = icon_button(ui, Icon::Gear, "Settings", "Settings (Ctrl+,)", self.settings_open);
+                        if gear.clicked() {
+                            self.toggle_settings();
+                        }
+                    });
+                    ui.add_space(2.0);
                 });
-                ui.add_space(2.0);
-            });
+            }
             self.explorer(ui);
         });
         self.right_panel(ui);
