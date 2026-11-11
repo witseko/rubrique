@@ -41,7 +41,10 @@ pub fn take() -> Vec<PathBuf> {
 }
 
 /// Queue `paths` for the app and wake it.
-#[cfg_attr(not(target_os = "macos"), expect(dead_code, reason = "called by the macOS handler only"))]
+#[cfg_attr(
+    all(not(target_os = "macos"), not(test)),
+    expect(dead_code, reason = "called by the macOS handler and the tests only")
+)]
 fn push(paths: Vec<PathBuf>) {
     if paths.is_empty() {
         return;
