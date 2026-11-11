@@ -94,6 +94,22 @@ impl RubriqueApp {
         }
     }
 
+    /// Open the files and folders the system handed over (Finder's "Open"
+    /// and "Open With", see [`crate::open_documents`]). As with command line
+    /// arguments, a file outside every explorer folder brings its folder in.
+    pub(super) fn open_system_documents(&mut self, ctx: &Context) {
+        for path in crate::open_documents::take() {
+            let is_folder = path.is_dir();
+            if !is_folder
+                && let Some(folder) = path.parent()
+                && !self.roots.iter().any(|root| path.starts_with(&root.path))
+            {
+                self.add_folder(folder.to_path_buf());
+            }
+            self.open_target(ctx, Target { path, line: None, is_folder });
+        }
+    }
+
     /// The folder a relative path starts from: the explorer folder holding
     /// the open file, or else the first explorer folder.
     fn relative_base(&self) -> Option<PathBuf> {

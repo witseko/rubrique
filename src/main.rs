@@ -15,6 +15,7 @@ mod icons;
 mod install;
 mod markdown;
 mod media;
+mod open_documents;
 mod remote;
 mod scratch;
 mod settings;
@@ -85,10 +86,14 @@ fn main() -> ExitCode {
         viewport = viewport.with_icon(icon);
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
+    // Before the event loop starts: a launch from Finder hands its files over
+    // while the app finishes launching.
+    open_documents::listen();
     let result = eframe::run_native(
         "rubrique",
         options,
         Box::new(move |creation_context| {
+            open_documents::set_waker(creation_context.egui_ctx.clone());
             Ok(Box::new(app::RubriqueApp::new(&creation_context.egui_ctx, settings, roots, file)))
         }),
     );
