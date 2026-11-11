@@ -351,21 +351,21 @@ fn filter_button(ui: &mut Ui, filter: &mut ExplorerFilter) {
     egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.checkbox(&mut filter.markdown_only, "Markdown files only");
         ui.checkbox(&mut filter.unsaved_only, "Unsaved edits only");
-        ui.checkbox(&mut filter.hide_closed_terminals, "Hide closed terminals");
+        ui.checkbox(&mut filter.show_closed_terminals, "Show closed terminals");
     });
 }
 
 /// True when the filter lets `file` into the tree. Unsaved edits narrow
 /// everything else down; a terminal file counts as Markdown for the
 /// Markdown filter (terminals are not documents to hide), and is hidden
-/// only by the closed terminals filter.
+/// only when "Show closed terminals" is off and its session is not running.
 fn file_is_shown(file: &FsNode, context: &TreeContext) -> bool {
     let filter = context.filter;
     if filter.unsaved_only && !context.dirty_files.iter().any(|path| path == &file.path) {
         return false;
     }
     if is_terminal_path(&file.path) {
-        return !filter.hide_closed_terminals || terminal_is_running(file, context);
+        return filter.show_closed_terminals || terminal_is_running(file, context);
     }
     !filter.markdown_only || is_markdown_path(&file.path)
 }

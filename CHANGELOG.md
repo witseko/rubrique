@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Show closed terminals.** The file filter's Hide closed terminals box is
+  now Show closed terminals, ticked by default: `.tmux` files with no
+  running session stay in the explorer, so you can delete the ones you no
+  longer need. Untick it to hide them. A saved Hide closed terminals choice
+  carries over.
+
 ### Fixed
 
 - **Inline code in the preview.** The shaded box behind `code` now fits
