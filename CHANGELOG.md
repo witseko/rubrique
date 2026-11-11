@@ -10,6 +10,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
+- **Preview uses the whole page.** The preview text now fills the page
+  width instead of stopping at a narrow reading column, so hiding the side
+  panels gives the text the room.
 - **Show closed terminals.** The file filter's Hide closed terminals box is
   now Show closed terminals, ticked by default: `.tmux` files with no
   running session stay in the explorer, so you can delete the ones you no
