@@ -83,21 +83,48 @@ impl ZoomGesture {
     /// show: one step larger or smaller than `size` once enough zoom has
     /// gathered, otherwise `size` itself.
     pub fn step(&mut self, size: TextSize, factor: f32) -> TextSize {
+        match self.direction(factor) {
+            1 => size.larger(),
+            -1 => size.smaller(),
+            _ => size,
+        }
+    }
+
+    /// Add one frame's zoom `factor` and say whether a whole step has
+    /// gathered: 1 for a step larger, -1 for a step smaller, 0 for none yet.
+    pub fn direction(&mut self, factor: f32) -> i8 {
         // A broken factor from the platform must not poison the running product.
         if !factor.is_finite() || factor <= 0.0 {
-            return size;
+            return 0;
         }
         self.gathered *= factor;
         if self.gathered >= ZOOM_GESTURE_STEP {
             self.gathered = 1.0;
-            size.larger()
+            1
         } else if self.gathered <= 1.0 / ZOOM_GESTURE_STEP {
             self.gathered = 1.0;
-            size.smaller()
+            -1
         } else {
-            size
+            0
         }
     }
+}
+
+/// Zoom of the text area (the editor and the preview) in percent, smallest and largest.
+pub const PAGE_ZOOM_PERCENTS: RangeInclusive<u16> = 50..=300;
+/// Page zoom when nothing is set, and the percent the reset shortcut returns to.
+pub const DEFAULT_PAGE_ZOOM: u16 = 100;
+/// How many percent one step of the text area zoom adds or takes away.
+pub const PAGE_ZOOM_STEP: u16 = 10;
+
+/// One step more zoom for the text area, up to the largest.
+pub fn page_zoom_larger(percent: u16) -> u16 {
+    (percent + PAGE_ZOOM_STEP).min(*PAGE_ZOOM_PERCENTS.end())
+}
+
+/// One step less zoom for the text area, down to the smallest.
+pub fn page_zoom_smaller(percent: u16) -> u16 {
+    percent.saturating_sub(PAGE_ZOOM_STEP).max(*PAGE_ZOOM_PERCENTS.start())
 }
 
 /// Editor font size when nothing is set.
@@ -113,6 +140,12 @@ pub struct AccessibilitySettings {
     pub text_size: TextSize,
     /// Size of the editor's monospace font in points, before the text size.
     pub editor_font_size: u8,
+    /// Zoom of the text area only (editor and preview), in percent. The
+    /// explorer, tabs and bars keep their size.
+    pub page_zoom: u16,
+    /// The menu bar along the top of the window; turn it off to give the
+    /// page the room (Cmd+, still opens Settings).
+    pub show_menu_bar: bool,
     /// No animations.
     pub reduce_motion: bool,
     /// Thicker outlines on the focused control and text field.
@@ -129,6 +162,8 @@ impl Default for AccessibilitySettings {
         AccessibilitySettings {
             text_size: TextSize::Default,
             editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
+            page_zoom: DEFAULT_PAGE_ZOOM,
+            show_menu_bar: true,
             reduce_motion: false,
             strong_focus: false,
             line_numbers: false,
@@ -138,6 +173,11 @@ impl Default for AccessibilitySettings {
 }
 
 impl AccessibilitySettings {
+    /// The text area zoom as a factor (1.0 for 100%).
+    pub fn page_scale(&self) -> f32 {
+        f32::from(self.page_zoom) / 100.0
+    }
+
     /// Read one `key=value` line. Returns `false` for keys it does not know.
     pub fn parse_line(&mut self, key: &str, value: &str) -> bool {
         match key {
@@ -147,6 +187,13 @@ impl AccessibilitySettings {
                 }
             }
             "editor_font_size" => self.editor_font_size = parse_font_size(value).unwrap_or(self.editor_font_size),
+            "page_zoom" => {
+                if let Ok(percent) = value.parse::<u16>() {
+                    self.page_zoom = percent.clamp(*PAGE_ZOOM_PERCENTS.start(), *PAGE_ZOOM_PERCENTS.end());
+                }
+            }
+            // Anything but "false" keeps the default, shown.
+            "show_menu_bar" => self.show_menu_bar = value != "false",
             "reduce_motion" => self.reduce_motion = value == "true",
             "strong_focus" => self.strong_focus = value == "true",
             "line_numbers" => self.line_numbers = value == "true",
@@ -160,9 +207,11 @@ impl AccessibilitySettings {
     /// Settings lines for [`AccessibilitySettings::parse_line`].
     pub fn to_lines(&self) -> String {
         format!(
-            "text_scale={}\neditor_font_size={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
+            "text_scale={}\neditor_font_size={}\npage_zoom={}\nshow_menu_bar={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
             self.text_size.scale(),
             self.editor_font_size,
+            self.page_zoom,
+            self.show_menu_bar,
             self.reduce_motion,
             self.strong_focus,
             self.line_numbers,
@@ -199,6 +248,8 @@ mod tests {
             let settings = AccessibilitySettings {
                 text_size,
                 editor_font_size: 16,
+                page_zoom: 130,
+                show_menu_bar: false,
                 reduce_motion: true,
                 strong_focus: true,
                 line_numbers: true,
@@ -229,6 +280,17 @@ mod tests {
         assert_eq!(parse("editor_font_size=14.4\n").editor_font_size, 14);
         let settings = parse("text_scale=big\neditor_font_size=NaN\n");
         assert_eq!(settings, AccessibilitySettings::default());
+    }
+
+    #[test]
+    fn page_zoom_steps_stay_in_range() {
+        assert_eq!(page_zoom_larger(100), 110);
+        assert_eq!(page_zoom_larger(295), 300);
+        assert_eq!(page_zoom_smaller(100), 90);
+        assert_eq!(page_zoom_smaller(55), 50);
+        assert_eq!(parse("page_zoom=900\n").page_zoom, 300);
+        assert_eq!(parse("page_zoom=1\n").page_zoom, 50);
+        assert_eq!(parse("page_zoom=big\n").page_zoom, DEFAULT_PAGE_ZOOM);
     }
 
     #[test]

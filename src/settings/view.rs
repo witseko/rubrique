@@ -16,7 +16,7 @@ use crate::ai::{AiSettings, AiTool, CommandProblem, PROMPT, SYSTEM, check_comman
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::install::view::{InstallAction, install_prompt};
 use crate::install::{InstallStatus, Recipe};
-use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, TextSize};
+use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, PAGE_ZOOM_PERCENTS, TextSize};
 use crate::settings::privacy::{LOCK_AFTER_CHOICES, PrivacySettings};
 use crate::theme::catalog::{ThemeChoice, Themes};
 use crate::theme::code_colors::CodeColors;
@@ -443,6 +443,14 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
     let slider = egui::Slider::new(&mut settings.editor_font_size, EDITOR_FONT_SIZES).suffix(" pt");
     changed |= ui.add(slider).changed();
     ui.add_space(4.0);
+    ui.label(RichText::new("Text area zoom").strong());
+    ui.label(
+        RichText::new("Zooms only the editor and the preview. Cmd/Ctrl + Alt + plus, minus and 0, or Cmd/Ctrl + wheel over the text.")
+            .weak(),
+    );
+    let zoom = egui::Slider::new(&mut settings.page_zoom, PAGE_ZOOM_PERCENTS).suffix("%");
+    changed |= ui.add(zoom).changed();
+    ui.add_space(4.0);
     changed |= ui
         .checkbox(&mut settings.line_numbers, "Line numbers")
         .on_hover_text("Number the lines in the source editor")
@@ -450,6 +458,11 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
     changed |= ui
         .checkbox(&mut settings.wrap_lines, "Wrap lines")
         .on_hover_text("Break long lines at the window edge. Off: they run on and the editor scrolls sideways")
+        .changed();
+
+    changed |= ui
+        .checkbox(&mut settings.show_menu_bar, "Show menu bar")
+        .on_hover_text("The File, View and Settings menus along the top. Off: more room for the page")
         .changed();
 
     ui.add_space(6.0);

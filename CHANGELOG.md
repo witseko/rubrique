@@ -8,6 +8,31 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Menu bar.** A File, View and Settings menu runs along the top of the
+  window and repeats the common settings: theme, code colors, text size,
+  text area zoom, line numbers, wrap lines, reduce motion, stronger focus,
+  note marks and the file filter, along with New scratch, Open path, Save
+  and Ask. A change in a menu is the same change as in Settings. Settings >
+  Accessibility has a Show menu bar box to hide the bar and give the page
+  its room.
+- **Zoom the text area only.** `Cmd/Ctrl + Alt` with `+`, `-` and `0`, or
+  `Cmd/Ctrl` and the wheel or a pinch with the pointer over the text, makes
+  the editor and the preview larger or smaller (50% to 300%) while the
+  explorer, tabs and bars keep their size. The same zoom is in Settings >
+  Accessibility and the View menu, and is kept for next time.
+- **Highlights in the preview.** The text highlight rules (IP addresses,
+  ticket ids, numbers and your own) now color plain text in a Markdown
+  preview too, not only in the editor.
+
+### Changed
+
+- **Explorer filter.** The funnel in the Files header opens a menu with
+  Markdown files only, Unsaved edits only (just the files with unsaved
+  changes and the folders holding them) and Hide closed terminals (`.tmux`
+  files with no running session).
+
 ## [0.9.3] - 2026-11-11
 
 ### Added

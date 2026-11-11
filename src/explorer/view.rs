@@ -11,10 +11,12 @@ use super::section::{paint_fold_arrow, section_header};
 use super::terminals::{show_docked_terminals, show_terminal_file, show_terminals_section};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button, small_toggle_button};
 use crate::scratch::is_scratch;
+use crate::settings::explorer_filter::ExplorerFilter;
 use crate::settings::layout::LayoutSettings;
 use crate::terminal::agent_sessions::SessionHistory;
 use crate::terminal::is_terminal_path;
 use crate::terminal::monitor::TerminalRow;
+use crate::terminal::tmux::session_name_for_file;
 use crate::theme::style::group_color;
 
 use super::paths::{absolute_path_text, name_text, relative_path_text};
@@ -183,8 +185,8 @@ pub struct TreeContext<'a> {
     pub root: &'a Path,
     /// More than one root is shown, so a root may be removed.
     pub can_remove_roots: bool,
-    /// Hide files that are not Markdown.
-    pub markdown_only: bool,
+    /// Which files the tree hides.
+    pub filter: ExplorerFilter,
     /// File shown in the editor, highlighted in the tree.
     pub open_file: Option<&'a Path>,
     /// Files with unsaved changes, in any tab: shown in the strong text
@@ -232,7 +234,7 @@ pub fn show_explorer(
     ui: &mut Ui,
     roots: &mut [FsNode],
     layout: &mut LayoutSettings,
-    markdown_only: &mut bool,
+    filter: &mut ExplorerFilter,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
 ) -> Option<ExplorerAction> {
@@ -244,7 +246,7 @@ pub fn show_explorer(
     if files_open {
         show_docked_terminals(ui, context, &mut layout.terminals_collapsed, edits.session, &mut action);
     }
-    if files_header(ui, context, files_open, markdown_only, &mut action) {
+    if files_header(ui, context, files_open, filter, &mut action) {
         layout.files_collapsed = files_open;
     }
     if !files_open {
@@ -252,7 +254,7 @@ pub fn show_explorer(
         return action;
     }
     // The filter button in the header may have just changed the filter.
-    let context = TreeContext { markdown_only: *markdown_only, ..*context };
+    let context = TreeContext { filter: *filter, ..*context };
     // Rows never wrap (a wrapped name would put the folder arrow over its
     // text); long names scroll sideways instead.
     egui::ScrollArea::both().id_salt("file-tree").auto_shrink([false, false]).show(ui, |ui| {
@@ -283,7 +285,7 @@ fn files_header(
     ui: &mut Ui,
     context: &TreeContext,
     expanded: bool,
-    markdown_only: &mut bool,
+    filter: &mut ExplorerFilter,
     action: &mut Option<ExplorerAction>,
 ) -> bool {
     section_header(
@@ -298,12 +300,7 @@ fn files_header(
             {
                 *action = Some(ExplorerAction::Refresh);
             }
-            let filter_tip = if *markdown_only {
-                "Showing Markdown files only. Click to show all files"
-            } else {
-                "Showing all files. Click to hide files that are not Markdown"
-            };
-            small_toggle_button(ui, Icon::Filter, HEADER_BUTTON_SIZE, "Markdown only", filter_tip, markdown_only);
+            filter_button(ui, filter);
             let scratch_tip = "New scratch file for quick notes (Cmd+N). Right-click for an encrypted one";
             let scratch = small_icon_button(ui, Icon::NewScratch, HEADER_BUTTON_SIZE, "New scratch", scratch_tip);
             if scratch.clicked() {
@@ -336,6 +333,53 @@ fn files_header(
             });
         },
     )
+}
+
+/// The funnel in the Files header: a click opens a menu with one box per
+/// filter. The funnel looks pressed while any of them is on, and the menu
+/// stays open while boxes are ticked.
+fn filter_button(ui: &mut Ui, filter: &mut ExplorerFilter) {
+    let mut active = filter.any();
+    let tip = if active {
+        "Some files are hidden by the filter. Click to change it"
+    } else {
+        "Showing all files. Click to choose which files to show"
+    };
+    // The click is read from the response below, to open the menu; the
+    // flipped flag is not used.
+    let button = small_toggle_button(ui, Icon::Filter, HEADER_BUTTON_SIZE, "Filter files", tip, &mut active);
+    egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.checkbox(&mut filter.markdown_only, "Markdown files only");
+        ui.checkbox(&mut filter.unsaved_only, "Unsaved edits only");
+        ui.checkbox(&mut filter.hide_closed_terminals, "Hide closed terminals");
+    });
+}
+
+/// True when the filter lets `file` into the tree. Unsaved edits narrow
+/// everything else down; a terminal file counts as Markdown for the
+/// Markdown filter (terminals are not documents to hide), and is hidden
+/// only by the closed terminals filter.
+fn file_is_shown(file: &FsNode, context: &TreeContext) -> bool {
+    let filter = context.filter;
+    if filter.unsaved_only && !context.dirty_files.iter().any(|path| path == &file.path) {
+        return false;
+    }
+    if is_terminal_path(&file.path) {
+        return !filter.hide_closed_terminals || terminal_is_running(file, context);
+    }
+    !filter.markdown_only || is_markdown_path(&file.path)
+}
+
+/// True when a `.tmux` file's session is running.
+fn terminal_is_running(file: &FsNode, context: &TreeContext) -> bool {
+    let session = session_name_for_file(&file.path);
+    context.terminals.is_some_and(|rows| rows.iter().any(|row| row.info.name == session))
+}
+
+/// True when the filter lets a folder into the tree: always, except with
+/// "Unsaved edits only", where only the folders holding an unsaved file stay.
+fn folder_is_shown(folder: &FsNode, context: &TreeContext) -> bool {
+    !context.filter.unsaved_only || context.dirty_files.iter().any(|path| path.starts_with(&folder.path))
 }
 
 /// What the tree shows before any folder is added (the first run): a
@@ -399,8 +443,10 @@ fn show_children(
             }
             for child in children.iter_mut() {
                 if child.is_folder() {
-                    show_folder(ui, child, context, edits, action);
-                } else if !context.markdown_only || is_markdown_path(&child.path) || is_terminal_path(&child.path) {
+                    if folder_is_shown(child, context) {
+                        show_folder(ui, child, context, edits, action);
+                    }
+                } else if file_is_shown(child, context) {
                     show_file(ui, child, context, edits, action);
                 }
             }

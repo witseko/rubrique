@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use crate::ai::AiSettings;
 use crate::remote::settings_text;
 use crate::settings::accessibility::AccessibilitySettings;
+use crate::settings::explorer_filter::ExplorerFilter;
 use crate::settings::layout::LayoutSettings;
 use crate::settings::privacy::PrivacySettings;
 use crate::settings::text_highlight::TextHighlightSettings;
@@ -16,6 +17,7 @@ use crate::theme::code_colors::CodeColors;
 use crate::voice::VoiceSettings;
 
 pub mod accessibility;
+pub mod explorer_filter;
 pub mod layout;
 pub mod privacy;
 pub mod text_highlight;
@@ -30,8 +32,8 @@ pub struct Settings {
     pub last_file: Option<PathBuf>,
     /// Every tab open at the end of the last session, left to right.
     pub open_tabs: Vec<PathBuf>,
-    /// The explorer's "Markdown only" filter (the funnel in the Files header).
-    pub markdown_only: bool,
+    /// The explorer's file filter (the funnel in the Files header).
+    pub explorer_filter: ExplorerFilter,
     /// Mark files that have notes in the explorer.
     pub note_marks: bool,
     /// Inner window size (width, height) in points.
@@ -105,6 +107,7 @@ impl Settings {
                 || settings.remote.parse_line(key.trim(), value)
                 || settings.layout.parse_line(key.trim(), value)
                 || settings.text_highlight.parse_line(key.trim(), value)
+                || settings.explorer_filter.parse_line(key.trim(), value)
             {
                 continue;
             }
@@ -114,7 +117,6 @@ impl Settings {
                 "last_file" => settings.last_file = from_settings_text(value),
                 "tab" => settings.open_tabs.extend(from_settings_text(value)),
                 "terminal_order" if !value.is_empty() => settings.terminal_order.push(value.to_string()),
-                "markdown_only" => settings.markdown_only = value == "true",
                 "note_marks" => settings.note_marks = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
                 "window_height" => height = value.parse::<f32>().ok(),
@@ -155,9 +157,8 @@ impl Settings {
             lines
         });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nmarkdown_only={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}",
             last_file,
-            self.markdown_only,
             self.note_marks,
             self.theme.id(),
             self.code_colors.id(),
@@ -169,6 +170,7 @@ impl Settings {
             self.remote.to_lines(),
             self.layout.to_lines(),
             self.text_highlight.to_lines(),
+            self.explorer_filter.to_lines(),
         )
     }
 }
@@ -263,7 +265,7 @@ mod tests {
             folders: vec![PathBuf::from("/home/a/my notes"), PathBuf::from("/work/docs"), remote_folder.clone()],
             last_file: Some(PathBuf::from("/home/a/my notes/x=y.md")),
             open_tabs: vec![PathBuf::from("/home/a/my notes/x=y.md"), PathBuf::from("/work/docs/photo.png")],
-            markdown_only: true,
+            explorer_filter: ExplorerFilter { markdown_only: true, unsaved_only: true, hide_closed_terminals: true },
             note_marks: true,
             window_size: Some((1200.0, 800.5)),
             theme: ThemeChoice::Named("dark".to_string()),
@@ -271,6 +273,8 @@ mod tests {
             accessibility: AccessibilitySettings {
                 text_size: accessibility::TextSize::Larger,
                 editor_font_size: 15,
+                page_zoom: 120,
+                show_menu_bar: false,
                 reduce_motion: true,
                 strong_focus: true,
                 line_numbers: true,
@@ -327,7 +331,10 @@ mod tests {
 
     #[test]
     fn round_trip_without_window_size() {
-        let settings = Settings { markdown_only: true, ..Settings::default() };
+        let settings = Settings {
+            explorer_filter: ExplorerFilter { markdown_only: true, ..ExplorerFilter::default() },
+            ..Settings::default()
+        };
         assert_eq!(Settings::parse(&settings.to_text()), settings);
     }
 

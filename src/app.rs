@@ -16,6 +16,7 @@ mod find;
 mod helm;
 mod images;
 mod install;
+mod menu_bar;
 mod naming;
 mod new_entry;
 mod open_path;
@@ -65,7 +66,7 @@ use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::scratch::{create_scratch, rename_target};
-use crate::settings::accessibility::{TextSize, ZoomGesture};
+use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
 use crate::settings::view::{
     AiInfo, PrivacyInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
@@ -141,6 +142,13 @@ const TEXT_LARGER: [KeyboardShortcut; 2] =
     [KeyboardShortcut::new(Modifiers::COMMAND, Key::Plus), KeyboardShortcut::new(Modifiers::COMMAND, Key::Equals)];
 const TEXT_SMALLER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Minus);
 const TEXT_DEFAULT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Num0);
+/// Zoom of the text area only (editor and preview): the same keys with Alt.
+const PAGE_LARGER: [KeyboardShortcut; 2] = [
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::Plus),
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::Equals),
+];
+const PAGE_SMALLER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::Minus);
+const PAGE_DEFAULT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::ALT), Key::Num0);
 const LOCK: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::L);
 const UNDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
 const REDO: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::Z);
@@ -281,6 +289,8 @@ pub struct RubriqueApp {
     quit_confirmed: bool,
     /// Cmd/Ctrl + wheel and pinch zoom gathered toward the next text size.
     zoom_gesture: ZoomGesture,
+    /// The same for the text area, when the pointer is over it.
+    page_zoom_gesture: ZoomGesture,
     /// Message for the status bar and the egui time (seconds) it was first
     /// shown; `NaN` until the next frame fills it in.
     status_message: Option<(String, f64)>,
@@ -423,6 +433,7 @@ impl RubriqueApp {
             pending: None,
             quit_confirmed: false,
             zoom_gesture: ZoomGesture::default(),
+            page_zoom_gesture: ZoomGesture::default(),
             status_message: None,
             stats: None,
             window_title: String::new(),
@@ -906,8 +917,25 @@ impl RubriqueApp {
     }
 
     /// Cmd/Ctrl + plus, minus and 0: the next text size, the one before, the
-    /// default. Cmd/Ctrl + mouse wheel and trackpad pinch step the same sizes.
+    /// default. Cmd/Ctrl + mouse wheel and trackpad pinch step the same sizes,
+    /// except over the text area, where they zoom only that (as do the same
+    /// keys with Alt).
     fn handle_text_zoom(&mut self, ctx: &Context) {
+        // The Alt keys first: Cmd+Alt+plus would also match Cmd+plus.
+        let page = self.settings.accessibility.page_zoom;
+        let page_zoom = if ctx.input_mut(|input| input.consume_shortcut(&PAGE_DEFAULT)) {
+            DEFAULT_PAGE_ZOOM
+        } else if ctx.input_mut(|input| PAGE_LARGER.iter().any(|keys| input.consume_shortcut(keys))) {
+            page_zoom_larger(page)
+        } else if ctx.input_mut(|input| input.consume_shortcut(&PAGE_SMALLER)) {
+            page_zoom_smaller(page)
+        } else {
+            page
+        };
+        if page_zoom != page {
+            self.change_page_zoom(ctx, page_zoom);
+            return;
+        }
         let current = self.settings.accessibility.text_size;
         let size = if ctx.input_mut(|input| input.consume_shortcut(&TEXT_DEFAULT)) {
             TextSize::Default
@@ -919,13 +947,37 @@ impl RubriqueApp {
             // egui turns the wheel into zoom while Cmd/Ctrl is down (and
             // leaves the scroll delta at zero, so nothing scrolls), and folds
             // a pinch into the same factor.
-            self.zoom_gesture.step(current, ctx.input(egui::InputState::zoom_delta))
+            let factor = ctx.input(egui::InputState::zoom_delta);
+            let over_page = self
+                .ask
+                .page_rect
+                .zip(ctx.input(|input| input.pointer.hover_pos()))
+                .is_some_and(|(rect, pointer)| rect.contains(pointer));
+            if over_page {
+                let zoom = match self.page_zoom_gesture.direction(factor) {
+                    1 => page_zoom_larger(page),
+                    -1 => page_zoom_smaller(page),
+                    _ => page,
+                };
+                if zoom != page {
+                    self.change_page_zoom(ctx, zoom);
+                }
+                return;
+            }
+            self.zoom_gesture.step(current, factor)
         };
         if size != current {
             self.settings.accessibility.text_size = size;
             apply_accessibility(ctx, &self.settings.accessibility);
             self.show_status(format!("Text size: {} ({}%)", size.name(), (size.scale() * 100.0).round()));
         }
+    }
+
+    /// Zoom the text area (editor and preview) to `percent`.
+    fn change_page_zoom(&mut self, ctx: &Context, percent: u16) {
+        self.settings.accessibility.page_zoom = percent;
+        apply_accessibility(ctx, &self.settings.accessibility);
+        self.show_status(format!("Text area zoom: {percent}%"));
     }
 
     /// The theme and code colors, then the accessibility settings on top of them.
@@ -1563,7 +1615,7 @@ impl RubriqueApp {
         let context = TreeContext {
             root: Path::new(""),
             can_remove_roots: self.roots.len() > 1,
-            markdown_only: self.settings.markdown_only,
+            filter: self.settings.explorer_filter,
             open_file: open_path.as_deref(),
             dirty_files: &dirty_files,
             note_marks: self.settings.note_marks.then_some(&self.note_marks),
@@ -1583,7 +1635,7 @@ impl RubriqueApp {
             ui,
             &mut self.roots,
             &mut self.settings.layout,
-            &mut self.settings.markdown_only,
+            &mut self.settings.explorer_filter,
             &context,
             &mut ExplorerEdits {
                 rename: &mut self.tree_rename,
@@ -2772,6 +2824,8 @@ impl eframe::App for RubriqueApp {
             return;
         }
         self.handle_shortcuts(&ctx);
+        // The preview reads the text area zoom while it draws.
+        crate::markdown::render::set_page_zoom(self.settings.accessibility.page_scale());
         self.poll_disk(&ctx);
         self.poll_drafts(&ctx);
         self.poll_naming();
@@ -2788,6 +2842,9 @@ impl eframe::App for RubriqueApp {
         // The page fills the whole central area; editor and preview add their own margins.
         let page_frame = egui::Frame::central_panel(&style).fill(page_fill(&style.visuals)).inner_margin(0);
 
+        if self.settings.accessibility.show_menu_bar {
+            egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
+        }
         egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
             // Settings sit at the bottom of the explorer, out of the way.
