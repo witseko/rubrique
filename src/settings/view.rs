@@ -17,17 +17,19 @@ use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::install::view::{InstallAction, install_prompt};
 use crate::install::{InstallStatus, Recipe};
 use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, PAGE_ZOOM_PERCENTS, TextSize};
-use crate::settings::privacy::{LOCK_AFTER_CHOICES, PrivacySettings};
+use crate::settings::privacy::PrivacySettings;
 use crate::theme::catalog::{ThemeChoice, Themes};
 use crate::theme::code_colors::CodeColors;
 use crate::theme::palette::{Base, Palette, Rgb, Theme};
 use crate::voice::VoiceSettings;
 
 mod highlight_rules;
+mod privacy_page;
 mod skill_list;
 
 use highlight_rules::highlights_section;
 pub use highlight_rules::{HighlightInfo, RuleWriter};
+use privacy_page::privacy_section;
 use skill_list::{SkillsInfo, skills_section};
 
 /// Something the user asked for in the settings panel.
@@ -469,7 +471,10 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
     {
         changed |= ui
             .checkbox(&mut settings.show_menu_bar, "Show menu bar")
-            .on_hover_text("The File, View and Settings menus along the top. Off: more room for the page")
+            .on_hover_text(
+                "The File, View and Settings menus along the top. Off: more room for the page, and a gear at the \
+                 bottom of the file list opens Settings (or Ctrl+,)",
+            )
             .changed();
     }
 
@@ -538,120 +543,9 @@ fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Op
     action
 }
 
-/// Width of the "Lock after" drop-down.
-const LOCK_PICKER_WIDTH: f32 = 120.0;
-
-/// "Off", "1 minute", "15 minutes".
-fn lock_after_label(minutes: u32) -> String {
-    match minutes {
-        0 => "Off".to_string(),
-        1 => "1 minute".to_string(),
-        _ => format!("{minutes} minutes"),
-    }
-}
-
 /// A button that can be greyed out; true when clicked.
 fn enabled_button(ui: &mut Ui, label: &str, enabled: bool) -> bool {
     ui.add_enabled(enabled, egui::Button::new(label)).clicked()
-}
-
-/// Privacy: encrypted scratches and the app PIN.
-fn privacy_section(ui: &mut Ui, privacy: PrivacyInfo) -> Option<SettingsAction> {
-    let PrivacyInfo { settings, unlocked, touch_id_available } = privacy;
-    let mut action = None;
-
-    ui.label(RichText::new("Encrypted scratches").strong());
-    ui.label(
-        RichText::new(
-            "Encrypted scratches are saved with a password. They open only after you enter it, and AI \
-             tools never see them. Each scratch can be encrypted on its own, at any time: the lock button \
-             in the status bar, right-click it in the explorer, or Cmd+Shift+N for a new encrypted one.",
-        )
-        .weak(),
-    );
-    let has_password = settings.vault.is_some();
-    let mut encrypt = settings.encrypt_scratches;
-    if ui.checkbox(&mut encrypt, "Encrypt every new scratch (Cmd+N)").changed() {
-        if encrypt && !has_password {
-            action = Some(SettingsAction::SetScratchPassword);
-        } else {
-            settings.encrypt_scratches = encrypt;
-        }
-    }
-    if has_password {
-        ui.label(if unlocked { "Unlocked for this session." } else { "Locked: enter the password to read them." });
-        ui.horizontal_wrapped(|ui| {
-            let (label, toggle) = if unlocked {
-                ("Lock scratches", SettingsAction::LockScratches)
-            } else {
-                ("Unlock…", SettingsAction::UnlockScratches)
-            };
-            if enabled_button(ui, label, true) {
-                action = Some(toggle);
-            }
-            if enabled_button(ui, "Change password…", true) {
-                action = Some(SettingsAction::ChangeScratchPassword);
-            }
-            if enabled_button(ui, "Encrypt existing scratches", unlocked) {
-                action = Some(SettingsAction::EncryptExistingScratches);
-            }
-        });
-        if touch_id_available {
-            // The app flips the setting itself, once the key is in the keychain.
-            let mut touch_id = settings.touch_id;
-            if ui.checkbox(&mut touch_id, "Open encrypted scratches with Touch ID").changed() {
-                action = Some(SettingsAction::SetTouchId(touch_id));
-            }
-            ui.label(
-                RichText::new(
-                    "The scratch key is kept in this Mac's keychain and given out only after your fingerprint. \
-                     Adding or removing a fingerprint turns this off. Needs the Rubrique app from a release.",
-                )
-                .weak(),
-            );
-        }
-        ui.label(
-            RichText::new("If you forget the password, encrypted scratches cannot be read. There is no way back.")
-                .color(ui.visuals().warn_fg_color),
-        );
-    }
-
-    ui.add_space(12.0);
-    ui.label(RichText::new("App PIN").strong());
-    ui.label(
-        RichText::new(
-            "Ask for a PIN when Rubrique opens and after it sits idle. The PIN locks the window only: \
-             it does not encrypt your files.",
-        )
-        .weak(),
-    );
-    let has_pin = settings.pin_hash.is_some();
-    ui.horizontal_wrapped(|ui| {
-        if enabled_button(ui, if has_pin { "Change PIN…" } else { "Set PIN…" }, true) {
-            action = Some(SettingsAction::SetPin);
-        }
-        if enabled_button(ui, "Remove PIN…", has_pin) {
-            action = Some(SettingsAction::RemovePin);
-        }
-        if enabled_button(ui, "Lock app now", has_pin) {
-            action = Some(SettingsAction::LockNow);
-        }
-    });
-    ui.add_enabled_ui(has_pin, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Lock after");
-            egui::ComboBox::from_id_salt("privacy-lock-after")
-                .selected_text(lock_after_label(settings.lock_after_minutes))
-                .width(LOCK_PICKER_WIDTH)
-                .show_ui(ui, |ui| {
-                    for minutes in LOCK_AFTER_CHOICES {
-                        ui.selectable_value(&mut settings.lock_after_minutes, minutes, lock_after_label(minutes));
-                    }
-                });
-            ui.label(RichText::new("without use").weak());
-        });
-    });
-    action
 }
 
 /// Size of help lines under a command.

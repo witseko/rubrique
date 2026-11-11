@@ -468,7 +468,7 @@ fn chevron(ui: &mut Ui, open: bool) {
 
 /// An on and off switch: a rounded track with a knob that slides to the
 /// right when on. Flips `on` when clicked.
-fn switch(ui: &mut Ui, on: &mut bool, size: Vec2, label: &str) -> Response {
+pub(super) fn switch(ui: &mut Ui, on: &mut bool, size: Vec2, label: &str) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
     if response.clicked() {
         *on = !*on;
