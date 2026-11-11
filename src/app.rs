@@ -36,7 +36,7 @@ use crate::ai::mention_list::{self, Suggestion};
 use crate::ai::skills::{self, Skill, SourceFolder};
 use crate::ai::{self, AiTool};
 use crate::document::highlighting::Syntax;
-use crate::document::highlighting::install_text_rules;
+use crate::document::highlighting::{install_text_rules, takes_text_highlights};
 use crate::document::media_view::{MediaEvent, image_pixels, show_image, show_video};
 use crate::document::merge::MergeSession;
 use crate::document::merge_view::{MergeAction, show_merge};
@@ -116,6 +116,7 @@ const STATUS_SEPARATOR_HEIGHT: f32 = 16.0;
 
 const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const TOGGLE_PREVIEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
+const TOGGLE_HIGHLIGHTS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::H);
 const ADD_NOTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 const FORMAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
 const OPEN_IN_BROWSER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::B);
@@ -418,7 +419,7 @@ impl RubriqueApp {
         let themes = Themes::load(themes_folder().as_deref());
         apply_theme(ctx, &themes, &settings.theme);
         install_code_colors(ctx, settings.code_colors);
-        install_text_rules(ctx, &settings.text_highlight.rules);
+        install_text_rules(ctx, settings.text_highlight.active_rules());
         apply_accessibility(ctx, &settings.accessibility);
         // Rubrique steps through its own text sizes instead (see `handle_text_zoom`).
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
@@ -826,6 +827,11 @@ impl RubriqueApp {
         if ctx.input_mut(|input| input.consume_shortcut(&FORMAT)) {
             self.format_text(ctx);
         }
+        // Before Find and replace: on Linux and Windows that is Ctrl+H, which
+        // Ctrl+Shift+H would also match.
+        if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_HIGHLIGHTS)) {
+            self.toggle_text_highlights(ctx);
+        }
         if ctx.input_mut(|input| input.consume_shortcut(&FIND_REPLACE)) {
             self.open_find(ctx, true);
         }
@@ -978,6 +984,15 @@ impl RubriqueApp {
         self.settings.accessibility.page_zoom = percent;
         apply_accessibility(ctx, &self.settings.accessibility);
         self.show_status(format!("Text area zoom: {percent}%"));
+    }
+
+    /// Turn the text highlight rules on or off everywhere, and say which.
+    fn toggle_text_highlights(&mut self, ctx: &Context) {
+        let highlights = &mut self.settings.text_highlight;
+        highlights.enabled = !highlights.enabled;
+        install_text_rules(ctx, highlights.active_rules());
+        let state = if highlights.enabled { "on" } else { "off" };
+        self.show_status(format!("Text highlights {state}"));
     }
 
     /// The theme and code colors, then the accessibility settings on top of them.
@@ -1192,7 +1207,7 @@ impl RubriqueApp {
         );
         // Rules edited in the Highlights group color plain text at once;
         // they are compiled again only when they changed.
-        install_text_rules(ui.ctx(), &self.settings.text_highlight.rules);
+        install_text_rules(ui.ctx(), self.settings.text_highlight.active_rules());
         let Some(action) = action else {
             return;
         };
@@ -2446,7 +2461,8 @@ impl RubriqueApp {
             self.open_ask(ui.ctx());
         }
         let formattable = self.open_file.path().and_then(Language::from_path);
-        if is_page || formattable.is_some() || self.open_chart().is_some() {
+        let highlightable = self.open_file.path().is_some_and(takes_text_highlights);
+        if is_page || formattable.is_some() || highlightable || self.open_chart().is_some() {
             status_separator(ui);
         }
         if is_page {
@@ -2462,6 +2478,9 @@ impl RubriqueApp {
             }
         }
         self.helm_button(ui);
+        if highlightable {
+            self.highlights_button(ui);
+        }
         if is_page {
             status_separator(ui);
             self.voice_buttons(ui);
@@ -2471,6 +2490,18 @@ impl RubriqueApp {
             ui.label(format!("{}   ", stats.summary()));
         }
         self.changes_status_button(ui);
+    }
+
+    /// The highlighter: filled while the text highlight rules are on; a
+    /// click turns them on or off.
+    fn highlights_button(&mut self, ui: &mut Ui) {
+        let enabled = self.settings.text_highlight.enabled;
+        let state = if enabled { "on" } else { "off" };
+        let shortcut = ui.ctx().format_shortcut(&TOGGLE_HIGHLIGHTS);
+        let tip = format!("Text highlights: {state} ({shortcut})");
+        if icon_button(ui, Icon::Highlighter, "Text highlights", &tip, enabled).clicked() {
+            self.toggle_text_highlights(ui.ctx());
+        }
     }
 
     /// "Encrypt" on a plain scratch, "Encrypted" (with a menu to undo it)

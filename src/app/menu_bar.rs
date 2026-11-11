@@ -7,7 +7,7 @@ use eframe::egui::{self, Context, KeyboardShortcut, Ui};
 
 use super::{
     ASK, NEW_ENCRYPTED_SCRATCH, NEW_SCRATCH, OPEN_PATH, PAGE_DEFAULT, PAGE_LARGER, PAGE_SMALLER, RubriqueApp, SAVE,
-    TOGGLE_PREVIEW, TOGGLE_SETTINGS,
+    TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_SETTINGS,
 };
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, page_zoom_larger, page_zoom_smaller};
 use crate::theme::catalog::ThemeChoice;
@@ -70,6 +70,11 @@ impl RubriqueApp {
         let mut changed = false;
         if item(ui, "Preview / source", Some(&TOGGLE_PREVIEW)) {
             self.toggle_preview();
+        }
+        let mut highlights = self.settings.text_highlight.enabled;
+        let shortcut = ctx.format_shortcut(&TOGGLE_HIGHLIGHTS);
+        if ui.add(egui::Checkbox::new(&mut highlights, "Text highlights")).on_hover_text(shortcut).changed() {
+            self.toggle_text_highlights(ctx);
         }
         ui.separator();
         ui.menu_button("Text size", |ui| {

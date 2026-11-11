@@ -38,6 +38,12 @@ pub enum Syntax {
     Sql,
 }
 
+/// The text highlight rules color this file: plain text (no code colors),
+/// or a Markdown file, whose preview colors its plain text.
+pub fn takes_text_highlights(path: &Path) -> bool {
+    crate::explorer::tree::is_markdown_path(path) || Syntax::of(path).is_none()
+}
+
 impl Syntax {
     /// The syntax of a file, from its name; `None` for plain text.
     pub fn of(path: &Path) -> Option<Syntax> {
@@ -211,6 +217,12 @@ impl HighlightStyle {
             ctx.memory_mut(|memory| memory.caches.cache::<RuleSpanCache>().get((text, &*self.text_rules)).clone());
         found.iter().map(|(range, color)| (range.clone(), self.rule_color(*color))).collect()
     }
+
+    /// How many pieces of `text` each installed rule colors, by its place in
+    /// the rules. Empty while no rules are installed (highlights off).
+    pub fn rule_match_counts(&self, text: &str) -> Vec<usize> {
+        self.text_rules.match_counts(text)
+    }
 }
 
 /// The rule matches of a text, reused while the text and the rules stay the same.
@@ -306,6 +318,16 @@ fn append_plain_text(job: &mut LayoutJob, text: &str, style: &HighlightStyle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_text_and_markdown_take_text_highlights() {
+        assert!(takes_text_highlights(Path::new("logs/server.log")));
+        assert!(takes_text_highlights(Path::new("notes/todo.txt")));
+        assert!(takes_text_highlights(Path::new("README")));
+        assert!(takes_text_highlights(Path::new("notes/ideas.md")));
+        assert!(!takes_text_highlights(Path::new("src/main.rs")));
+        assert!(!takes_text_highlights(Path::new("package.json")));
+    }
 
     #[test]
     fn syntax_from_file_names() {

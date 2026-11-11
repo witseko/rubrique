@@ -177,8 +177,8 @@ pub fn pattern_error(pattern: &str) -> Option<String> {
 pub struct CompiledRules {
     /// The rules as written, to tell when they changed.
     source: Vec<HighlightRule>,
-    /// The usable rules, in order.
-    compiled: Vec<(Regex, RuleColor)>,
+    /// The usable rules, in order, each with its place in `source`.
+    compiled: Vec<(usize, Regex)>,
 }
 
 impl CompiledRules {
@@ -186,8 +186,9 @@ impl CompiledRules {
     pub fn new(rules: &[HighlightRule]) -> Self {
         let compiled = rules
             .iter()
-            .filter(|rule| rule.enabled)
-            .filter_map(|rule| Some((compile(&rule.pattern).ok()?, rule.color)))
+            .enumerate()
+            .filter(|(_, rule)| rule.enabled)
+            .filter_map(|(index, rule)| Some((index, compile(&rule.pattern).ok()?)))
             .collect();
         CompiledRules { source: rules.to_vec(), compiled }
     }
@@ -201,20 +202,36 @@ impl CompiledRules {
     /// piece belongs to the first rule that matched it; a match that would
     /// overlap a piece already taken is dropped.
     pub fn spans(&self, text: &str) -> Vec<(Range<usize>, RuleColor)> {
+        self.pieces(text).into_iter().map(|(range, index)| (range, self.source[index].color)).collect()
+    }
+
+    /// How many pieces of `text` each rule colors, by its place in the rules
+    /// (zero for rules that are off or broken), for Settings' sample.
+    pub fn match_counts(&self, text: &str) -> Vec<usize> {
+        let mut counts = vec![0; self.source.len()];
+        for (_, index) in self.pieces(text) {
+            counts[index] += 1;
+        }
+        counts
+    }
+
+    /// The pieces [`CompiledRules::spans`] colors, each with the place of the
+    /// rule that took it.
+    fn pieces(&self, text: &str) -> Vec<(Range<usize>, usize)> {
         if text.len() > MAX_HIGHLIGHT_BYTES {
             return Vec::new();
         }
-        // Start of each piece taken so far, with its end and color.
-        let mut taken: BTreeMap<usize, (usize, RuleColor)> = BTreeMap::new();
-        for (regex, color) in &self.compiled {
+        // Start of each piece taken so far, with its end and rule.
+        let mut taken: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+        for (index, regex) in &self.compiled {
             for found in regex.find_iter(text) {
                 let range = found.range();
                 if !range.is_empty() && !overlaps_taken(&taken, &range) {
-                    taken.insert(range.start, (range.end, *color));
+                    taken.insert(range.start, (range.end, *index));
                 }
             }
         }
-        taken.into_iter().map(|(start, (end, color))| (start..end, color)).collect()
+        taken.into_iter().map(|(start, (end, index))| (start..end, index)).collect()
     }
 }
 
@@ -234,7 +251,7 @@ impl std::hash::Hash for CompiledRules {
 
 /// Whether `range` overlaps a taken piece. Pieces never overlap each other,
 /// so only the last one starting before `range` ends can reach into it.
-fn overlaps_taken(taken: &BTreeMap<usize, (usize, RuleColor)>, range: &Range<usize>) -> bool {
+fn overlaps_taken(taken: &BTreeMap<usize, (usize, usize)>, range: &Range<usize>) -> bool {
     taken.range(..range.end).next_back().is_some_and(|(_, (end, _))| *end > range.start)
 }
 
@@ -316,6 +333,17 @@ mod tests {
             HighlightRule::new("Digits", "[0-9]+", RuleColor::Number),
         ]);
         assert_eq!(pieces(&rules, "abc 12"), [("12", RuleColor::Number)]);
+    }
+
+    #[test]
+    fn match_counts_follow_the_rule_that_wins() {
+        let rules = CompiledRules::new(&[
+            HighlightRule::new("Year", "20[0-9]{2}", RuleColor::Key),
+            HighlightRule { enabled: false, ..HighlightRule::new("Off", "[a-z]+", RuleColor::Name) },
+            HighlightRule::new("Number", "[0-9]+", RuleColor::Number),
+        ]);
+        // 2026 goes to Year, so Number only counts 7 and 12.
+        assert_eq!(rules.match_counts("in 2026, 7 of 12"), [1, 0, 2]);
     }
 
     #[test]
