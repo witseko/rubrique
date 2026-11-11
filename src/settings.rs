@@ -298,6 +298,7 @@ mod tests {
                 vault: Some(crate::crypto::Vault::create("pw").1),
                 pin_hash: Some(crate::crypto::pin_hash("1234")),
                 lock_after_minutes: 15,
+                touch_id: true,
             },
             remote: crate::remote::RemoteSettings { enabled: true, ssh_program: "/opt/ssh".to_string() },
             layout: layout::LayoutSettings {

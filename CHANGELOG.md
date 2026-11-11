@@ -15,6 +15,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   highlights turns the text highlight rules off and on again. The button
   is filled while they are on, the rules are kept while they are off, and
   the choice is remembered for next time.
+- **Touch ID for encrypted scratches** (macOS): Settings → Privacy → **Open
+  encrypted scratches with Touch ID**. A locked scratch, or the Unlock
+  dialog, asks for your fingerprint as soon as it shows; cancel and the
+  password field is still there, with a **Use Touch ID** button to ask
+  again. The scratch key is kept in this Mac's keychain and given out only
+  after the fingerprints enrolled when you turned it on; add or remove one
+  and Touch ID turns itself off until you set it up again. Works in the
+  Rubrique app from a release, which carries the signature macOS asks for.
 
 ### Changed
 
@@ -39,6 +47,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   menus are in the system menu bar at the top of the screen, after the
   Rubrique menu (About, Settings, Hide, Quit), instead of a bar inside the
   window. Other systems keep the bar in the window, which Settings can hide.
+- **A clearer page for a locked scratch.** The page centers a padlock, the
+  scratch's name, an outlined password field that is ready to type in, and
+  a full-width **Unlock** button under it (and **Use Touch ID** under that
+  when it is on). Before, the field had no visible box in most themes, so
+  only a faint "Password" showed, far from the button.
 
 ### Fixed
 

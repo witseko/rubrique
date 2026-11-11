@@ -54,10 +54,21 @@ regex = "1.13.1"
 # place of the menu bar drawn inside the window on other systems.
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21.2", default-features = false }
+# Touch ID for encrypted scratches: the scratch key goes into the data
+# protection keychain behind the fingerprint (security-framework, a safe
+# wrapper over the Security framework), and LocalAuthentication says whether
+# a fingerprint is enrolled at all (objc2 bindings; objc2 is already in the
+# tree through winit and rfd). Only the classes used are turned on.
+security-framework = { version = "3.7", default-features = false, features = ["OSX_10_15"] }
+core-foundation = "0.10"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "LAContext"] }
 
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than
-# `forbid` because date.rs needs one FFI call (`localtime_r`); that single
-# use carries a narrow `#[expect(unsafe_code, reason = ...)]`.
+# `forbid` because date.rs needs one FFI call (`localtime_r`) and
+# touch_id/macos.rs a few Objective-C calls; each use carries a narrow
+# `#[expect(unsafe_code, reason = ...)]`.
 [lints.rust]
 unsafe_code = "deny"
 

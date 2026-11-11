@@ -88,6 +88,8 @@ pub enum SettingsAction {
     UnlockScratches,
     /// Forget the scratch password until it is entered again.
     LockScratches,
+    /// Open encrypted scratches with Touch ID (`true`) or the password only.
+    SetTouchId(bool),
     /// Encrypt the plain scratches already in the folder.
     EncryptExistingScratches,
     /// Choose a PIN, or a new one.
@@ -148,6 +150,8 @@ pub struct PrivacyInfo<'a> {
     pub settings: &'a mut PrivacySettings,
     /// The scratch password was entered in this session.
     pub unlocked: bool,
+    /// A fingerprint is enrolled, so Touch ID can be offered (macOS).
+    pub touch_id_available: bool,
 }
 
 /// Where scratch files go, and remote folder settings, for the Files section.
@@ -553,7 +557,7 @@ fn enabled_button(ui: &mut Ui, label: &str, enabled: bool) -> bool {
 
 /// Privacy: encrypted scratches and the app PIN.
 fn privacy_section(ui: &mut Ui, privacy: PrivacyInfo) -> Option<SettingsAction> {
-    let PrivacyInfo { settings, unlocked } = privacy;
+    let PrivacyInfo { settings, unlocked, touch_id_available } = privacy;
     let mut action = None;
 
     ui.label(RichText::new("Encrypted scratches").strong());
@@ -592,6 +596,20 @@ fn privacy_section(ui: &mut Ui, privacy: PrivacyInfo) -> Option<SettingsAction> 
                 action = Some(SettingsAction::EncryptExistingScratches);
             }
         });
+        if touch_id_available {
+            // The app flips the setting itself, once the key is in the keychain.
+            let mut touch_id = settings.touch_id;
+            if ui.checkbox(&mut touch_id, "Open encrypted scratches with Touch ID").changed() {
+                action = Some(SettingsAction::SetTouchId(touch_id));
+            }
+            ui.label(
+                RichText::new(
+                    "The scratch key is kept in this Mac's keychain and given out only after your fingerprint. \
+                     Adding or removing a fingerprint turns this off. Needs the Rubrique app from a release.",
+                )
+                .weak(),
+            );
+        }
         ui.label(
             RichText::new("If you forget the password, encrypted scratches cannot be read. There is no way back.")
                 .color(ui.visuals().warn_fg_color),

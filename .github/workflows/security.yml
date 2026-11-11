@@ -27,6 +27,12 @@ jobs:
         checks: [advisories, "bans licenses sources"]
     steps:
       - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: dtolnay/rust-toolchain@stable
+      # The cargo-deny binary comes from its GitHub release through an
+      # installer with retries. The EmbarkStudios/cargo-deny-action image
+      # downloads it with a bare curl inside a Docker build, which came back
+      # as a non-gzip page (rate limit) two runs in a row.
+      - uses: taiki-e/install-action@v2
         with:
-          command: check ${{ matrix.checks }}
+          tool: cargo-deny
+      - run: cargo deny check ${{ matrix.checks }}

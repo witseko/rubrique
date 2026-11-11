@@ -1,8 +1,9 @@
 //! Today's local date as `YYYY-MM-DD` and the time of day, using the C
 //! library (no date crate).
 //!
-//! The only `unsafe` code in Rubrique lives here: one call to `localtime_r`,
-//! wrapped in the safe function [`local_time`].
+//! One of the two places with `unsafe` code in Rubrique (the other is
+//! `touch_id/macos.rs`): one call to `localtime_r`, wrapped in the safe
+//! function [`local_time`].
 
 use std::ffi::{c_char, c_int, c_long};
 use std::time::{SystemTime, UNIX_EPOCH};

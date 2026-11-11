@@ -17,6 +17,8 @@ pub struct PrivacySettings {
     pub pin_hash: Option<String>,
     /// Lock the window after this many idle minutes; 0 means never.
     pub lock_after_minutes: u32,
+    /// Touch ID opens encrypted scratches (macOS): the key is in the keychain.
+    pub touch_id: bool,
 }
 
 impl PrivacySettings {
@@ -27,6 +29,7 @@ impl PrivacySettings {
             "scratch_vault" => self.vault = VaultInfo::parse(value),
             "pin_hash" => self.pin_hash = (!value.is_empty()).then(|| value.to_string()),
             "lock_after_minutes" => self.lock_after_minutes = value.parse().unwrap_or(0),
+            "touch_id" => self.touch_id = value == "true",
             _ => return false,
         }
         true
@@ -35,11 +38,12 @@ impl PrivacySettings {
     /// Settings lines for [`PrivacySettings::parse_line`].
     pub fn to_lines(&self) -> String {
         format!(
-            "encrypt_scratches={}\nscratch_vault={}\npin_hash={}\nlock_after_minutes={}\n",
+            "encrypt_scratches={}\nscratch_vault={}\npin_hash={}\nlock_after_minutes={}\ntouch_id={}\n",
             self.encrypt_scratches,
             self.vault.as_ref().map(VaultInfo::to_text).unwrap_or_default(),
             self.pin_hash.as_deref().unwrap_or_default(),
             self.lock_after_minutes,
+            self.touch_id,
         )
     }
 }
@@ -65,6 +69,7 @@ mod tests {
             vault: Some(Vault::create("pw").1),
             pin_hash: Some(pin_hash("1234")),
             lock_after_minutes: 5,
+            touch_id: true,
         };
         assert_eq!(parse(&settings.to_lines()), settings);
         assert_eq!(parse(&PrivacySettings::default().to_lines()), PrivacySettings::default());

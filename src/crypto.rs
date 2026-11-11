@@ -21,7 +21,8 @@ use zeroize::Zeroizing;
 pub const MAGIC: &[u8] = b"RUBRIQUE-ENC1\n";
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 24;
-const KEY_LEN: usize = 32;
+/// Length of a vault key: what Touch ID keeps in the keychain.
+pub const KEY_LEN: usize = 32;
 /// Sealed with the key at setup, so a wrong password is caught at once.
 const CHECK_TEXT: &[u8] = b"rubrique vault";
 
@@ -103,6 +104,18 @@ impl Vault {
         vault.decrypt(file).ok()?;
         let check = vault.encrypt(CHECK_TEXT);
         Some((vault, VaultInfo { salt, check }))
+    }
+
+    /// A copy of the key, for a store that gives it back later (Touch ID).
+    pub fn key_bytes(&self) -> Zeroizing<[u8; KEY_LEN]> {
+        self.key.clone()
+    }
+
+    /// The vault from a key kept by [`Vault::key_bytes`]; `None` when it is
+    /// not the key of `info` (the password changed since it was kept).
+    pub fn from_key(key: Zeroizing<[u8; KEY_LEN]>, info: &VaultInfo) -> Option<Vault> {
+        let vault = Vault { key, salt: info.salt };
+        (vault.decrypt(&info.check).ok()?.as_slice() == CHECK_TEXT).then_some(vault)
     }
 
     /// Seal `plain` with a fresh nonce.
@@ -245,6 +258,16 @@ mod tests {
         assert_eq!(vault.decrypt(&bytes), Err(DecryptError::WrongKey));
         assert_eq!(vault.decrypt(b"plain text"), Err(DecryptError::Corrupt));
         assert_eq!(vault.decrypt(MAGIC), Err(DecryptError::Corrupt));
+    }
+
+    #[test]
+    fn a_kept_key_opens_its_own_vault_only() {
+        let (vault, info) = Vault::create("pw");
+        let file = vault.encrypt(b"kept");
+        let again = Vault::from_key(vault.key_bytes(), &info).unwrap();
+        assert_eq!(again.decrypt(&file).unwrap(), b"kept");
+        let (other, _) = Vault::create("pw");
+        assert!(Vault::from_key(other.key_bytes(), &info).is_none());
     }
 
     #[test]

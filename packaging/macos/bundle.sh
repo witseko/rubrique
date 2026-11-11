@@ -6,6 +6,10 @@
 # Signing:
 # - MACOS_SIGN_IDENTITY set, e.g. "Developer ID Application: Name (TEAMID)":
 #   signs with that identity and the hardened runtime.
+# - MACOS_PROFILE also set, the path of a Developer ID provisioning profile
+#   for the bundle identifier: embeds it and claims the application
+#   identifier, which Touch ID for encrypted scratches needs (see below).
+#   Without it the app works, but Touch ID is unavailable.
 # - APPLE_ID, APPLE_TEAM_ID and APPLE_APP_PASSWORD also set: notarizes the
 #   .dmg with Apple and staples the ticket to the .dmg and the app, so
 #   Gatekeeper opens it with no warning.
@@ -16,6 +20,7 @@ name="rubrique-$version-macos-universal"
 app="dist/Rubrique.app"
 dmg="dist/$name.dmg"
 identity="${MACOS_SIGN_IDENTITY:-}"
+profile="${MACOS_PROFILE:-}"
 
 rm -rf "$app" "$dmg" "dist/$name.zip"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -36,10 +41,33 @@ iconutil -c icns "$iconset" -o "$app/Contents/Resources/rubrique.icns"
 rm -rf "$iconset"
 
 if [ -n "$identity" ]; then
+    entitlements="packaging/macos/entitlements.plist"
+    if [ -n "$profile" ]; then
+        # Touch ID keeps the scratch key in the data protection keychain, which
+        # macOS opens only to an app whose application identifier a provisioning
+        # profile authorizes. The profile goes into the bundle and the signature
+        # claims the identifier (team id, dot, bundle identifier). Without the
+        # profile macOS refuses to start an app claiming it, so the two
+        # entitlements are added only here, to a copy of the file.
+        team="${APPLE_TEAM_ID:-$(printf "%s" "$identity" | sed -n "s/.*(\([A-Z0-9]*\))\$/\1/p")}"
+        if [ -z "$team" ]; then
+            echo "Cannot tell the team id from the identity; set APPLE_TEAM_ID" >&2
+            exit 1
+        fi
+        bundle_id=$(/usr/libexec/PlistBuddy -c "Print CFBundleIdentifier" "$app/Contents/Info.plist")
+        cp "$profile" "$app/Contents/embedded.provisionprofile"
+        entitlements="dist/entitlements.plist"
+        cp packaging/macos/entitlements.plist "$entitlements"
+        # PlistBuddy, not plutil: plutil reads the dots in these keys as a path.
+        /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $team.$bundle_id" "$entitlements"
+        /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $team" "$entitlements"
+    else
+        echo "No MACOS_PROFILE: Touch ID for encrypted scratches is unavailable in this build" >&2
+    fi
     # Hardened runtime and a secure timestamp: both needed for notarization.
     # The entitlements let the hardened runtime use the microphone.
     codesign --force --options runtime --timestamp \
-        --entitlements packaging/macos/entitlements.plist --sign "$identity" "$app"
+        --entitlements "$entitlements" --sign "$identity" "$app"
 else
     # Ad-hoc signature: keeps Apple Silicon happy, but Gatekeeper rejects it.
     codesign --force --sign - "$app"
