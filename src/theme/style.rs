@@ -79,7 +79,10 @@ pub fn apply_accessibility(ctx: &Context, settings: &AccessibilitySettings) {
 
 /// The editor font size, no animations, and thicker focus outlines.
 fn adjust_style(style: &mut Style, settings: &AccessibilitySettings) {
-    style.text_styles.insert(TextStyle::Monospace, FontId::monospace(f32::from(settings.editor_font_size)));
+    // The text area zoom grows the editor's font; the preview scales itself
+    // (see `markdown::render::set_page_zoom`).
+    let editor_size = (f32::from(settings.editor_font_size) * settings.page_scale()).round();
+    style.text_styles.insert(TextStyle::Monospace, FontId::monospace(editor_size));
     if settings.reduce_motion {
         style.animation_time = 0.0;
         style.scroll_animation = ScrollAnimation::none();

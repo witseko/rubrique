@@ -4,6 +4,7 @@ use eframe::egui::{self, Align, Color32, Layout, Margin, Rangef, RichText, Sense
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use eframe::egui::cache::{ComputerMut, FrameCache};
 
@@ -33,7 +34,7 @@ struct Look {
     file_tools: bool,
 }
 
-/// The preview of the open file.
+/// The preview of the open file, at 100% zoom.
 const PAGE: Look = Look {
     heading_sizes: [32.0, 26.0, 21.0, 18.0, 16.0, 16.0],
     heading_gaps: [28.0, 24.0, 18.0, 14.0, 14.0, 14.0],
@@ -45,9 +46,44 @@ const PAGE: Look = Look {
     file_tools: true,
 };
 
+impl Look {
+    /// The same look with every size and gap multiplied by `zoom`.
+    fn scaled(&self, zoom: f32) -> Look {
+        Look {
+            heading_sizes: self.heading_sizes.map(|size| size * zoom),
+            heading_gaps: self.heading_gaps.map(|gap| gap * zoom),
+            rule_gap: self.rule_gap * zoom,
+            body_size: self.body_size * zoom,
+            body_line_height: self.body_line_height * zoom,
+            block_gap: self.block_gap * zoom,
+            ..*self
+        }
+    }
+}
+
+/// Zoom of the page's text in the preview (1.0 is 100%), kept as the bits of
+/// an `f32`. The app sets it once per frame from the text area zoom setting.
+static PAGE_ZOOM: AtomicU32 = AtomicU32::new(0x3f80_0000);
+
+/// Zoom the preview's text by `zoom` (1.0 for none) from the next block on.
+pub fn set_page_zoom(zoom: f32) {
+    PAGE_ZOOM.store(zoom.to_bits(), Ordering::Relaxed);
+}
+
+fn page_zoom() -> f32 {
+    f32::from_bits(PAGE_ZOOM.load(Ordering::Relaxed))
+}
+
+/// The preview of the open file, at the current zoom.
+fn page_look() -> Look {
+    PAGE.scaled(page_zoom())
+}
+
 /// The preview of an HTML file: the page's sizes, without Prettify and
 /// memo rows, which rewrite the file as Markdown.
-const READ_ONLY_PAGE: Look = Look { file_tools: false, ..PAGE };
+fn read_only_page_look() -> Look {
+    Look { file_tools: false, ..page_look() }
+}
 
 /// Smaller and tighter, for AI answers.
 const COMPACT: Look = Look {
@@ -74,10 +110,11 @@ pub struct PageText {
 /// The page's text sizes, so a block edited in place keeps the look and
 /// about the height it had rendered.
 pub fn page_text() -> PageText {
+    let page = page_look();
     PageText {
-        body_size: PAGE.body_size,
-        line_height: PAGE.body_line_height,
-        code_size: PAGE.body_size * INLINE_CODE_SCALE,
+        body_size: page.body_size,
+        line_height: page.body_line_height,
+        code_size: page.body_size * INLINE_CODE_SCALE,
     }
 }
 
@@ -162,18 +199,21 @@ fn render_blocks_at(ui: &mut Ui, look: &Look, blocks: &[Block], depth: usize, ga
 
 /// Draw one top-level block (for the clickable preview).
 pub fn render_top_block(ui: &mut Ui, block: &Block) {
-    render_block(ui, &PAGE, block, 0);
+    render_block(ui, &page_look(), block, 0);
 }
 
 /// Draw one top-level block of a page that is not edited in place (the
 /// HTML preview). Code blocks still offer Copy (see `take_code_action`).
 pub fn render_read_only_block(ui: &mut Ui, block: &Block) {
-    render_block(ui, &READ_ONLY_PAGE, block, 0);
+    render_block(ui, &read_only_page_look(), block, 0);
 }
 
 /// Space above a top-level block that follows another one.
 pub fn top_gap(block: &Block) -> f32 {
-    gap_before(&PAGE, block, PAGE.block_gap)
+    {
+        let page = page_look();
+        gap_before(&page, block, page.block_gap)
+    }
 }
 
 /// Draw Markdown from an AI tool, smaller than the page and without the
@@ -377,11 +417,17 @@ fn render_code(ui: &mut Ui, look: &Look, info: &str, code: &str) {
         header = ui.allocate_exact_size(vec2(ui.available_width(), CODE_BUTTON_HEIGHT), Sense::hover()).0;
         match Syntax::from_code_info(info) {
             Some(syntax) => {
-                let style = HighlightStyle::from_ui(ui).with_size(CODE_SIZE, CODE_LINE_HEIGHT);
+                let style =
+                    HighlightStyle::from_ui(ui).with_size(CODE_SIZE * page_zoom(), CODE_LINE_HEIGHT * page_zoom());
                 ui.label(highlighted(ui.ctx(), code, &style, Some(syntax)));
             }
             None => {
-                ui.label(RichText::new(code).monospace().size(CODE_SIZE).line_height(Some(CODE_LINE_HEIGHT)));
+                ui.label(
+                    RichText::new(code)
+                        .monospace()
+                        .size(CODE_SIZE * page_zoom())
+                        .line_height(Some(CODE_LINE_HEIGHT * page_zoom())),
+                );
             }
         }
     });
@@ -468,7 +514,7 @@ pub type CellEditor<'a> = &'a mut dyn FnMut(&mut Ui);
 /// Draw a top-level table with `editing` replaced by what `editor` draws
 /// (the preview's text box for the cell's Markdown).
 pub fn render_top_table(ui: &mut Ui, table: &Table, editing: TableCell, editor: CellEditor<'_>) {
-    render_table(ui, &PAGE, table, Some((editing, editor)));
+    render_table(ui, &page_look(), table, Some((editing, editor)));
 }
 
 /// The table cell clicked this frame in the preview, if any (taken once).
@@ -819,6 +865,7 @@ enum Span {
 fn render_inlines(ui: &mut Ui, inlines: &[Inline], style: &TextStyle) {
     let mut spans = Vec::new();
     collect_spans(inlines, style, &mut spans);
+    let highlight = HighlightStyle::from_ui(ui);
     ui.horizontal_wrapped(|ui| {
         // Spans touch; the line height alone sets the space between lines.
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -827,14 +874,52 @@ fn render_inlines(ui: &mut Ui, inlines: &[Inline], style: &TextStyle) {
             match span {
                 Span::LineBreak => ui.end_row(),
                 Span::Text(text, style) => {
-                    for piece in split_long_words(&text, style.size, wrap_width) {
-                        render_span(ui, piece, &style);
+                    for (part, color) in rule_parts(ui.ctx(), &highlight, &text, &style) {
+                        // A match gets the rule's color; the rest keeps the style it came with.
+                        let part_style = match color {
+                            Some(color) => {
+                                TextStyle { html: HtmlStyle { color: Some(color), ..style.html }, ..style.clone() }
+                            }
+                            None => style.clone(),
+                        };
+                        for piece in split_long_words(&part, style.size, wrap_width) {
+                            render_span(ui, piece, &part_style);
+                        }
                     }
                 }
                 Span::Image { alt, url, size, link } => render_image(ui, &alt, &url, size, link.as_deref()),
             }
         }
     });
+}
+
+/// Cut a run of plain text at the pieces the text highlight rules match
+/// (IP addresses, ticket ids, numbers: Settings → Highlights), the way the
+/// editor colors a plain text file. Each part comes with its color; the text
+/// between matches has none. Code, links and text an HTML page colored keep
+/// their own look, and are returned whole.
+fn rule_parts(
+    ctx: &egui::Context,
+    highlight: &HighlightStyle,
+    text: &str,
+    style: &TextStyle,
+) -> Vec<(String, Option<Rgb>)> {
+    if style.code || style.link.is_some() || style.html.color.is_some() {
+        return vec![(text.to_string(), None)];
+    }
+    let mut parts = Vec::new();
+    let mut done = 0;
+    for (range, color) in highlight.rule_spans(ctx, text) {
+        if done < range.start {
+            parts.push((text[done..range.start].to_string(), None));
+        }
+        parts.push((text[range.clone()].to_string(), Some(Rgb(color.r(), color.g(), color.b()))));
+        done = range.end;
+    }
+    if done < text.len() || parts.is_empty() {
+        parts.push((text[done..].to_string(), None));
+    }
+    parts
 }
 
 /// Cut `text` so that every word that may be wider than `wrap_width` is a
@@ -1068,7 +1153,8 @@ fn render_image(ui: &mut Ui, alt: &str, url: &str, size: ImageSize, link: Option
 /// "[image: alt]" in soft text, for an image that cannot be shown.
 fn image_fallback(ui: &mut Ui, alt: &str, why: &str) {
     let name = if alt.is_empty() { "image" } else { alt };
-    let text = RichText::new(format!("[{name}]")).size(PAGE.body_size).line_height(Some(PAGE.body_line_height)).weak();
+    let page = page_look();
+    let text = RichText::new(format!("[{name}]")).size(page.body_size).line_height(Some(page.body_line_height)).weak();
     ui.label(text).on_hover_text(why);
 }
 
@@ -1087,7 +1173,7 @@ fn video_card(ui: &mut Ui, alt: &str, path: &Path) {
             crate::icons::icon_label(ui, crate::icons::Icon::Play);
             let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
             let title = if alt.is_empty() { name } else { format!("{alt} ({name})") };
-            ui.label(RichText::new(title).size(PAGE.body_size));
+            ui.label(RichText::new(title).size(page_look().body_size));
             if ui.button("Play").on_hover_text("Open in your video player").clicked() {
                 ui.ctx().data_mut(|data| data.insert_temp(play_request_id(), path.to_path_buf()));
             }

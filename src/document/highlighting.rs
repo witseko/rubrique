@@ -8,6 +8,7 @@ use eframe::egui::emath::OrderedFloat;
 use eframe::egui::text::LayoutJob;
 use eframe::egui::{Color32, Context, FontId, Stroke, TextFormat, TextStyle, Ui};
 
+use std::ops::Range;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -195,6 +196,33 @@ impl HighlightStyle {
             RuleColor::Comment => syntax.comment,
             RuleColor::Custom(rgb) => Color32::from_rgb(rgb.0, rgb.1, rgb.2),
         }
+    }
+}
+
+impl HighlightStyle {
+    /// The pieces of `text` the text highlight rules color, in order, with
+    /// their colors. The rules are tried again only when the text or the
+    /// rules change, so the preview can ask for every paragraph every frame.
+    pub fn rule_spans(&self, ctx: &Context, text: &str) -> Vec<(Range<usize>, Color32)> {
+        if self.text_rules.source().is_empty() {
+            return Vec::new();
+        }
+        let found =
+            ctx.memory_mut(|memory| memory.caches.cache::<RuleSpanCache>().get((text, &*self.text_rules)).clone());
+        found.iter().map(|(range, color)| (range.clone(), self.rule_color(*color))).collect()
+    }
+}
+
+/// The rule matches of a text, reused while the text and the rules stay the same.
+type RuleSpanCache = FrameCache<Arc<Vec<(Range<usize>, RuleColor)>>, RuleSpanFinder>;
+
+/// Finds the rule matches for the cache.
+#[derive(Default)]
+struct RuleSpanFinder;
+
+impl ComputerMut<(&str, &CompiledRules), Arc<Vec<(Range<usize>, RuleColor)>>> for RuleSpanFinder {
+    fn compute(&mut self, (text, rules): (&str, &CompiledRules)) -> Arc<Vec<(Range<usize>, RuleColor)>> {
+        Arc::new(rules.spans(text))
     }
 }
 
