@@ -126,7 +126,7 @@ impl RubriqueApp {
             let filter = &mut self.settings.explorer_filter;
             ui.checkbox(&mut filter.markdown_only, "Markdown files only");
             ui.checkbox(&mut filter.unsaved_only, "Unsaved edits only");
-            ui.checkbox(&mut filter.hide_closed_terminals, "Hide closed terminals");
+            ui.checkbox(&mut filter.show_closed_terminals, "Show closed terminals");
         });
         changed
     }
