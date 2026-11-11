@@ -8,8 +8,22 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Highlights on and off.** A highlighter button in the status bar of
+  plain text and Markdown files, `Cmd/Ctrl + Shift + H`, or View > Text
+  highlights turns the text highlight rules off and on again. The button
+  is filled while they are on, the rules are kept while they are off, and
+  the choice is remembered for next time.
+
 ### Changed
 
+- **A clearer Settings > Highlights.** One switch at the top turns all
+  highlights on and off, and a sample you can paste your own lines into
+  shows the rules coloring it as you edit them. Each rule is a short row
+  with its color, pattern and how many pieces of the sample it colors;
+  click a row to edit it. Add rule and the field that asks the AI for a
+  rule sit at the foot of the list.
 - **Preview uses the whole page.** The preview text now fills the page
   width instead of stopping at a narrow reading column, so hiding the side
   panels gives the text the room.

@@ -308,6 +308,7 @@ mod tests {
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {
+                enabled: false,
                 rules: vec![crate::highlight::text_rules::HighlightRule::new(
                     "Ticket",
                     r"\bPROJ-[0-9]+\b",
