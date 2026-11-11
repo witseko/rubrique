@@ -74,6 +74,15 @@ pub enum Icon {
     /// Show only some files (the explorer's Markdown filter): a funnel
     /// whose spout is the accent.
     Filter,
+    /// The headings of a file (the side panel's Structure): rows indented
+    /// like an outline, the indented middle row the accent.
+    Outline,
+    /// The tasks of a file (the side panel's Tasks): a ticked row and an
+    /// open box row; the tick is the accent.
+    Checklist,
+    /// Unsaved changes (the side panel's Changes): a plus over a minus;
+    /// the plus is the accent.
+    Changes,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -191,6 +200,9 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Format => paint_format(painter, center, line, detail),
         Icon::Highlighter => paint_highlighter(painter, center, line, detail),
         Icon::Filter => paint_filter(painter, center, line, detail),
+        Icon::Outline => paint_outline(painter, center, line, detail),
+        Icon::Checklist => paint_checklist(painter, center, line, detail),
+        Icon::Changes => paint_changes(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -251,17 +263,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
             stroke_path(painter, &[at(-3.5, -3.5), at(3.5, 3.5)], false, line);
             stroke_path(painter, &[at(3.5, -3.5), at(-3.5, 3.5)], false, line);
         }
-        Icon::Mic => {
-            // A capsule in a cradle; the stand under it is the accent.
-            let capsule = [at(-2.6, -6.5), at(2.6, -6.5), at(2.6, 1.0), at(-2.6, 1.0)];
-            stroke_path(painter, &round_corners(&capsule, 2.6, true), true, line);
-            let cradle: Vec<Pos2> = (0..=16_u8)
-                .map(|step| at(0.0, -1.5) + Vec2::angled(f32::from(step) / 16.0 * TAU / 2.0) * 5.0)
-                .collect();
-            stroke_path(painter, &cradle, false, line);
-            stroke_path(painter, &[at(0.0, 3.5), at(0.0, 6.5)], false, detail);
-            stroke_path(painter, &[at(-2.5, 6.5), at(2.5, 6.5)], false, detail);
-        }
+        Icon::Mic => paint_mic(painter, center, line, detail),
         Icon::Pause => {
             // A circle; the two bars inside are the accent.
             stroke_path(painter, &circle_points(center, 6.2), true, line);
@@ -332,6 +334,47 @@ fn paint_filter(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
     let cone = [at(-6.5, -5.5), at(6.5, -5.5), at(1.6, 0.5), at(-1.6, 0.5)];
     stroke_path(painter, &round_corners(&cone, CORNER, true), true, line);
     stroke_path(painter, &[at(-1.6, 0.5), at(-1.6, 6.5), at(1.6, 4.5), at(1.6, 0.5)], false, detail);
+}
+
+/// Three rows with a dot before each, the lower two indented under the
+/// first like an outline; the middle row is the accent.
+fn paint_outline(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let rows = [(-6.0, -4.5, line), (-2.5, 0.0, detail), (-2.5, 4.5, line)];
+    for (dot_x, y, stroke) in rows {
+        painter.circle_filled(at(dot_x, y), 1.1, stroke.color);
+        stroke_path(painter, &[at(dot_x + 3.0, y), at(6.5, y)], false, stroke);
+    }
+}
+
+/// A tick and a line on top, an empty box and a line under it; the tick
+/// is the accent.
+fn paint_checklist(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    stroke_path(painter, &[at(-6.5, -3.8), at(-4.8, -2.1), at(-1.8, -5.6)], false, detail);
+    stroke_path(painter, &[at(1.5, -3.8), at(6.5, -3.8)], false, line);
+    let open_box = [at(-6.5, 1.5), at(-2.0, 1.5), at(-2.0, 6.0), at(-6.5, 6.0)];
+    stroke_path(painter, &round_corners(&open_box, 1.2, true), true, line);
+    stroke_path(painter, &[at(1.5, 3.8), at(6.5, 3.8)], false, line);
+}
+
+/// A capsule in a cradle; the stand under it is the accent.
+fn paint_mic(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let capsule = [at(-2.6, -6.5), at(2.6, -6.5), at(2.6, 1.0), at(-2.6, 1.0)];
+    stroke_path(painter, &round_corners(&capsule, 2.6, true), true, line);
+    let cradle: Vec<Pos2> =
+        (0..=16_u8).map(|step| at(0.0, -1.5) + Vec2::angled(f32::from(step) / 16.0 * TAU / 2.0) * 5.0).collect();
+    stroke_path(painter, &cradle, false, line);
+    stroke_path(painter, &[at(0.0, 3.5), at(0.0, 6.5)], false, detail);
+    stroke_path(painter, &[at(-2.5, 6.5), at(2.5, 6.5)], false, detail);
+}
+
+/// A plus over a minus; the plus is the accent.
+fn paint_changes(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    plus(painter, at(0.0, -2.0), 4.0, detail);
+    stroke_path(painter, &[at(-4.0, 5.5), at(4.0, 5.5)], false, line);
 }
 
 /// A square open at the top right with a pencil writing into it; the

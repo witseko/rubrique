@@ -9,7 +9,7 @@ use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, Rect, Sense,
 
 use super::{NOTES_PANEL_WIDTH, OpenFile, RubriqueApp};
 use crate::explorer::tree::is_markdown_path;
-use crate::icons::{Icon, icon_button, small_icon_button};
+use crate::icons::{Icon, icon_button, paint_icon, small_icon_button};
 use crate::markdown::notes::find_notes;
 use crate::settings::layout::SideView;
 use crate::terminal::mentions::find_delegations;
@@ -22,13 +22,17 @@ pub(super) const TOGGLE_WIDTH: f32 = 28.0;
 const TOGGLE_HEIGHT: f32 = 24.0;
 /// Radius of the dot on the toggle that says the closed panel has notes.
 const NOTES_BADGE_RADIUS: f32 = 3.0;
-/// Height of the Structure | Notes switch.
+/// Height of the Structure | Notes | Tasks | Changes switch.
 const SWITCH_HEIGHT: f32 = 24.0;
 /// Gap between the switch's rounded frame and its segments.
 const SWITCH_INSET: f32 = 2.0;
-/// Space left and right of a segment's label.
+/// Space left and right of a segment's icon and count.
 const SEGMENT_PADDING: f32 = 12.0;
-/// Least space left and right of a segment's label, in a narrow panel.
+/// Width of the icon in a segment of the switch.
+const SEGMENT_ICON: f32 = 14.0;
+/// Gap between a segment's icon and its count.
+const COUNT_GAP: f32 = 4.0;
+/// Least space left and right of a segment's icon and count, in a narrow panel.
 const MIN_SEGMENT_PADDING: f32 = 3.0;
 /// Size of the panel's close button.
 const CLOSE_SIZE: f32 = 22.0;
@@ -99,7 +103,7 @@ impl RubriqueApp {
         });
     }
 
-    /// The Structure | Notes | Tasks | Changes switch (with counts) and the close cross.
+    /// The Structure | Notes | Tasks | Changes switch (icons with counts) and the close cross.
     fn side_panel_header(&mut self, ui: &mut Ui) {
         self.refresh_block_changes();
         let change_count = self.block_changes.list.len();
@@ -109,17 +113,15 @@ impl RubriqueApp {
             }
             _ => (0, 0),
         };
-        let counted =
-            |label: &str, count: usize| if count == 0 { label.to_string() } else { format!("{label} {count}") };
         let layout = &mut self.settings.layout;
         let margin = egui::Margin { left: HEADER_MARGIN, right: HEADER_MARGIN, top: HEADER_MARGIN, bottom: 0 };
         egui::Frame::new().inner_margin(margin).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let choices = [
-                    (SideView::Structure, "Structure".to_string()),
-                    (SideView::Notes, counted("Notes", note_count)),
-                    (SideView::Tasks, counted("Tasks", task_count)),
-                    (SideView::Changes, counted("Changes", change_count)),
+                    ViewChoice { view: SideView::Structure, icon: Icon::Outline, name: "Structure", count: 0 },
+                    ViewChoice { view: SideView::Notes, icon: Icon::Bubble, name: "Notes", count: note_count },
+                    ViewChoice { view: SideView::Tasks, icon: Icon::Checklist, name: "Tasks", count: task_count },
+                    ViewChoice { view: SideView::Changes, icon: Icon::Changes, name: "Changes", count: change_count },
                 ];
                 // Room for the close cross, so the switch never runs under it.
                 let reserved = CLOSE_SIZE + ui.spacing().item_spacing.x;
@@ -136,35 +138,64 @@ impl RubriqueApp {
     }
 }
 
+/// One segment of the side panel's switch: an icon, with the number of
+/// items after it when there are any. The name shows on hover and is what
+/// screen readers announce; the panel is too narrow for the words.
+struct ViewChoice {
+    view: SideView,
+    icon: Icon,
+    name: &'static str,
+    count: usize,
+}
+
 /// A segmented switch in the style of the Preview | Source switch: the
 /// chosen segment filled like the page. It leaves `reserved` points of the
-/// row free, with less space around the labels when the panel is narrow.
+/// row free, with less space around the icons when the panel is narrow.
 /// Returns the segment clicked.
-fn view_switch(ui: &mut Ui, choices: &[(SideView, String)], current: SideView, reserved: f32) -> Option<SideView> {
+fn view_switch(ui: &mut Ui, choices: &[ViewChoice], current: SideView, reserved: f32) -> Option<SideView> {
     let visuals = ui.visuals().clone();
     let font = egui::TextStyle::Body.resolve(ui.style());
-    let galleys: Vec<_> = choices
+    // The count after an icon, or nothing when there are no items.
+    let counts: Vec<_> = choices
         .iter()
-        .map(|(_, label)| ui.painter().layout_no_wrap(label.clone(), font.clone(), egui::Color32::PLACEHOLDER))
+        .map(|choice| {
+            (choice.count > 0).then(|| {
+                ui.painter().layout_no_wrap(choice.count.to_string(), font.clone(), egui::Color32::PLACEHOLDER)
+            })
+        })
         .collect();
-    let labels_width: f32 = galleys.iter().map(|galley| galley.size().x).sum();
-    let room = ui.available_width() - reserved - SWITCH_INSET * 2.0 - labels_width;
+    let contents: Vec<f32> = counts
+        .iter()
+        .map(|count| SEGMENT_ICON + count.as_ref().map_or(0.0, |galley| COUNT_GAP + galley.size().x))
+        .collect();
+    let contents_width: f32 = contents.iter().sum();
+    let room = ui.available_width() - reserved - SWITCH_INSET * 2.0 - contents_width;
     #[expect(clippy::cast_precision_loss, reason = "a handful of segments")]
     let padding = (room / (choices.len() as f32 * 2.0)).clamp(MIN_SEGMENT_PADDING, SEGMENT_PADDING);
-    let widths: Vec<f32> = galleys.iter().map(|galley| galley.size().x + padding * 2.0).collect();
+    let widths: Vec<f32> = contents.iter().map(|content| content + padding * 2.0).collect();
     let total = widths.iter().sum::<f32>() + SWITCH_INSET * 2.0;
+    // Centered in the header, but never so far right that it runs under
+    // the close cross.
+    let available = ui.available_width();
+    let indent = ((available - total) / 2.0).min(available - reserved - total).max(0.0);
+    // add_space is followed by the usual gap between items, so take it off.
+    let gap = ui.spacing().item_spacing.x;
+    if indent > gap {
+        ui.add_space(indent - gap);
+    }
     let (rect, _) = ui.allocate_exact_size(vec2(total, SWITCH_HEIGHT), Sense::hover());
-    ui.painter().rect_filled(rect, 7, visuals.widgets.inactive.weak_bg_fill);
+    let switch_fill = visuals.widgets.inactive.weak_bg_fill;
+    ui.painter().rect_filled(rect, 7, switch_fill);
     let mut left = rect.left() + SWITCH_INSET;
     let mut clicked = None;
-    for (((view, label), galley), width) in choices.iter().zip(galleys).zip(widths) {
+    for (((choice, count), content), width) in choices.iter().zip(counts).zip(contents).zip(widths) {
         let segment = Rect::from_min_size(
             egui::pos2(left, rect.top() + SWITCH_INSET),
             vec2(width, SWITCH_HEIGHT - SWITCH_INSET * 2.0),
         );
         left += width;
-        let response = ui.interact(segment, ui.scope_id().with(("side-view", label)), Sense::click());
-        let selected = *view == current;
+        let response = ui.interact(segment, ui.scope_id().with(("side-view", choice.name)), Sense::click());
+        let selected = choice.view == current;
         let fill = if selected {
             page_fill(&visuals)
         } else if response.hovered() {
@@ -174,11 +205,20 @@ fn view_switch(ui: &mut Ui, choices: &[(SideView, String)], current: SideView, r
         };
         ui.painter().rect_filled(segment, 5, fill);
         let color = if selected { visuals.strong_text_color() } else { visuals.weak_text_color() };
-        let text_pos = segment.center() - galley.size() / 2.0;
-        ui.painter().galley_with_override_text_color(text_pos, galley, color);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
-        if response.clicked() {
-            clicked = Some(*view);
+        let behind = if fill == egui::Color32::TRANSPARENT { switch_fill } else { fill };
+        let content_left = segment.center().x - content / 2.0;
+        let icon_center = egui::pos2(content_left + SEGMENT_ICON / 2.0, segment.center().y);
+        paint_icon(ui.painter(), choice.icon, icon_center, color, visuals.hyperlink_color, behind);
+        if let Some(galley) = count {
+            let text_pos =
+                egui::pos2(content_left + SEGMENT_ICON + COUNT_GAP, segment.center().y - galley.size().y / 2.0);
+            ui.painter().galley_with_override_text_color(text_pos, galley, color);
+        }
+        let label =
+            if choice.count == 0 { choice.name.to_string() } else { format!("{} {}", choice.name, choice.count) };
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, &label));
+        if response.on_hover_text(&label).clicked() {
+            clicked = Some(choice.view);
         }
     }
     clicked

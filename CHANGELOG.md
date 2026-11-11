@@ -18,6 +18,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
+- **Icons in the side panel switch.** Structure, Notes, Tasks and Changes
+  are icons now, with the count after them, so the switch fits a narrow
+  panel. Hover an icon to see its name.
 - **A clearer Settings > Highlights.** One switch at the top turns all
   highlights on and off, and a sample you can paste your own lines into
   shows the rules coloring it as you edit them. Each rule is a short row
