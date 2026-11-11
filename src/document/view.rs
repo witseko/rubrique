@@ -24,8 +24,6 @@ use crate::markdown::render::{
 use crate::markdown::table_edit::{TableAction, TableCell};
 use crate::voice::view::{MemoAction, take_memo_action};
 
-/// Widest the preview text gets, for comfortable reading.
-const PREVIEW_MAX_WIDTH: f32 = 760.0;
 /// Space (x, y) between the page edge and the editor text.
 const EDITOR_MARGIN: (i8, i8) = (16, 12);
 /// Space (x, y) between the page edge and the preview text.
@@ -377,7 +375,6 @@ pub fn show_preview(
     set_image_folder(ui.ctx(), path.parent().map(Path::to_path_buf));
     egui::ScrollArea::vertical().id_salt(("preview-scroll", path)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
-            ui.set_max_width(PREVIEW_MAX_WIDTH.min(ui.available_width()));
             for (index, source) in blocks.iter().enumerate() {
                 let gap = top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0;
                 // Bottom of the block above (the first block has the page margin above it).
@@ -470,7 +467,6 @@ pub fn show_read_only_preview(ui: &mut Ui, path: &Path, blocks: &[SourceBlock]) 
     set_image_folder(ui.ctx(), path.parent().map(Path::to_path_buf));
     egui::ScrollArea::vertical().id_salt(("preview-scroll", path)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
-            ui.set_max_width(PREVIEW_MAX_WIDTH.min(ui.available_width()));
             for (index, source) in blocks.iter().enumerate() {
                 if index > 0 {
                     ui.add_space(top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0);

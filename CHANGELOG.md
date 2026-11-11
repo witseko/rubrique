@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Preview uses the whole page.** The preview text now fills the page
+  width instead of stopping at a narrow reading column, so hiding the side
+  panels gives the text the room.
+
 ## [0.9.4] - 2026-11-11
 
 ### Added
