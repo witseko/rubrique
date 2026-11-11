@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Icons in the side panel switch.** Structure, Notes, Tasks and Changes
+  are icons now, with the count after them, so the switch fits a narrow
+  panel. Hover an icon to see its name.
+
 ## [0.9.4] - 2026-11-11
 
 ### Added
