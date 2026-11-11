@@ -8,18 +8,16 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
-### Added
-
-- **Open With for more files.** Rubrique is offered for Markdown, plain
-  text, JSON and XML files in Finder and in Linux file managers, and can
-  be set as the app that opens them.
+## [0.10.1] - 2026-11-11
 
 ### Fixed
 
 - **Opening files from Finder.** Double-clicking a file, Open With, or
   dropping a file on the Dock icon opens it in Rubrique (with its folder
   in the explorer) instead of showing "Rubrique cannot open files in the
-  Markdown document format".
+  Markdown document format". Rubrique is offered for Markdown, plain
+  text, JSON and XML files in Finder and in Linux file managers, and can
+  be set as the app that opens them.
 
 ## [0.10.0] - 2026-11-11
 
