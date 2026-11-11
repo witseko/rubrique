@@ -12,7 +12,7 @@ use eframe::egui::{Context, KeyboardShortcut};
 
 use super::{
     ASK, NEW_ENCRYPTED_SCRATCH, NEW_SCRATCH, OPEN_PATH, PAGE_DEFAULT, PAGE_LARGER, PAGE_SMALLER, RubriqueApp, SAVE,
-    TOGGLE_PREVIEW, TOGGLE_SETTINGS,
+    TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_SETTINGS,
 };
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, page_zoom_larger, page_zoom_smaller};
 use crate::theme::catalog::ThemeChoice;
@@ -28,6 +28,7 @@ pub(super) enum MenuCommand {
     Save,
     Ask,
     TogglePreview,
+    TextHighlights,
     TextSize(TextSize),
     PageZoomLarger,
     PageZoomSmaller,
@@ -113,6 +114,7 @@ impl RubriqueApp {
         ];
         let view = vec![
             item("Preview / source", MenuCommand::TogglePreview, Some(&TOGGLE_PREVIEW)),
+            item("Text highlights", MenuCommand::TextHighlights, Some(&TOGGLE_HIGHLIGHTS)),
             MenuEntry::Separator,
             MenuEntry::Submenu { label: "Text size", entries: text_sizes.collect() },
             MenuEntry::Submenu { label: "Text area zoom", entries: zoom },
@@ -139,6 +141,7 @@ impl RubriqueApp {
         let filter = &self.settings.explorer_filter;
         let checked = match command {
             MenuCommand::TextSize(size) => accessibility.text_size == *size,
+            MenuCommand::TextHighlights => self.settings.text_highlight.enabled,
             MenuCommand::LineNumbers => accessibility.line_numbers,
             MenuCommand::WrapLines => accessibility.wrap_lines,
             MenuCommand::Theme(choice) => self.settings.theme == *choice,
@@ -173,6 +176,7 @@ impl RubriqueApp {
                 self.open_ask(ctx);
             }
             MenuCommand::TogglePreview => self.toggle_preview(),
+            MenuCommand::TextHighlights => self.toggle_text_highlights(ctx),
             MenuCommand::PageZoomLarger => self.change_page_zoom(ctx, page_zoom_larger(page_zoom)),
             MenuCommand::PageZoomSmaller => self.change_page_zoom(ctx, page_zoom_smaller(page_zoom)),
             MenuCommand::PageZoomReset => self.change_page_zoom(ctx, DEFAULT_PAGE_ZOOM),

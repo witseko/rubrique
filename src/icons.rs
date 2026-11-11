@@ -58,6 +58,9 @@ pub enum Icon {
     AudioPlus,
     /// Pretty-print the file: three text lines, the indented one the accent.
     Format,
+    /// Turn the text highlights on or off: a marker whose stroke under it
+    /// is the accent.
+    Highlighter,
     /// Open the file in the web browser: a window with an arrow leaving it.
     Browser,
     /// Add a table row: a table split into two rows, with the plus badge.
@@ -195,6 +198,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
             paint_table_icon(painter, icon, center, colors);
         }
         Icon::Format => paint_format(painter, center, line, detail),
+        Icon::Highlighter => paint_highlighter(painter, center, line, detail),
         Icon::Filter => paint_filter(painter, center, line, detail),
         Icon::Outline => paint_outline(painter, center, line, detail),
         Icon::Checklist => paint_checklist(painter, center, line, detail),
@@ -434,6 +438,23 @@ fn paint_format(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
     stroke_path(painter, &[at(-6.0, -4.5), at(6.0, -4.5)], false, line);
     stroke_path(painter, &[at(-2.5, 0.0), at(6.0, 0.0)], false, detail);
     stroke_path(painter, &[at(-6.0, 4.5), at(2.0, 4.5)], false, line);
+}
+
+/// A marker leaning right, like the pencil of New scratch but wider, with
+/// a chisel nib; the stroke it left under it is the accent.
+fn paint_highlighter(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let along = vec2(1.0, -1.0).normalized();
+    let across = vec2(1.0, 1.0).normalized();
+    let nib = at(-4.0, 2.5);
+    let collar = nib + along * 2.6;
+    let back = nib + along * 11.0;
+    let half_width = across * 1.8;
+    let body = [collar + half_width, back + half_width, back - half_width, collar - half_width];
+    stroke_path(painter, &round_corners(&body, 1.0, true), true, line);
+    let chisel = [collar + half_width, nib + across * 0.7, nib - across * 0.7, collar - half_width];
+    stroke_path(painter, &chisel, false, line);
+    stroke_path(painter, &[at(-6.5, 6.5), at(1.5, 6.5)], false, detail);
 }
 
 /// A table as a box split in two (rows, or columns for the column icons),
