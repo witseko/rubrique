@@ -2925,6 +2925,7 @@ impl eframe::App for RubriqueApp {
         }
         egui::CentralPanel::default().frame(page_frame).show(ui, |ui| self.document_area(ui));
         self.handle_dropped_files(&ctx);
+        self.open_system_documents(&ctx);
         self.find_bar(&ctx);
 
         self.ask_dialogs(&ctx);

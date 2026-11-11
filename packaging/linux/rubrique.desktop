@@ -7,5 +7,5 @@ Exec=rubrique %F
 Icon=rubrique
 Terminal=false
 Categories=Utility;TextEditor;
-MimeType=text/markdown;text/x-markdown;text/plain;
+MimeType=text/markdown;text/x-markdown;text/plain;application/json;application/xml;text/xml;
 Keywords=markdown;notes;editor;ai;agent;claude;codex;writing;

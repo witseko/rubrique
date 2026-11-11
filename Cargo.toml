@@ -62,7 +62,14 @@ muda = { version = "0.21.2", default-features = false }
 security-framework = { version = "3.7", default-features = false, features = ["OSX_10_15"] }
 core-foundation = "0.10"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSString",
+    "NSAppleEventDescriptor",
+    "NSAppleEventManager",
+    "NSNotification",
+    "NSURL",
+] }
 objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "LAContext"] }
 
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than

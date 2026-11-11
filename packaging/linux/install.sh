@@ -13,6 +13,12 @@ for icon in "$here"/share/icons/hicolor/*/apps/rubrique.png; do
     install -Dm644 "$icon" "$prefix/share/icons/hicolor/$size_dir/apps/rubrique.png"
 done
 
+# Refresh the file type list so "Open With" offers Rubrique for Markdown,
+# text, JSON and XML files. Not every desktop has the tool; skip it then.
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$prefix/share/applications" || true
+fi
+
 echo "Installed Rubrique to $prefix/bin/rubrique"
 case ":$PATH:" in
     *":$prefix/bin:"*) ;;
