@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-11
+
 ### Added
 
 - **Highlights on and off.** A highlighter button in the status bar of
@@ -71,9 +73,6 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   the files are in sight.
 - **Steady find bar buttons.** The Aa, W and arrow buttons in the find bar
   no longer grow by two points when the pointer is over them.
-
-### Fixed
-
 - **Inline code in the preview.** The shaded box behind `code` now fits
   the text, without the empty strip it left underneath.
 
