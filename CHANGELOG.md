@@ -10,6 +10,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
+- **Show closed terminals.** The file filter's Hide closed terminals box is
+  now Show closed terminals, ticked by default: `.tmux` files with no
+  running session stay in the explorer, so you can delete the ones you no
+  longer need. Untick it to hide them. A saved Hide closed terminals choice
+  carries over.
 - **Menus in the macOS menu bar.** On macOS the File, View and Settings
   menus are in the system menu bar at the top of the screen, after the
   Rubrique menu (About, Settings, Hide, Quit), instead of a bar inside the

@@ -265,7 +265,7 @@ mod tests {
             folders: vec![PathBuf::from("/home/a/my notes"), PathBuf::from("/work/docs"), remote_folder.clone()],
             last_file: Some(PathBuf::from("/home/a/my notes/x=y.md")),
             open_tabs: vec![PathBuf::from("/home/a/my notes/x=y.md"), PathBuf::from("/work/docs/photo.png")],
-            explorer_filter: ExplorerFilter { markdown_only: true, unsaved_only: true, hide_closed_terminals: true },
+            explorer_filter: ExplorerFilter { markdown_only: true, unsaved_only: true, show_closed_terminals: false },
             note_marks: true,
             window_size: Some((1200.0, 800.5)),
             theme: ThemeChoice::Named("dark".to_string()),

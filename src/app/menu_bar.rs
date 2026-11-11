@@ -38,7 +38,7 @@ pub(super) enum MenuCommand {
     CodeColors(CodeColors),
     MarkdownOnly,
     UnsavedOnly,
-    HideClosedTerminals,
+    ShowClosedTerminals,
     ReduceMotion,
     StrongFocus,
     NoteMarks,
@@ -109,7 +109,7 @@ impl RubriqueApp {
         let filter = vec![
             item("Markdown files only", MenuCommand::MarkdownOnly, None),
             item("Unsaved edits only", MenuCommand::UnsavedOnly, None),
-            item("Hide closed terminals", MenuCommand::HideClosedTerminals, None),
+            item("Show closed terminals", MenuCommand::ShowClosedTerminals, None),
         ];
         let view = vec![
             item("Preview / source", MenuCommand::TogglePreview, Some(&TOGGLE_PREVIEW)),
@@ -145,7 +145,7 @@ impl RubriqueApp {
             MenuCommand::CodeColors(colors) => self.settings.code_colors == *colors,
             MenuCommand::MarkdownOnly => filter.markdown_only,
             MenuCommand::UnsavedOnly => filter.unsaved_only,
-            MenuCommand::HideClosedTerminals => filter.hide_closed_terminals,
+            MenuCommand::ShowClosedTerminals => filter.show_closed_terminals,
             MenuCommand::ReduceMotion => accessibility.reduce_motion,
             MenuCommand::StrongFocus => accessibility.strong_focus,
             MenuCommand::NoteMarks => self.settings.note_marks,
@@ -178,7 +178,7 @@ impl RubriqueApp {
             MenuCommand::PageZoomReset => self.change_page_zoom(ctx, DEFAULT_PAGE_ZOOM),
             MenuCommand::MarkdownOnly => filter.markdown_only = !filter.markdown_only,
             MenuCommand::UnsavedOnly => filter.unsaved_only = !filter.unsaved_only,
-            MenuCommand::HideClosedTerminals => filter.hide_closed_terminals = !filter.hide_closed_terminals,
+            MenuCommand::ShowClosedTerminals => filter.show_closed_terminals = !filter.show_closed_terminals,
             MenuCommand::NoteMarks => self.settings.note_marks = !self.settings.note_marks,
             MenuCommand::OpenSettings => {
                 if !self.settings_open {
