@@ -16,6 +16,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   longer need. Untick it to hide them. A saved Hide closed terminals choice
   carries over.
 
+### Fixed
+
+- **Inline code in the preview.** The shaded box behind `code` now fits
+  the text, without the empty strip it left underneath.
+
 ## [0.9.4] - 2026-11-11
 
 ### Added
