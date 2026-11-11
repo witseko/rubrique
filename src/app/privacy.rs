@@ -21,17 +21,20 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use eframe::egui::{self, Context, Key, RichText, Ui};
+use eframe::egui::{self, Context, Key, RichText, Stroke, Ui, vec2};
 use zeroize::Zeroizing;
 
+use super::find::{ACCENT_STROKE, outline_color};
 use super::{OpenFile, RubriqueApp};
 use crate::crypto::{KEY_LEN, Vault, pin_hash, verify_pin};
 use crate::document::view::restore_editor_state;
 use crate::explorer::paths::name_text;
 use crate::explorer::tree::FsNode;
+use crate::icons::paint_padlock;
 use crate::scratch::{decrypt_scratch, encrypt_scratch, encrypt_scratches, is_scratch, reencrypt_scratches};
 use crate::settings::privacy::PrivacySettings;
 use crate::settings::view::{PrivacyInfo, SettingsAction};
+use crate::theme::style::page_fill;
 use crate::touch_id::{self, TouchIdError};
 
 /// Shortest scratch password: it is the only thing between a copied file
@@ -45,6 +48,14 @@ const PIN_WAIT_SECONDS: f64 = 30.0;
 const DEFAULT_LOCK_MINUTES: u32 = 15;
 const DIALOG_WIDTH: f32 = 340.0;
 const FIELD_WIDTH: f32 = 260.0;
+/// Width of the password field and the buttons under it on a locked scratch.
+const LOCKED_COLUMN_WIDTH: f32 = 280.0;
+/// Width of the padlock above a locked scratch's name.
+const LOCKED_ICON_SIZE: f32 = 36.0;
+/// Height of the password field and the buttons on a locked scratch.
+const LOCKED_ROW_HEIGHT: f32 = 32.0;
+/// Space left and right of the text inside the locked scratch's password field.
+const LOCKED_FIELD_PADDING: i8 = 8;
 /// Shown instead of running any AI on an encrypted scratch.
 pub(super) const AI_OFF_MESSAGE: &str = "AI is off for encrypted scratches";
 /// Under the app name in the Touch ID sheet.
@@ -425,15 +436,16 @@ impl RubriqueApp {
         }
     }
 
-    /// The "Use Touch ID" button next to a password field, when Touch ID is
-    /// on. Returns `true` when clicked.
+    /// The "Use Touch ID" button under a locked scratch's Unlock button,
+    /// when Touch ID is on. Returns `true` when clicked.
     fn touch_id_button(&self, ui: &mut Ui) -> bool {
         if !(self.settings.privacy.touch_id && self.privacy.touch_id_available) {
             return false;
         }
         let waiting = self.privacy.touch_id_request.is_some();
         let label = if waiting { "Waiting for Touch ID…" } else { "Use Touch ID" };
-        ui.add_enabled(!waiting, egui::Button::new(label)).clicked()
+        let button = egui::Button::new(label).min_size(vec2(LOCKED_COLUMN_WIDTH, LOCKED_ROW_HEIGHT));
+        ui.add_enabled(!waiting, button).clicked()
     }
 
     /// Keep the key behind Touch ID and turn the setting on; asks for the
@@ -560,35 +572,76 @@ impl RubriqueApp {
         self.privacy.pin_input = Zeroizing::default();
     }
 
-    /// The page of a tab whose encrypted scratch waits for the password.
+    /// The page of a tab whose encrypted scratch waits for the password: a
+    /// centered column like the PIN screen, with a padlock, the name, an
+    /// outlined password field that has focus, Unlock under it, and Use
+    /// Touch ID under that when Touch ID is on.
     pub(super) fn locked_tab(&mut self, ui: &mut Ui, path: &Path) {
         if !self.privacy.touch_id_declined {
             self.start_touch_id(ui.ctx());
         }
-        egui::Frame::new().inner_margin(16.0).show(ui, |ui| {
+        let mut unlock = false;
+        let mut use_touch_id = false;
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() / 4.0).max(24.0));
+            let (rect, _) = ui.allocate_exact_size(vec2(LOCKED_ICON_SIZE, LOCKED_ICON_SIZE), egui::Sense::hover());
+            let visuals = ui.visuals();
+            paint_padlock(ui.painter(), rect.center(), LOCKED_ICON_SIZE, visuals.text_color(), visuals.hyperlink_color);
+            ui.add_space(12.0);
             ui.heading(name_text(path));
-            ui.label("This scratch is encrypted. Enter the scratch password to read it.");
-            ui.horizontal(|ui| {
-                if self.touch_id_button(ui) {
-                    self.privacy.touch_id_declined = false;
-                    self.start_touch_id(ui.ctx());
-                }
-                let field = ui.add(
-                    egui::TextEdit::singleline(&mut *self.privacy.tab_password)
-                        .password(true)
-                        .hint_text("Password")
-                        .desired_width(FIELD_WIDTH),
-                );
-                let entered = field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
-                if ui.button("Unlock").clicked() || entered {
-                    let password = std::mem::take(&mut self.privacy.tab_password);
-                    self.privacy.tab_error = self.unlock_scratches(&password, Some(path)).err();
-                }
-            });
+            ui.label(RichText::new("This scratch is encrypted. Enter the scratch password to open it.").weak());
+            ui.add_space(16.0);
+            unlock = self.locked_password_field(ui);
             if let Some(error) = &self.privacy.tab_error {
                 ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
             }
+            ui.add_space(8.0);
+            unlock |= ui.add(primary_button(ui, "Unlock")).clicked();
+            use_touch_id = self.touch_id_button(ui);
         });
+        if unlock {
+            let password = std::mem::take(&mut self.privacy.tab_password);
+            self.privacy.tab_error = self.unlock_scratches(&password, Some(path)).err();
+        }
+        if use_touch_id {
+            self.privacy.touch_id_declined = false;
+            self.start_touch_id(ui.ctx());
+        }
+    }
+
+    /// The locked scratch's password field: outlined (the page and the field
+    /// share a color in most themes), accent outline while typing, focused
+    /// when nothing else is. Returns `true` when Enter was pressed in it.
+    fn locked_password_field(&mut self, ui: &mut Ui) -> bool {
+        let id = ui.make_persistent_id("locked-scratch-password");
+        let visuals = ui.visuals();
+        let stroke = if ui.memory(|memory| memory.has_focus(id)) {
+            Stroke::new(ACCENT_STROKE, visuals.hyperlink_color)
+        } else {
+            Stroke::new(1.0, outline_color(visuals))
+        };
+        let frame = egui::Frame::new()
+            .fill(page_fill(visuals))
+            .stroke(stroke)
+            .corner_radius(visuals.widgets.inactive.corner_radius)
+            .inner_margin(egui::Margin::symmetric(LOCKED_FIELD_PADDING, 0));
+        // As in the find bar, the width covers the outline and the padding.
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut *self.privacy.tab_password)
+                .id(id)
+                .password(true)
+                .hint_text("Scratch password")
+                .frame(frame)
+                .desired_width(LOCKED_COLUMN_WIDTH)
+                .min_size(vec2(0.0, LOCKED_ROW_HEIGHT))
+                .align(egui::Align2::LEFT_CENTER),
+        );
+        // Ready to type when the tab opens, but never taken from another
+        // field, and not while the Touch ID sheet is up.
+        if self.privacy.touch_id_request.is_none() && ui.memory(|memory| memory.focused().is_none()) {
+            field.request_focus();
+        }
+        field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter))
     }
 
     /// Run a Privacy button from Settings.
@@ -841,4 +894,13 @@ fn new_secret(dialog: &SecretDialog, min_chars: usize, word: &str) -> Result<(),
         return Err(format!("The two {word}s are not the same"));
     }
     Ok(())
+}
+
+/// The main button of a locked scratch, as wide as its password field and
+/// filled with the selection color so it reads as the thing to press.
+fn primary_button(ui: &Ui, label: &str) -> egui::Button<'static> {
+    let selection = ui.visuals().selection;
+    egui::Button::new(RichText::new(label).color(selection.stroke.color))
+        .fill(selection.bg_fill)
+        .min_size(vec2(LOCKED_COLUMN_WIDTH, LOCKED_ROW_HEIGHT))
 }

@@ -419,7 +419,13 @@ pub const LOCK_MARK_SIZE: f32 = 10.0;
 
 /// Paint the padlock mark at [`LOCK_MARK_SIZE`], centered on `center`.
 pub fn paint_lock_mark(painter: &Painter, center: Pos2, line: Color32, accent: Color32) {
-    paint_lock(painter, center.round(), LOCK_MARK_SIZE / 14.0, line, accent);
+    paint_padlock(painter, center, LOCK_MARK_SIZE, line, accent);
+}
+
+/// Paint the padlock `size` points wide, centered on `center` (the mark
+/// after a name, or the large one on a locked scratch).
+pub fn paint_padlock(painter: &Painter, center: Pos2, size: f32, line: Color32, accent: Color32) {
+    paint_lock(painter, center.round(), size / 14.0, line, accent);
 }
 
 /// Four waveform bars; the plus badge at the bottom right is the accent.

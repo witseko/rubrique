@@ -52,7 +52,7 @@ const COUNT_SAMPLE: &str = "888 of 888";
 /// The line numbers in the results are sized for this many digits.
 const LINE_NUMBER_SAMPLE: &str = "88888";
 /// Outline of a field with focus and of a switched on option.
-const ACCENT_STROKE: f32 = 1.5;
+pub(super) const ACCENT_STROKE: f32 = 1.5;
 /// Opacity of the weak text color used as the outline of fields and of
 /// switched off options: plainly visible in every theme, softer than text.
 const OUTLINE_OPACITY: f32 = 0.6;
@@ -424,7 +424,7 @@ fn text_width(ui: &Ui, text: &str, font: FontId) -> f32 {
 /// The outline of a field and of a switched off option: the weak text
 /// color, softened, which stands out from the bar in every theme (the
 /// theme's border color is too faint on the dark ones).
-fn outline_color(visuals: &egui::Visuals) -> Color32 {
+pub(super) fn outline_color(visuals: &egui::Visuals) -> Color32 {
     visuals.weak_text_color().gamma_multiply(OUTLINE_OPACITY)
 }
 
