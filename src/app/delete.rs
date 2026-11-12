@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui::Context;
 
 use super::RubriqueApp;
-use super::alert::{self, ButtonKind};
+use crate::alert::{self, ButtonKind};
 use crate::explorer::paths::name_text;
 use crate::explorer::tree::FsNode;
 use crate::media::image_uri;
@@ -53,7 +53,7 @@ impl RubriqueApp {
                     (confirm, cancel)
                 },
             );
-            let enter = alert::enter_for_default(ui, &[&confirm, &cancel]);
+            let enter = alert::enter_for_default(ui);
             (confirm.clicked(), cancel.clicked() || enter)
         });
         let (confirmed, cancelled) = modal.inner;

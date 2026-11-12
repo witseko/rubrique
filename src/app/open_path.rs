@@ -8,6 +8,7 @@ use std::path::{Component, Path, PathBuf};
 use eframe::egui::{self, Context, Key};
 
 use super::{OpenFile, RubriqueApp};
+use crate::alert::{self, ButtonKind};
 use crate::document::view::jump_editor_to;
 use crate::find::char_index;
 
@@ -43,11 +44,11 @@ impl RubriqueApp {
         let Some(dialog) = &mut self.open_path else {
             return;
         };
-        let modal = egui::Modal::new(egui::Id::unique("open-path")).show(ctx, |ui| {
-            ui.set_width(DIALOG_WIDTH);
-            ui.heading("Open path");
-            ui.add_space(4.0);
-            let field = ui.add(
+        let modal = alert::show(ctx, "open-path", DIALOG_WIDTH, |ui| {
+            alert::title(ui, "Open path");
+            alert::body(ui, "Open a file, or show a folder in the explorer. file.md:12 opens it on line 12.");
+            let field = alert::text_field(
+                ui,
                 egui::TextEdit::singleline(&mut dialog.text)
                     .hint_text("~/notes/todo.md, a folder, or file.md:12")
                     .desired_width(f32::INFINITY),
@@ -62,13 +63,16 @@ impl RubriqueApp {
             if let Some(error) = &dialog.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let open = ui.button("Open").clicked() || entered;
-                let cancel = ui.button("Cancel").clicked();
-                (open, cancel)
-            })
-            .inner
+            let ((), (open, cancel)) = alert::button_row(
+                ui,
+                |_| (),
+                |ui| {
+                    let open = alert::button(ui, "Open", ButtonKind::Primary, true).clicked();
+                    let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false).clicked();
+                    (open, cancel)
+                },
+            );
+            (open || entered || alert::enter_for_default(ui), cancel)
         });
         let (open, cancel) = modal.inner;
         if cancel || modal.should_close() {

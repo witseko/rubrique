@@ -12,6 +12,7 @@ use super::mention_list::{self, TypedMention};
 use super::preview::PromptParts;
 use super::skills::Skill;
 use super::{AiTool, AskKind, QuickAction, format_elapsed};
+use crate::alert::{self, ButtonKind};
 use crate::icons::{Icon, icon_label, icon_text_button};
 use crate::markdown::render::{CodeAction, render_answer, take_code_action};
 use crate::settings::view::home_relative;
@@ -812,10 +813,8 @@ pub enum ConsentChoice {
 
 /// Ask whether to run the tool(s) in the folder, showing what they get.
 pub fn show_consent(ctx: &Context, consent: &mut Consent) -> Option<ConsentChoice> {
-    let modal = egui::Modal::new(egui::Id::unique("ai-consent")).show(ctx, |ui| {
-        ui.set_width(CONSENT_WIDTH);
-        ui.spacing_mut().item_spacing.y = 8.0;
-        ui.heading(format!("Run {} in this folder?", consent.parts.tools()));
+    let modal = alert::show(ctx, "ai-consent", CONSENT_WIDTH, |ui| {
+        alert::title(ui, &format!("Run {} in this folder?", consent.parts.tools()));
         egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
             prompt_rows(ui, &consent.parts, &consent.folder, "consent");
         });
@@ -823,17 +822,23 @@ pub fn show_consent(ctx: &Context, consent: &mut Consent) -> Option<ConsentChoic
             RichText::new("Your file changes only when you press Apply in the merge screen.").size(SMALL_TEXT).weak(),
         );
         ui.checkbox(&mut consent.remember, "Don't ask again for this folder");
-        ui.add_space(4.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.button("Run").clicked() {
-                Some(ConsentChoice::Run)
-            } else if ui.button("Cancel").clicked() {
-                Some(ConsentChoice::Cancel)
-            } else {
-                None
-            }
-        })
-        .inner
+        // No default: running a tool on the file takes a deliberate click.
+        let ((), (run, cancel)) = alert::button_row(
+            ui,
+            |_| (),
+            |ui| {
+                let run = alert::button(ui, "Run", ButtonKind::Primary, false);
+                let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false);
+                (run.clicked(), cancel.clicked())
+            },
+        );
+        if run {
+            Some(ConsentChoice::Run)
+        } else if cancel {
+            Some(ConsentChoice::Cancel)
+        } else {
+            None
+        }
     });
     if modal.should_close() { Some(ConsentChoice::Cancel) } else { modal.inner }
 }

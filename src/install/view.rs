@@ -2,10 +2,11 @@
 //! command]"), in Settings and in a small dialog where a missing tool was
 //! needed.
 
-use eframe::egui::{self, Align, Context, Layout, RichText, Ui};
+use eframe::egui::{self, Context, RichText, Ui};
 
 use super::{Progress, Recipe};
 use crate::ai::format_elapsed;
+use crate::alert::{self, ButtonKind};
 
 const DIALOG_WIDTH: f32 = 420.0;
 /// Size of the prompt's text in Settings.
@@ -93,14 +94,12 @@ pub enum DialogChoice {
 
 /// A small dialog with the prompt, for a tool that was needed just now.
 pub fn install_dialog(ctx: &Context, offer: &Offer, progress: Option<&Progress>) -> Option<DialogChoice> {
-    let modal = egui::Modal::new(egui::Id::unique("install-offer")).show(ctx, |ui| {
-        ui.set_width(DIALOG_WIDTH);
-        ui.spacing_mut().item_spacing.y = 8.0;
-        ui.heading(format!("Install {}?", offer.recipe.name));
+    let modal = alert::show(ctx, "install-offer", DIALOG_WIDTH, |ui| {
+        alert::title(ui, &format!("Install {}?", offer.recipe.name));
         let mut choice = install_prompt(ui, &offer.message, &offer.recipe, progress, false).map(DialogChoice::Action);
         let done = matches!(progress, Some(Progress::Done(_)));
         if let Some(command) = offer.recipe.run.as_ref().map(super::InstallCommand::display).filter(|_| !done) {
-            ui.label(RichText::new("Install runs this command:").weak());
+            alert::body(ui, "Install runs this command:");
             egui::Frame::new()
                 .fill(ui.visuals().code_bg_color)
                 .corner_radius(5)
@@ -110,18 +109,23 @@ pub fn install_dialog(ctx: &Context, offer: &Offer, progress: Option<&Progress>)
                     ui.label(RichText::new(command).monospace());
                 });
         }
-        ui.add_space(4.0);
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let running = matches!(progress, Some(Progress::Running { .. }));
-            let label = if done { "Done" } else { "Close" };
-            let mut button = ui.button(label);
-            if running {
-                button = button.on_hover_text("The install goes on in the background");
-            }
-            if button.clicked() {
-                choice = Some(DialogChoice::Close);
-            }
-        });
+        let ((), close) = alert::button_row(
+            ui,
+            |_| (),
+            |ui| {
+                // Once the install is done, Done is the only thing left to do.
+                let close = if done {
+                    alert::button(ui, "Done", ButtonKind::Primary, true)
+                } else {
+                    alert::button(ui, "Close", ButtonKind::Secondary, false)
+                };
+                let running = matches!(progress, Some(Progress::Running { .. }));
+                if running { close.on_hover_text("The install goes on in the background") } else { close }
+            },
+        );
+        if close.clicked() || (done && alert::enter_for_default(ui)) {
+            choice = Some(DialogChoice::Close);
+        }
         choice
     });
     if modal.should_close() { Some(DialogChoice::Close) } else { modal.inner }

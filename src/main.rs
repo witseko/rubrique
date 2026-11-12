@@ -2,6 +2,7 @@
 //! change in a merge screen first.
 
 mod ai;
+mod alert;
 mod app;
 mod crypto;
 mod date;

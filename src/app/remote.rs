@@ -9,6 +9,7 @@ use eframe::egui::text::{CCursor, CCursorRange};
 use eframe::egui::{self, Context, Key, RichText};
 
 use super::{OpenFile, RubriqueApp};
+use crate::alert::{self, ButtonKind};
 use crate::document::text_file::DiskState;
 use crate::media::{MediaKind, image_uri, media_kind_of_url};
 use crate::remote::task::{Task, spawn_with_repaint};
@@ -267,8 +268,7 @@ impl RubriqueApp {
 
         let program = self.settings.remote.ssh_program.clone();
         let connecting = dialog.connecting.is_some();
-        let modal =
-            egui::Modal::new(egui::Id::unique("add-remote-folder")).show(ctx, |ui| draw_dialog(ui, dialog, &program));
+        let modal = alert::show(ctx, "add-remote-folder", DIALOG_WIDTH, |ui| draw_dialog(ui, dialog, &program));
         let should_close = modal.should_close();
         let events = modal.inner;
         if events.open_settings {
@@ -336,49 +336,59 @@ impl RubriqueApp {
 /// The dialog's contents; returns what the user asked for.
 fn draw_dialog(ui: &mut egui::Ui, dialog: &mut AddRemote, program: &str) -> DialogEvents {
     let connecting = dialog.connecting.is_some();
-    ui.set_width(DIALOG_WIDTH);
-    ui.heading("Add remote folder");
-    ui.label(RichText::new("A folder on another computer, opened over SSH.").weak());
-    ui.add_space(8.0);
-    draw_host_fields(ui, dialog, program);
-    ui.add_space(4.0);
+    alert::title(ui, "Add remote folder");
+    alert::body(ui, "A folder on another computer, opened over SSH.");
+    let host_entered = draw_host_fields(ui, dialog, program);
     let folder_field = draw_folder_fields(ui, dialog);
     let mut events = DialogEvents::default();
     if let Some(error) = &dialog.error {
-        ui.add_space(4.0);
         ui.colored_label(ui.visuals().error_fg_color, error);
         if dialog.program_problem && ui.link("Set the ssh program in Settings \u{2192} Files").clicked() {
             events.open_settings = true;
         }
     }
-    ui.add_space(8.0);
     let entered = folder_field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter));
     let host = dialog.host.trim();
     let host_ok = remote::mirror::is_valid_host(host);
     let ready = host_ok && !dialog.folder.trim().is_empty() && !connecting;
-    ui.horizontal(|ui| {
-        let add = ui.add_enabled(ready, egui::Button::new(add_label(&dialog.folder))).clicked();
-        events.add = add || (entered && ready);
-        events.cancel = ui.button("Cancel").clicked();
-        if connecting {
-            ui.add(egui::Spinner::new().size(SPINNER_SIZE));
-            ui.label(RichText::new(format!("Connecting to {host}\u{2026}")).weak());
-        } else if !host_ok && !host.is_empty() {
-            ui.label(RichText::new("Use a host name, or user@host").weak());
-        }
-    });
+    let ((), (add, cancel)) = alert::button_row(
+        ui,
+        |ui| {
+            if connecting {
+                ui.add(egui::Spinner::new().size(SPINNER_SIZE));
+                ui.label(RichText::new(format!("Connecting to {host}\u{2026}")).weak());
+            } else if !host_ok && !host.is_empty() {
+                ui.label(RichText::new("Use a host name, or user@host").weak());
+            }
+        },
+        |ui| {
+            let add =
+                ui.add_enabled_ui(ready, |ui| alert::button(ui, &add_label(&dialog.folder), ButtonKind::Primary, true));
+            let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false);
+            (add.inner.clicked(), cancel.clicked())
+        },
+    );
+    // Enter in the Computer field lists that host's folders; it does not add.
+    let default_enter = alert::enter_for_default(ui) && !host_entered;
+    events.add = add || ((entered || default_enter) && ready);
+    events.cancel = cancel;
     events
 }
 
 /// The Computer field and the buttons for the hosts in `~/.ssh/config`.
 /// Picking a button, or Enter in the field, starts listing that host's folders.
-fn draw_host_fields(ui: &mut egui::Ui, dialog: &mut AddRemote, program: &str) {
+/// Returns true when Enter was pressed in the field this frame.
+fn draw_host_fields(ui: &mut egui::Ui, dialog: &mut AddRemote, program: &str) -> bool {
     let connecting = dialog.connecting.is_some();
-    ui.label("Computer");
-    let field = ui.add_enabled(
-        !connecting,
-        egui::TextEdit::singleline(&mut dialog.host).hint_text("server or user@server").desired_width(f32::INFINITY),
-    );
+    alert::field_label(ui, "Computer");
+    let field = ui
+        .add_enabled_ui(!connecting, |ui| {
+            let edit = egui::TextEdit::singleline(&mut dialog.host)
+                .hint_text("server or user@server")
+                .desired_width(f32::INFINITY);
+            alert::text_field(ui, edit)
+        })
+        .inner;
     let mut picked = None;
     if !dialog.known_hosts.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -397,6 +407,7 @@ fn draw_host_fields(ui: &mut egui::Ui, dialog: &mut AddRemote, program: &str) {
     } else if typed_new_host {
         dialog.activate_host(program);
     }
+    field.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter))
 }
 
 /// The Folder field and, under it, the folders inside the typed path on the
@@ -404,15 +415,18 @@ fn draw_host_fields(ui: &mut egui::Ui, dialog: &mut AddRemote, program: &str) {
 /// the name being typed. Tab completes the one name left.
 fn draw_folder_fields(ui: &mut egui::Ui, dialog: &mut AddRemote) -> egui::Response {
     let connecting = dialog.connecting.is_some();
-    ui.label("Folder");
+    alert::field_label(ui, "Folder");
     // Focus stays locked so Tab completes a name instead of leaving the field.
     let output = ui
         .add_enabled_ui(!connecting, |ui| {
-            egui::TextEdit::singleline(&mut dialog.folder)
+            let output = egui::TextEdit::singleline(&mut dialog.folder)
                 .hint_text("~/notes")
                 .desired_width(f32::INFINITY)
                 .lock_focus(true)
-                .show(ui)
+                .margin(egui::vec2(10.0, 7.0))
+                .show(ui);
+            alert::field_ring(ui, &output.response);
+            output
         })
         .inner;
     let (typed_parent, typed_name) = split_typed(&dialog.folder);

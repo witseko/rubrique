@@ -7,7 +7,6 @@ use std::time::Duration;
 use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand};
 
 mod agent_history;
-mod alert;
 mod ask;
 mod changes_panel;
 mod delegate;
@@ -39,6 +38,7 @@ use crate::ai::agents::{self, Agent};
 use crate::ai::mention_list::{self, Suggestion};
 use crate::ai::skills::{self, Skill, SourceFolder};
 use crate::ai::{self, AiTool};
+use crate::alert::{self, ButtonKind};
 use crate::document::highlighting::Syntax;
 use crate::document::highlighting::{install_text_rules, takes_text_highlights};
 use crate::document::media_view::{MediaEvent, image_pixels, show_image, show_video};
@@ -85,7 +85,6 @@ use crate::theme::catalog::Themes;
 use crate::theme::code_colors::install_code_colors;
 use crate::theme::style::{apply_accessibility, apply_theme, install_fonts, page_fill};
 use crate::voice::view::set_memo_states;
-use alert::ButtonKind;
 use privacy::AfterPassword;
 
 /// How long a status message ("Copied ...") stays visible.
@@ -112,11 +111,6 @@ const NOTE_CARD_TINT: f32 = 0.18;
 const RENAME_DIALOG_WIDTH: f32 = 380.0;
 /// Width of the "unsaved changes" dialog.
 const UNSAVED_DIALOG_WIDTH: f32 = 440.0;
-/// Space above and below the text in the rename field.
-const RENAME_FIELD_MARGIN: f32 = 7.0;
-/// How much closer the "New name" label sits to its field than the
-/// dialog's usual gap between lines.
-const RENAME_LABEL_TUCK: f32 = 6.0;
 /// Inner margin (x, y) of the status bar.
 const BAR_MARGIN: (i8, i8) = (10, 6);
 /// Opacity of the warning color behind the "changed on disk" bar.
@@ -1596,12 +1590,12 @@ impl RubriqueApp {
                 ui,
                 |ui| rename_suggest_button(ui, waiting),
                 |ui| {
-                    let rename = alert::button(ui, "Rename", ButtonKind::Primary, true).clicked() || entered;
+                    let rename = alert::button(ui, "Rename", ButtonKind::Primary, true).clicked();
                     let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false).clicked();
                     (rename, cancel)
                 },
             );
-            (rename, cancel, suggest)
+            (rename || entered || alert::enter_for_default(ui), cancel, suggest)
         });
         let (rename, cancel, suggest) = modal.inner;
         if suggest {
@@ -2192,23 +2186,24 @@ impl RubriqueApp {
         let Some(draft) = &mut self.note_draft else {
             return;
         };
-        let modal = egui::Modal::new(egui::Id::unique("note-dialog")).show(ctx, |ui| {
-            ui.set_width(NOTE_DIALOG_WIDTH);
-            ui.heading(if draft.existing.is_some() { "Edit note" } else { "Add note" });
+        let title = if draft.existing.is_some() { "Edit note" } else { "Add note" };
+        let modal = alert::show(ctx, "note-dialog", NOTE_DIALOG_WIDTH, |ui| {
+            alert::title(ui, title);
             ui.label(
                 RichText::new(format!("On \u{201c}{}\u{201d}", shorten(&draft.quote, NOTE_QUOTE_CHARS)))
-                    .weak()
+                    .color(ui.visuals().weak_text_color())
                     .italics(),
             );
-            ui.add_space(4.0);
             let field_id = egui::Id::unique("note-dialog-field");
             let list_key = mention_list::take_key(ui.ctx(), field_id);
             let output = egui::TextEdit::multiline(&mut draft.text)
                 .id(field_id)
                 .desired_rows(3)
                 .desired_width(f32::INFINITY)
+                .margin(egui::vec2(10.0, 7.0))
                 .hint_text("Your note")
                 .show(ui);
+            alert::field_ring(ui, &output.response);
             mention_list::show(ui, field_id, &output, &mut draft.text, &mentions, list_key);
             let field = output.response;
             if !field.has_focus() && draft.text.is_empty() && draft.error.is_none() {
@@ -2217,14 +2212,18 @@ impl RubriqueApp {
             if let Some(error) = &draft.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
+            // Enter starts a new line in the note, so Cmd+Enter saves.
             let save_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                let save = ui.button("Save note").on_hover_text("Cmd+Enter").clicked() || save_keys;
-                let cancel = ui.button("Cancel").clicked();
-                (save, cancel)
-            })
-            .inner
+            let ((), (save, cancel)) = alert::button_row(
+                ui,
+                |_| (),
+                |ui| {
+                    let save = alert::button(ui, "Save note", ButtonKind::Primary, true).on_hover_text("Cmd+Enter");
+                    let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false);
+                    (save.clicked() || save_keys, cancel.clicked())
+                },
+            );
+            (save || alert::enter_for_default(ui), cancel)
         });
         let (save, cancel) = modal.inner;
         if cancel || modal.should_close() {
@@ -2837,26 +2836,10 @@ fn disk_notice_row(ui: &mut Ui, state: &DiskState) -> Option<NoticeChoice> {
     choice
 }
 
-/// The name field of the "Rename" dialog under a "New name" label, with
-/// the accent focus ring the dialog buttons use.
+/// The name field of the "Rename" dialog under a "New name" label.
 fn rename_dialog_field(ui: &mut Ui, name: &mut String) -> egui::Response {
-    ui.label(RichText::new("New name").color(ui.visuals().weak_text_color()));
-    // The label sits close to its field; the dialog's wider gap follows.
-    ui.add_space(-RENAME_LABEL_TUCK);
-    let field = ui.add(
-        egui::TextEdit::singleline(name).desired_width(f32::INFINITY).margin(egui::vec2(10.0, RENAME_FIELD_MARGIN)),
-    );
-    if field.has_focus() {
-        let accent = ui.visuals().hyperlink_color;
-        let ring = egui::Stroke::new(3.0, accent.gamma_multiply(0.35));
-        ui.painter().rect_stroke(
-            field.rect,
-            ui.visuals().widgets.active.corner_radius,
-            ring,
-            egui::StrokeKind::Outside,
-        );
-    }
-    field
+    alert::field_label(ui, "New name");
+    alert::text_field(ui, egui::TextEdit::singleline(name).desired_width(f32::INFINITY))
 }
 
 /// "Suggest" (a name from the Summaries tool), or a spinner while it thinks.
@@ -2907,7 +2890,7 @@ fn unsaved_choice_buttons(ui: &mut Ui) -> Option<UnsavedChoice> {
             (save, keep, cancel)
         },
     );
-    let enter = alert::enter_for_default(ui, &[&discard, &save, &keep, &cancel]);
+    let enter = alert::enter_for_default(ui);
     if save.clicked() || enter {
         Some(UnsavedChoice::Save)
     } else if keep.clicked() {

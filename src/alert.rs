@@ -16,6 +16,12 @@ const RADIUS: u8 = 12;
 const LINE_GAP: f32 = 12.0;
 /// Font size of the title (the body text keeps the interface size).
 const TITLE_SIZE: f32 = 17.0;
+/// How much closer a field's label sits to its field than the usual gap.
+const LABEL_TUCK: f32 = 6.0;
+/// Space left and right of the text in a dialog field.
+const FIELD_MARGIN_X: f32 = 10.0;
+/// Space above and below the text in a dialog field.
+const FIELD_MARGIN_Y: f32 = 7.0;
 /// Height of a dialog button.
 const BUTTON_HEIGHT: f32 = 32.0;
 /// Space left and right of a filled button's label.
@@ -37,7 +43,7 @@ const LIGHT_FILL: f32 = 0.25;
 
 /// What a dialog button does, which sets how it looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ButtonKind {
+pub enum ButtonKind {
     /// The usual choice (Save, Rename): filled with the accent color.
     Primary,
     /// Any other choice, Cancel included: the surface fill.
@@ -50,7 +56,7 @@ pub(super) enum ButtonKind {
 
 /// Show an alert dialog `width` points wide with the shared frame and
 /// spacing. Esc and a click outside close it ([`ModalResponse::should_close`]).
-pub(super) fn show<T>(
+pub fn show<T>(
     ctx: &Context,
     id: &'static str,
     width: f32,
@@ -85,23 +91,48 @@ fn edge_color(visuals: &Visuals) -> Color32 {
 }
 
 /// The dialog's question, in the strong text color.
-pub(super) fn title(ui: &mut Ui, text: &str) {
+pub fn title(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(TITLE_SIZE).color(ui.visuals().strong_text_color()));
 }
 
 /// A line of explanation under the title, in the weak text color.
-pub(super) fn body(ui: &mut Ui, text: &str) {
+pub fn body(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).color(ui.visuals().weak_text_color()));
+}
+
+/// The weak label over a dialog field ("New name"). Adds no gap of its
+/// own beyond a small one, so it sits close to the field under it.
+pub fn field_label(ui: &mut Ui, text: &str) {
+    ui.label(RichText::new(text).color(ui.visuals().weak_text_color()));
+    ui.add_space(-LABEL_TUCK);
+}
+
+/// A dialog's text field as built by the caller (width, hint, password),
+/// a little taller than egui's, with the accent focus ring.
+pub fn text_field(ui: &mut Ui, edit: egui::TextEdit<'_>) -> egui::Response {
+    let response = ui.add(edit.margin(vec2(FIELD_MARGIN_X, FIELD_MARGIN_Y)));
+    field_ring(ui, &response);
+    response
+}
+
+/// The edge of a dialog field: the accent ring (matching the button ring)
+/// while it has focus, else a thin border. Without the border a field
+/// without focus vanishes, since egui fills it with the dialog's own color.
+pub fn field_ring(ui: &Ui, field: &egui::Response) {
+    let visuals = ui.visuals();
+    let radius = visuals.widgets.active.corner_radius;
+    if field.has_focus() {
+        let ring = Stroke::new(RING_WIDTH, visuals.hyperlink_color.gamma_multiply(RING_OPACITY));
+        ui.painter().rect_stroke(field.rect, radius, ring, StrokeKind::Outside);
+    } else {
+        ui.painter().rect_stroke(field.rect, radius, Stroke::new(1.0, edge_color(visuals)), StrokeKind::Inside);
+    }
 }
 
 /// A row of buttons: `left` packed from the left edge, `right` from the
 /// right edge. `right` adds its buttons right to left, so the first one it
 /// adds ends up rightmost: add the usual choice first.
-pub(super) fn button_row<L, R>(
-    ui: &mut Ui,
-    left: impl FnOnce(&mut Ui) -> L,
-    right: impl FnOnce(&mut Ui) -> R,
-) -> (L, R) {
+pub fn button_row<L, R>(ui: &mut Ui, left: impl FnOnce(&mut Ui) -> L, right: impl FnOnce(&mut Ui) -> R) -> (L, R) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = BUTTON_GAP;
         let left = left(ui);
@@ -111,28 +142,32 @@ pub(super) fn button_row<L, R>(
     .inner
 }
 
-/// Whether Enter was pressed for the dialog's usual choice: no dialog
-/// button has keyboard focus (Enter on a focused button clicks that one).
-pub(super) fn enter_for_default(ui: &Ui, buttons: &[&egui::Response]) -> bool {
-    !buttons.iter().any(|button| button.has_focus()) && ui.input(|input| input.key_pressed(Key::Enter))
+/// Whether Enter was pressed for the dialog's usual choice: nothing has
+/// keyboard focus, which is when [`button`] rings the default. A focused
+/// button takes Enter as its own click, and a focused multi-line field
+/// takes it as a new line.
+pub fn enter_for_default(ui: &Ui) -> bool {
+    ui.memory(|memory| memory.focused().is_none()) && ui.input(|input| input.key_pressed(Key::Enter))
 }
 
 /// A dialog button. `is_default` marks the one Enter takes with the focus
 /// ring while no other button has keyboard focus; a focused button always
 /// gets the ring.
-pub(super) fn button(ui: &mut Ui, label: &str, kind: ButtonKind, is_default: bool) -> egui::Response {
+pub fn button(ui: &mut Ui, label: &str, kind: ButtonKind, is_default: bool) -> egui::Response {
     let padding = if kind == ButtonKind::Discard { TEXT_BUTTON_PADDING } else { BUTTON_PADDING };
     let font = egui::TextStyle::Button.resolve(ui.style());
     let galley = ui.painter().layout_no_wrap(label.to_owned(), font, Color32::PLACEHOLDER);
     let size = vec2(galley.size().x + 2.0 * padding, BUTTON_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    response.widget_info(|| WidgetInfo::labeled(Role::Button, true, label));
+    let enabled = ui.is_enabled();
+    response.widget_info(|| WidgetInfo::labeled(Role::Button, enabled, label));
     if !ui.is_rect_visible(rect) {
         return response;
     }
     let visuals = ui.visuals();
     let something_focused = ui.memory(|memory| memory.focused().is_some());
-    let ringed = response.has_focus() || (is_default && !something_focused);
+    // A disabled button (in `ui.add_enabled_ui`) is faded by egui and never ringed.
+    let ringed = enabled && (response.has_focus() || (is_default && !something_focused));
     let (fill, text_color) = button_colors(visuals, kind, response.hovered() || response.is_pointer_button_down_on());
     let painter = ui.painter();
     let radius = CornerRadius::same(BUTTON_RADIUS);
@@ -209,8 +244,8 @@ mod tests {
                     |_| (),
                     |ui| {
                         let delete = button(ui, "Move to Trash", ButtonKind::Delete, false);
-                        let cancel = button(ui, "Cancel", ButtonKind::Secondary, true);
-                        let enter = enter_for_default(ui, &[&delete, &cancel]);
+                        button(ui, "Cancel", ButtonKind::Secondary, true);
+                        let enter = enter_for_default(ui);
                         Frame { delete_id: delete.id, delete_clicked: delete.clicked(), enter_for_cancel: enter }
                     },
                 )
