@@ -79,6 +79,78 @@ pub fn create_scratch(folder: &Path, date: &str, vault: Option<&Vault>) -> io::R
     Err(io::Error::new(ErrorKind::AlreadyExists, "no free scratch name, clean up the scratches folder"))
 }
 
+/// The longest file name part taken from an imported tab's name.
+const MAX_SLUG_CHARS: usize = 40;
+
+/// A file name part from a tab name: the first line, lowercase, letters and
+/// digits only, other runs of characters turned into one `-`. Empty when
+/// the name has no letters or digits.
+fn name_slug(name: &str) -> String {
+    let first_line = name.lines().next().unwrap_or_default();
+    let mut slug = String::new();
+    for character in first_line.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() {
+            if slug.chars().count() >= MAX_SLUG_CHARS {
+                break;
+            }
+            slug.push(character);
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    slug.trim_end_matches('-').to_string()
+}
+
+/// Write `text` into a new scratch in `folder` (made if missing), encrypted
+/// with `vault` when given, named `DATE-name.md` after `name`
+/// (`DATE-name-2.md` and on when that is taken), or a random scratch name
+/// when `name` has no letters or digits. Never overwrites. Returns the new
+/// file's path.
+///
+/// # Errors
+///
+/// Fails when the folder cannot be created or written, or every tried name exists.
+pub fn import_scratch(folder: &Path, date: &str, name: &str, text: &str, vault: Option<&Vault>) -> io::Result<PathBuf> {
+    fs::create_dir_all(folder)?;
+    let slug = name_slug(name);
+    for attempt in 0..MAX_ATTEMPTS {
+        let file_name = match (slug.is_empty(), attempt) {
+            (true, _) => scratch_name(date, random_seed(attempt)),
+            (false, 0) => format!("{date}-{slug}.md"),
+            (false, _) => format!("{date}-{slug}-{}.md", attempt + 1),
+        };
+        let path = folder.join(file_name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                match vault {
+                    Some(vault) => file.write_all(&vault.encrypt(text.as_bytes()))?,
+                    None => file.write_all(text.as_bytes())?,
+                }
+                return Ok(path);
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(ErrorKind::AlreadyExists, "no free scratch name, clean up the scratches folder"))
+}
+
+/// The text of every scratch in `folder` that can be read: the plain ones,
+/// and the encrypted ones `vault` opens. An import run twice uses it to skip
+/// what it brought in the first time.
+pub fn scratch_texts(folder: &Path, vault: Option<&Vault>) -> Vec<String> {
+    scratch_files(folder)
+        .iter()
+        .filter_map(|path| fs::read(path).ok())
+        .filter_map(|bytes| match (crypto::is_encrypted(&bytes), vault) {
+            (false, _) => Some(bytes),
+            (true, Some(vault)) => vault.decrypt(&bytes).ok(),
+            (true, None) => None,
+        })
+        .filter_map(|bytes| String::from_utf8(bytes).ok())
+        .collect()
+}
+
 /// The Markdown files directly in the scratch folder.
 fn scratch_files(folder: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(folder) else {
@@ -297,6 +369,44 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), "secret words");
         decrypt_scratch(&path, &vault).unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), "secret words");
+    }
+
+    #[test]
+    fn imported_names_come_from_the_tab_name() {
+        assert_eq!(name_slug("Shopping list: milk, eggs!"), "shopping-list-milk-eggs");
+        assert_eq!(name_slug("  Ideas\nsecond line"), "ideas");
+        assert_eq!(name_slug("Привіт світ"), "привіт-світ");
+        assert_eq!(name_slug("--- ..."), "");
+        assert_eq!(name_slug(&"a".repeat(60)), "a".repeat(MAX_SLUG_CHARS));
+    }
+
+    #[test]
+    fn imports_a_text_without_overwriting() {
+        let temp = TempFolder::new();
+        let folder = temp.path().join("scratches");
+        let first = import_scratch(&folder, "2026-11-12", "Todo list", "one", None).unwrap();
+        let second = import_scratch(&folder, "2026-11-12", "todo list", "two", None).unwrap();
+        assert_eq!(first, folder.join("2026-11-12-todo-list.md"));
+        assert_eq!(second, folder.join("2026-11-12-todo-list-2.md"));
+        assert_eq!(fs::read_to_string(&first).unwrap(), "one");
+        assert_eq!(fs::read_to_string(&second).unwrap(), "two");
+
+        let unnamed = import_scratch(&folder, "2026-11-12", "", "three", None).unwrap();
+        assert!(is_random_scratch_name(unnamed.file_name().unwrap().to_str().unwrap()));
+    }
+
+    #[test]
+    fn scratch_texts_open_encrypted_ones_only_with_the_key() {
+        let temp = TempFolder::new();
+        let vault = Vault::create("password").0;
+        let other = Vault::create("another").0;
+        temp.write("a-plain.md", "words");
+        temp.write("notes.txt", "not a scratch");
+        let sealed = import_scratch(temp.path(), "2026-11-12", "b sealed", "secret", Some(&vault)).unwrap();
+        assert!(crypto::is_encrypted(&fs::read(&sealed).unwrap()));
+        assert_eq!(scratch_texts(temp.path(), None), vec!["words".to_string()]);
+        assert_eq!(scratch_texts(temp.path(), Some(&other)), vec!["words".to_string()]);
+        assert_eq!(scratch_texts(temp.path(), Some(&vault)), vec!["secret".to_string(), "words".to_string()]);
     }
 
     #[test]

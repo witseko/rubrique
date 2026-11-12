@@ -23,6 +23,7 @@ use crate::theme::code_colors::CodeColors;
 pub(super) enum MenuCommand {
     NewScratch,
     NewEncryptedScratch,
+    ImportFromSublime,
     AddFolder,
     OpenPath,
     Save,
@@ -85,6 +86,7 @@ impl RubriqueApp {
         let file = vec![
             item("New scratch", MenuCommand::NewScratch, Some(&NEW_SCRATCH)),
             item("New encrypted scratch", MenuCommand::NewEncryptedScratch, Some(&NEW_ENCRYPTED_SCRATCH)),
+            item("Import from Sublime Text", MenuCommand::ImportFromSublime, None),
             MenuEntry::Separator,
             item("Add folder...", MenuCommand::AddFolder, None),
             item("Open path...", MenuCommand::OpenPath, Some(&OPEN_PATH)),
@@ -165,6 +167,7 @@ impl RubriqueApp {
         match command {
             MenuCommand::NewScratch => self.new_scratch(ctx, self.encrypt_new_scratches()),
             MenuCommand::NewEncryptedScratch => self.new_scratch(ctx, true),
+            MenuCommand::ImportFromSublime => self.import_from_sublime(),
             MenuCommand::AddFolder => self.choose_folder_to_add(),
             MenuCommand::OpenPath => self.start_open_path(),
             MenuCommand::Save => {

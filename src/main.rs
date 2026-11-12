@@ -20,6 +20,7 @@ mod remote;
 mod scratch;
 mod settings;
 mod shell_path;
+mod sublime;
 mod terminal;
 #[cfg(test)]
 mod test_support;

@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Import from Sublime Text.** File > Import from Sublime Text (or the
+  button under Settings > Files > Scratches) copies every unsaved Sublime
+  Text tab, new tabs and files with edits not saved yet, into a new
+  scratch named after the tab, so nothing is lost when you move over.
+  Imported scratches are encrypted when new scratches are, and a text
+  that is already a scratch is skipped, so running it again adds nothing.
+
 ## [0.10.1] - 2026-11-11
 
 ### Fixed
