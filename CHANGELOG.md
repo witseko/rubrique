@@ -17,6 +17,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   Imported scratches are encrypted when new scratches are, and a text
   that is already a scratch is skipped, so running it again adds nothing.
 
+### Changed
+
+- **New file asks for a name and an extension.** New ▸ File no longer
+  suggests `untitled.md`: it shows two empty fields, `name` and `ext`.
+  Type the name, press Enter, then type the extension or click one of
+  `md`, `txt`, `sql`, `py`, `ts`, `rs`, `go` under the fields. A name
+  typed whole (`plan.md`) is created on the first Enter, and an empty
+  extension makes a file without one (`Makefile`).
+
 ## [0.10.1] - 2026-11-11
 
 ### Fixed

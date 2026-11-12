@@ -1,7 +1,8 @@
 //! "New ▸ File / Folder / Terminal" in a folder's right-click menu: a name
-//! field opens at the top of the folder in the tree, with a free name
-//! filled in and the part before the extension selected. Enter creates the
-//! entry (a new file also opens in a tab), Esc cancels.
+//! field opens at the top of the folder in the tree. A folder or terminal
+//! gets a free name filled in, with the part before the extension
+//! selected; a file gets an empty name field and an empty extension field.
+//! Enter creates the entry (a new file also opens in a tab), Esc cancels.
 
 use std::fs::{self, OpenOptions};
 use std::io;
@@ -27,11 +28,13 @@ impl RubriqueApp {
             root.open_folder(&folder);
         }
         let name = match kind {
-            NewKind::File => free_name(&folder, "untitled", Some("md")),
+            // A file starts with both of its fields empty: no name and no
+            // extension is assumed.
+            NewKind::File => String::new(),
             NewKind::Folder => free_name(&folder, "new-folder", None),
             NewKind::Terminal => free_name(&folder, "terminal", Some(TERMINAL_EXTENSION)),
         };
-        self.new_entry = Some(InlineRename::with_name(NewEntry { folder, kind }, name));
+        self.new_entry = Some(InlineRename::with_name(NewEntry::new(folder, kind), name));
     }
 
     /// Create the entry whose name field was just submitted; on failure the
@@ -40,7 +43,7 @@ impl RubriqueApp {
         let Some(mut entry) = self.new_entry.take_if(|entry| entry.submitted) else {
             return;
         };
-        if let Err(error) = self.create_entry(&entry.target, &entry.name) {
+        if let Err(error) = self.create_entry(&entry.target, &entry.full_name()) {
             entry.failed(error);
             self.new_entry = Some(entry);
         }
