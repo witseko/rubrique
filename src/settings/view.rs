@@ -49,6 +49,8 @@ pub enum SettingsAction {
     ChooseScratchFolder,
     /// Go back to the default scratch folder.
     ResetScratchFolder,
+    /// Copy Sublime Text's unsaved tabs into new scratches.
+    ImportFromSublime,
     /// Remote folders were turned on or off, or the ssh program changed.
     RemoteChanged,
     /// An AI command changed, so which tools are installed may have too.
@@ -531,6 +533,17 @@ fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Op
             action = Some(SettingsAction::ResetScratchFolder);
         }
     });
+    ui.add_space(4.0);
+    if ui
+        .button("Import from Sublime Text")
+        .on_hover_text(
+            "Copy every unsaved Sublime Text tab (new tabs and edited files) into a new scratch here. Texts \
+             already in a scratch are skipped, so it is safe to run again",
+        )
+        .clicked()
+    {
+        action = Some(SettingsAction::ImportFromSublime);
+    }
     ui.add_space(16.0);
     ui.label(RichText::new("Remote folders").strong());
     let remote = scratch.remote;

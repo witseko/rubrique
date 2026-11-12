@@ -22,6 +22,10 @@ use crate::theme::style::group_color;
 use super::paths::{absolute_path_text, name_text, relative_path_text};
 use super::tree::{Children, FsNode, NodeKind, is_markdown_path};
 
+mod new_file;
+
+use new_file::{NamePart, new_entry_row};
+
 /// Something the user asked for in the explorer.
 #[derive(Debug)]
 pub enum ExplorerAction {
@@ -90,6 +94,18 @@ pub enum NewKind {
 pub struct NewEntry {
     pub folder: PathBuf,
     pub kind: NewKind,
+    /// A new file's extension, typed in its own field after the name or
+    /// picked from the buttons under it. Not used for the other kinds.
+    extension: String,
+    /// Which of a new file's two fields is being typed in.
+    part: NamePart,
+}
+
+impl NewEntry {
+    /// A new `kind` to be named in `folder`.
+    pub fn new(folder: PathBuf, kind: NewKind) -> Self {
+        NewEntry { folder, kind, extension: String::new(), part: NamePart::default() }
+    }
 }
 
 /// The name field in the Terminals list: for a new tmux session (the +
@@ -458,7 +474,7 @@ fn show_children(
         Children::Loaded(children) => {
             // A new entry is named at the top of its folder.
             if edits.new_entry.as_ref().is_some_and(|new_entry| new_entry.target.folder == folder.path) {
-                rename_row(ui, edits.new_entry);
+                new_entry_row(ui, edits.new_entry);
             }
             for child in children.iter_mut() {
                 if child.is_folder() {
