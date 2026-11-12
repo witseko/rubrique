@@ -306,6 +306,8 @@ mod tests {
                 side_view: layout::SideView::Notes,
                 files_collapsed: false,
                 terminals_collapsed: true,
+                tab_position: layout::TabPosition::Explorer,
+                explorer_view: layout::ExplorerView::Tabs,
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {

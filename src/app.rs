@@ -28,6 +28,7 @@ mod side_panel;
 mod structure;
 mod summary;
 mod tab_groups;
+mod tab_list;
 mod tabs;
 mod terminals;
 mod text_highlight;
@@ -69,8 +70,9 @@ use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
+use crate::settings::layout::{ExplorerView, TabPosition};
 use crate::settings::view::{
-    AiInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
+    AiInfo, AppearanceInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
 use crate::settings::{Settings, default_agents_folder, default_scratch_folder, default_skills_folder, themes_folder};
 use crate::terminal::agent_sessions::SessionHistory;
@@ -1199,10 +1201,13 @@ impl RubriqueApp {
         let action = show_settings(
             ui,
             &mut self.settings_group,
-            &self.themes,
-            &self.settings.theme,
-            self.settings.code_colors,
-            folder.as_deref(),
+            AppearanceInfo {
+                themes: &self.themes,
+                current: &self.settings.theme,
+                code_colors: self.settings.code_colors,
+                themes_folder: folder.as_deref(),
+                tab_position: &mut self.settings.layout.tab_position,
+            },
             highlight,
             &mut self.settings.accessibility,
             scratch,
@@ -1225,15 +1230,7 @@ impl RubriqueApp {
             SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
             SettingsAction::WriteHighlightRule => self.write_highlight_rule(),
             SettingsAction::StopHighlightRule => self.rule_writer.stop(),
-            SettingsAction::ChooseScratchFolder => {
-                let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
-                if let Some(current) = &scratch_folder {
-                    dialog = dialog.set_directory(current);
-                }
-                if let Some(chosen) = dialog.pick_folder() {
-                    self.settings.scratch_folder = Some(chosen);
-                }
-            }
+            SettingsAction::ChooseScratchFolder => self.choose_scratch_folder(scratch_folder.as_deref()),
             SettingsAction::ResetScratchFolder => self.settings.scratch_folder = None,
             SettingsAction::RemoteChanged => self.remote_settings_changed(),
             SettingsAction::AiCommandChanged => self.check_ai_tools(),
@@ -1265,6 +1262,17 @@ impl RubriqueApp {
             SettingsAction::Close => self.settings_open = false,
             // The Privacy buttons (privacy.rs).
             _ => self.privacy_action(&action),
+        }
+    }
+
+    /// Ask for another folder for scratch files, starting in `current`.
+    fn choose_scratch_folder(&mut self, current: Option<&Path>) {
+        let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
+        if let Some(current) = current {
+            dialog = dialog.set_directory(current);
+        }
+        if let Some(chosen) = dialog.pick_folder() {
+            self.settings.scratch_folder = Some(chosen);
         }
     }
 
@@ -1624,6 +1632,20 @@ impl RubriqueApp {
     }
 
     /// Left panel: one file tree per root folder.
+    /// The explorer panel's contents: the folder tree, or, with the tabs
+    /// listed in the explorer, its Files | Tabs switch and what it picks.
+    fn explorer_panel(&mut self, ui: &mut Ui) {
+        if self.settings.layout.tab_position == TabPosition::Top {
+            self.explorer(ui);
+            return;
+        }
+        self.explorer_view_switch(ui);
+        match self.settings.layout.explorer_view {
+            ExplorerView::Files => self.explorer(ui),
+            ExplorerView::Tabs => self.tab_list(ui),
+        }
+    }
+
     fn explorer(&mut self, ui: &mut Ui) {
         let open_path = self.open_file.path().map(Path::to_path_buf);
         let dirty_files: Vec<PathBuf> = std::iter::once(&self.open_file)
@@ -1720,13 +1742,23 @@ impl RubriqueApp {
         }
     }
 
+    /// The bar above the page, when any tab is open: the tab strip, or the
+    /// active tab's name while the tabs are listed in the explorer.
+    fn page_header(&mut self, ui: &mut Ui) {
+        if self.tabs.is_empty() {
+            return;
+        }
+        match self.settings.layout.tab_position {
+            TabPosition::Top => self.tab_bar(ui),
+            TabPosition::Explorer => self.page_bar(ui),
+        }
+        self.finish_tab_rename();
+    }
+
     /// Right panel: the tabs, then the editor, preview, image, video, or
     /// why the file cannot be shown.
     fn document_area(&mut self, ui: &mut Ui) {
-        if !self.tabs.is_empty() {
-            self.tab_bar(ui);
-            self.finish_tab_rename();
-        }
+        self.page_header(ui);
         self.ask.page_rect = Some(ui.available_rect_before_wrap());
         let page = ui.available_rect_before_wrap();
         if self.merging.is_none() {
@@ -2906,7 +2938,7 @@ impl eframe::App for RubriqueApp {
                     ui.add_space(2.0);
                 });
             }
-            self.explorer(ui);
+            self.explorer_panel(ui);
         });
         self.right_panel(ui);
         if self.ask.job.is_some() && self.merging.is_none() {

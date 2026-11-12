@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Tabs in the explorer.** Settings > Appearance > Tabs: In the explorer
+  lists the open tabs in the explorer, one per row, so long names show in
+  full. A Files | Tabs switch at the top of the explorer flips between the
+  folders and the tabs (with how many are open), and the bar above the
+  page then shows just the file's name and the Preview | Source switch.
+  Tabs keep their folder groups, colors, close cross and right-click menu.
+
 ## [0.10.1] - 2026-11-11
 
 ### Fixed
