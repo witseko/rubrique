@@ -28,7 +28,10 @@ lipo -create \
     target/aarch64-apple-darwin/release/rubrique \
     target/x86_64-apple-darwin/release/rubrique \
     -output "$app/Contents/MacOS/rubrique"
-sed "s/__VERSION__/$version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
+# macOS wants the bundle version as plain numbers (1.1.0), so a pre-release
+# suffix (-rc.1) is left out there; file names and the volume keep it.
+plist_version="${version%%-*}"
+sed "s/__VERSION__/$plist_version/g" packaging/macos/Info.plist > "$app/Contents/Info.plist"
 # App icon: an .iconset from the PNG sizes, turned into .icns by iconutil.
 iconset="dist/rubrique.iconset"
 rm -rf "$iconset"
