@@ -26,6 +26,7 @@ use zeroize::Zeroizing;
 
 use super::find::{ACCENT_STROKE, outline_color};
 use super::{OpenFile, RubriqueApp};
+use crate::alert::{self, ButtonKind};
 use crate::crypto::{KEY_LEN, Vault, pin_hash, verify_pin};
 use crate::document::view::restore_editor_state;
 use crate::explorer::paths::name_text;
@@ -46,7 +47,7 @@ const PIN_TRIES: u32 = 5;
 const PIN_WAIT_SECONDS: f64 = 30.0;
 /// "Lock after" picked when a PIN is set for the first time.
 const DEFAULT_LOCK_MINUTES: u32 = 15;
-const DIALOG_WIDTH: f32 = 340.0;
+const DIALOG_WIDTH: f32 = 380.0;
 const FIELD_WIDTH: f32 = 260.0;
 /// Width of the password field and the buttons under it on a locked scratch.
 const LOCKED_COLUMN_WIDTH: f32 = 280.0;
@@ -732,9 +733,8 @@ impl RubriqueApp {
         let mut submit = false;
         let mut cancel = false;
         let mut use_touch_id = false;
-        let modal = egui::Modal::new(egui::Id::unique("secret-dialog")).show(ctx, |ui| {
-            ui.set_width(DIALOG_WIDTH);
-            ui.heading(dialog.purpose.title());
+        let modal = alert::show(ctx, "secret-dialog", DIALOG_WIDTH, |ui| {
+            alert::title(ui, dialog.purpose.title());
             if dialog.purpose == Purpose::NewPassword {
                 ui.label(
                     RichText::new("If you forget this password, encrypted scratches cannot be read.")
@@ -743,9 +743,9 @@ impl RubriqueApp {
             }
             let mut first_field = None;
             let mut field = |ui: &mut Ui, label: &str, text: &mut Zeroizing<String>| {
-                ui.label(label);
-                let response =
-                    ui.add(egui::TextEdit::singleline(&mut **text).password(true).desired_width(FIELD_WIDTH));
+                alert::field_label(ui, label);
+                let edit = egui::TextEdit::singleline(&mut **text).password(true).desired_width(f32::INFINITY);
+                let response = alert::text_field(ui, edit);
                 if response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                     submit = true;
                 }
@@ -769,15 +769,23 @@ impl RubriqueApp {
             if let Some(error) = &dialog.error {
                 ui.label(RichText::new(error).color(ui.visuals().error_fg_color));
             }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                submit |= ui.button("OK").clicked();
-                cancel |= ui.button("Cancel").clicked();
-                if touch_id_on {
-                    let label = if touch_id_waiting { "Waiting for Touch ID…" } else { "Use Touch ID" };
-                    use_touch_id |= ui.add_enabled(!touch_id_waiting, egui::Button::new(label)).clicked();
-                }
-            });
+            alert::button_row(
+                ui,
+                |ui| {
+                    if touch_id_on {
+                        let label = if touch_id_waiting { "Waiting for Touch ID…" } else { "Use Touch ID" };
+                        let touch_id = ui.add_enabled_ui(!touch_id_waiting, |ui| {
+                            alert::button(ui, label, ButtonKind::Secondary, false)
+                        });
+                        use_touch_id |= touch_id.inner.clicked();
+                    }
+                },
+                |ui| {
+                    submit |= alert::button(ui, "OK", ButtonKind::Primary, true).clicked();
+                    cancel |= alert::button(ui, "Cancel", ButtonKind::Secondary, false).clicked();
+                },
+            );
+            submit |= alert::enter_for_default(ui);
         });
         if cancel || modal.should_close() {
             self.privacy.dialog = None;

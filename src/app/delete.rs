@@ -3,16 +3,17 @@
 
 use std::path::{Path, PathBuf};
 
-use eframe::egui::{self, Context, Key, RichText};
+use eframe::egui::Context;
 
 use super::RubriqueApp;
+use crate::alert::{self, ButtonKind};
 use crate::explorer::paths::name_text;
 use crate::explorer::tree::FsNode;
 use crate::media::image_uri;
 use crate::remote;
 
 /// Width of the "Delete" dialog.
-const DIALOG_WIDTH: f32 = 360.0;
+const DIALOG_WIDTH: f32 = 380.0;
 
 impl RubriqueApp {
     /// Ask whether to delete `path` (the dialog runs in [`Self::delete_dialog`]).
@@ -29,27 +30,31 @@ impl RubriqueApp {
         let has_unsaved =
             self.all_tabs_mut().any(|tab| tab.path().is_some_and(|open| open.starts_with(&path)) && tab.is_dirty());
         let confirm_label = if is_remote { "Delete" } else { "Move to Trash" };
-        let modal = egui::Modal::new(egui::Id::unique("delete-file")).show(ctx, |ui| {
-            ui.set_width(DIALOG_WIDTH);
-            ui.heading(format!("Delete \u{201c}{}\u{201d}?", name_text(&path)));
-            ui.add_space(4.0);
+        let title = format!("Delete \u{201c}{}\u{201d}?", name_text(&path));
+        let modal = alert::show(ctx, "delete-file", DIALOG_WIDTH, |ui| {
+            alert::title(ui, &title);
             let explanation = if is_remote {
                 "It is in a remote folder, which has no Trash: it is deleted for good."
             } else {
                 "It goes to the Trash, where you can restore it."
             };
-            ui.label(explanation);
+            alert::body(ui, explanation);
             if has_unsaved {
                 ui.colored_label(ui.visuals().warn_fg_color, "Its unsaved changes are lost too.");
             }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let confirmed = ui.button(RichText::new(confirm_label).color(ui.visuals().error_fg_color)).clicked()
-                    || ui.input(|input| input.key_pressed(Key::Enter));
-                let cancelled = ui.button("Cancel").clicked();
-                (confirmed, cancelled)
-            })
-            .inner
+            // Enter takes Cancel, never the delete: deleting needs a click
+            // or Tab to the button.
+            let ((), (confirm, cancel)) = alert::button_row(
+                ui,
+                |_| (),
+                |ui| {
+                    let confirm = alert::button(ui, confirm_label, ButtonKind::Delete, false);
+                    let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, true);
+                    (confirm, cancel)
+                },
+            );
+            let enter = alert::enter_for_default(ui);
+            (confirm.clicked(), cancel.clicked() || enter)
         });
         let (confirmed, cancelled) = modal.inner;
         if cancelled || modal.should_close() {

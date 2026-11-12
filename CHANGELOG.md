@@ -32,6 +32,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   typed whole (`plan.md`) is created on the first Enter, and an empty
   extension makes a file without one (`Makefile`).
 
+- **Clearer dialogs.** Every dialog (unsaved changes, delete, rename,
+  open path, notes, passwords and PIN, remote folders, installs and AI
+  runs) asks its question as the title and fills the usual choice with
+  the accent color: Enter takes it and Esc cancels. Discard is red and set
+  apart on the left of the unsaved changes dialog. In the delete dialog,
+  Move to Trash is red and Enter now cancels, so a stray Enter never
+  deletes a file. Running an AI tool still takes a click.
+
 ## [0.10.1] - 2026-11-11
 
 ### Fixed
