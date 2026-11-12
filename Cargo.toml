@@ -49,6 +49,8 @@ trash = "5.3"
 # expressions. This crate matches in linear time, so no pattern can hang the
 # editor on a long line.
 regex = "1.13.1"
+# "Import from Sublime Text" reads its session file, which is JSON.
+serde_json = "1.0.154"
 
 # The menu bar at the top of the screen on macOS (File, View, Settings), in
 # place of the menu bar drawn inside the window on other systems.

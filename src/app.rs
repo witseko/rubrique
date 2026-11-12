@@ -27,6 +27,7 @@ mod privacy;
 mod remote;
 mod side_panel;
 mod structure;
+mod sublime_import;
 mod summary;
 mod tab_groups;
 mod tabs;
@@ -1234,16 +1235,9 @@ impl RubriqueApp {
             SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
             SettingsAction::WriteHighlightRule => self.write_highlight_rule(),
             SettingsAction::StopHighlightRule => self.rule_writer.stop(),
-            SettingsAction::ChooseScratchFolder => {
-                let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
-                if let Some(current) = &scratch_folder {
-                    dialog = dialog.set_directory(current);
-                }
-                if let Some(chosen) = dialog.pick_folder() {
-                    self.settings.scratch_folder = Some(chosen);
-                }
-            }
-            SettingsAction::ResetScratchFolder => self.settings.scratch_folder = None,
+            SettingsAction::ChooseScratchFolder
+            | SettingsAction::ResetScratchFolder
+            | SettingsAction::ImportFromSublime => self.scratch_settings_action(&action, scratch_folder.as_deref()),
             SettingsAction::RemoteChanged => self.remote_settings_changed(),
             SettingsAction::AiCommandChanged => self.check_ai_tools(),
             SettingsAction::ForgetAllowedFolders => {
@@ -1456,17 +1450,46 @@ impl RubriqueApp {
                 return;
             }
         };
-        if self.roots.iter().any(|root| folder.starts_with(&root.path)) {
-            self.roots.iter_mut().for_each(FsNode::refresh);
-        } else {
-            self.add_folder(folder);
-        }
+        self.show_scratch_folder(folder);
         self.open_in_tab(path);
         // A new scratch is for typing, so it opens on its source.
         if let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = true;
         }
         focus_editor(ctx);
+    }
+
+    /// The Scratches part of Settings → Files: pick the folder, go back to
+    /// the default one, or import Sublime Text's unsaved tabs into it.
+    fn scratch_settings_action(&mut self, action: &SettingsAction, scratch_folder: Option<&Path>) {
+        match action {
+            SettingsAction::ChooseScratchFolder => {
+                let mut dialog = rfd::FileDialog::new().set_title("Folder for scratch files");
+                if let Some(current) = scratch_folder {
+                    dialog = dialog.set_directory(current);
+                }
+                if let Some(chosen) = dialog.pick_folder() {
+                    self.settings.scratch_folder = Some(chosen);
+                }
+            }
+            SettingsAction::ResetScratchFolder => self.settings.scratch_folder = None,
+            SettingsAction::ImportFromSublime => {
+                // Closed so the status line and the new scratches show.
+                self.settings_open = false;
+                self.import_from_sublime();
+            }
+            _ => {}
+        }
+    }
+
+    /// Show the scratch `folder` in the explorer with its new files: read
+    /// again when an explorer folder holds it, added as a folder otherwise.
+    fn show_scratch_folder(&mut self, folder: PathBuf) {
+        if self.roots.iter().any(|root| folder.starts_with(&root.path)) {
+            self.roots.iter_mut().for_each(FsNode::refresh);
+        } else {
+            self.add_folder(folder);
+        }
     }
 
     /// Open the "Rename" dialog for `path`.
