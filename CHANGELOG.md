@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Clearer save, delete and rename dialogs.** The dialogs ask their
+  question as the title ("Save changes to “todo.md”?") and fill the usual
+  choice with the accent color: Enter takes it and Esc cancels. Discard
+  is red and set apart on the left of the unsaved changes dialog. In the
+  delete dialog, Move to Trash is red and Enter now cancels, so a stray
+  Enter never deletes a file.
+
 ## [0.10.1] - 2026-11-11
 
 ### Fixed

@@ -7,6 +7,7 @@ use std::time::Duration;
 use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, RichText, Ui, ViewportCommand};
 
 mod agent_history;
+mod alert;
 mod ask;
 mod changes_panel;
 mod delegate;
@@ -83,6 +84,7 @@ use crate::theme::catalog::Themes;
 use crate::theme::code_colors::install_code_colors;
 use crate::theme::style::{apply_accessibility, apply_theme, install_fonts, page_fill};
 use crate::voice::view::set_memo_states;
+use alert::ButtonKind;
 use privacy::AfterPassword;
 
 /// How long a status message ("Copied ...") stays visible.
@@ -106,7 +108,14 @@ const MENTION_REFRESH_SECONDS: f64 = 2.0;
 /// Opacity of the warning color behind a note card.
 const NOTE_CARD_TINT: f32 = 0.18;
 /// Width of the "Rename" dialog.
-const RENAME_DIALOG_WIDTH: f32 = 320.0;
+const RENAME_DIALOG_WIDTH: f32 = 380.0;
+/// Width of the "unsaved changes" dialog.
+const UNSAVED_DIALOG_WIDTH: f32 = 440.0;
+/// Space above and below the text in the rename field.
+const RENAME_FIELD_MARGIN: f32 = 7.0;
+/// How much closer the "New name" label sits to its field than the
+/// dialog's usual gap between lines.
+const RENAME_LABEL_TUCK: f32 = 6.0;
 /// Inner margin (x, y) of the status bar.
 const BAR_MARGIN: (i8, i8) = (10, 6);
 /// Opacity of the warning color behind the "changed on disk" bar.
@@ -1549,11 +1558,10 @@ impl RubriqueApp {
         let Some(renaming) = &mut self.renaming else {
             return;
         };
-        let modal = egui::Modal::new(egui::Id::unique("rename-file")).show(ctx, |ui| {
-            ui.set_width(RENAME_DIALOG_WIDTH);
-            ui.heading("Rename");
-            ui.add_space(4.0);
-            let field = ui.add(egui::TextEdit::singleline(&mut renaming.name).desired_width(f32::INFINITY));
+        let title = format!("Rename \u{201c}{}\u{201d}", name_text(&renaming.path));
+        let modal = alert::show(ctx, "rename-file", RENAME_DIALOG_WIDTH, |ui| {
+            alert::title(ui, &title);
+            let field = rename_dialog_field(ui, &mut renaming.name);
             if !field.has_focus() && renaming.error.is_none() && !field.lost_focus() {
                 field.request_focus();
             }
@@ -1561,22 +1569,16 @@ impl RubriqueApp {
             if let Some(error) = &renaming.error {
                 ui.colored_label(ui.visuals().error_fg_color, error);
             }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                let rename = ui.button("Rename").clicked() || entered;
-                let cancel = ui.button("Cancel").clicked();
-                ui.separator();
-                let suggest = if waiting {
-                    ui.add(egui::Spinner::new().size(12.0));
-                    ui.label(RichText::new("Thinking of a name…").weak());
-                    false
-                } else {
-                    let tip = "Ask the Summaries use tool (Settings → AI) for a name from the content";
-                    icon_text_button(ui, Icon::Sparkle, "Suggest", tip, false).clicked()
-                };
-                (rename, cancel, suggest)
-            })
-            .inner
+            let (suggest, (rename, cancel)) = alert::button_row(
+                ui,
+                |ui| rename_suggest_button(ui, waiting),
+                |ui| {
+                    let rename = alert::button(ui, "Rename", ButtonKind::Primary, true).clicked() || entered;
+                    let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false).clicked();
+                    (rename, cancel)
+                },
+            );
+            (rename, cancel, suggest)
         });
         let (rename, cancel, suggest) = modal.inner;
         if suggest {
@@ -2812,39 +2814,88 @@ fn disk_notice_row(ui: &mut Ui, state: &DiskState) -> Option<NoticeChoice> {
     choice
 }
 
+/// The name field of the "Rename" dialog under a "New name" label, with
+/// the accent focus ring the dialog buttons use.
+fn rename_dialog_field(ui: &mut Ui, name: &mut String) -> egui::Response {
+    ui.label(RichText::new("New name").color(ui.visuals().weak_text_color()));
+    // The label sits close to its field; the dialog's wider gap follows.
+    ui.add_space(-RENAME_LABEL_TUCK);
+    let field = ui.add(
+        egui::TextEdit::singleline(name).desired_width(f32::INFINITY).margin(egui::vec2(10.0, RENAME_FIELD_MARGIN)),
+    );
+    if field.has_focus() {
+        let accent = ui.visuals().hyperlink_color;
+        let ring = egui::Stroke::new(3.0, accent.gamma_multiply(0.35));
+        ui.painter().rect_stroke(
+            field.rect,
+            ui.visuals().widgets.active.corner_radius,
+            ring,
+            egui::StrokeKind::Outside,
+        );
+    }
+    field
+}
+
+/// "Suggest" (a name from the Summaries tool), or a spinner while it thinks.
+/// Returns true when clicked.
+fn rename_suggest_button(ui: &mut Ui, waiting: bool) -> bool {
+    if waiting {
+        ui.add(egui::Spinner::new().size(12.0));
+        ui.label(RichText::new("Thinking of a name…").weak());
+        return false;
+    }
+    // As tall as the dialog buttons beside it.
+    ui.spacing_mut().button_padding = egui::vec2(10.0, 8.0);
+    ui.spacing_mut().interact_size.y = 32.0;
+    let tip = "Ask the Summaries use tool (Settings → AI) for a name from the content";
+    icon_text_button(ui, Icon::Sparkle, "Suggest", tip, false).clicked()
+}
+
 /// Draw the "unsaved changes" modal for the file `name`. Returns the
-/// answer once the user gives one; closing the modal counts as Cancel.
+/// answer once the user gives one; Esc, a click outside or Cancel cancel,
+/// and Enter saves.
 fn ask_about_unsaved_changes(ctx: &Context, name: &str) -> Option<UnsavedChoice> {
-    let modal = egui::Modal::new(egui::Id::unique("unsaved-changes")).show(ctx, |ui| {
-        ui.heading("Unsaved changes");
-        ui.label(format!("Save changes to {name}?"));
-        ui.add_space(8.0);
-        ui.horizontal(unsaved_choice_buttons).inner
+    let modal = alert::show(ctx, "unsaved-changes", UNSAVED_DIALOG_WIDTH, |ui| {
+        alert::title(ui, &format!("Save changes to \u{201c}{name}\u{201d}?"));
+        alert::body(
+            ui,
+            "Your edits are not saved yet. Keep for later closes the file and brings them back when you open it again.",
+        );
+        unsaved_choice_buttons(ui)
     });
     let closed = modal.should_close();
     modal.inner.or(closed.then_some(UnsavedChoice::Cancel))
 }
 
-/// The Save / Keep for later / Discard / Cancel buttons; returns the one
-/// clicked this frame.
+/// Discard on the left, then Cancel, Keep for later and Save (the one
+/// Enter takes) on the right; returns the one chosen this frame.
 fn unsaved_choice_buttons(ui: &mut Ui) -> Option<UnsavedChoice> {
-    let choices = [
-        ("Save", "Save the file, then close it", UnsavedChoice::Save),
-        (
-            "Keep for later",
-            "Close without saving; the edits come back when you open the file again",
-            UnsavedChoice::KeepForLater,
-        ),
-        ("Discard", "Drop the edits and close the file", UnsavedChoice::Discard),
-        ("Cancel", "Leave the file open", UnsavedChoice::Cancel),
-    ];
-    let mut choice = None;
-    for (title, tip, option) in choices {
-        if ui.button(title).on_hover_text(tip).clicked() {
-            choice = Some(option);
-        }
+    let (discard, (save, keep, cancel)) = alert::button_row(
+        ui,
+        |ui| {
+            alert::button(ui, "Discard", ButtonKind::Discard, false).on_hover_text("Drop the edits and close the file")
+        },
+        |ui| {
+            let save =
+                alert::button(ui, "Save", ButtonKind::Primary, true).on_hover_text("Save the file, then close it");
+            let keep = alert::button(ui, "Keep for later", ButtonKind::Secondary, false)
+                .on_hover_text("Close without saving; the edits come back when you open the file again");
+            let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false).on_hover_text("Leave the file open");
+            (save, keep, cancel)
+        },
+    );
+    let enter = alert::enter_for_default(ui, &[&discard, &save, &keep, &cancel]);
+    if save.clicked() || enter {
+        Some(UnsavedChoice::Save)
+    } else if keep.clicked() {
+        Some(UnsavedChoice::KeepForLater)
+    } else if discard.clicked() {
+        Some(UnsavedChoice::Discard)
+    } else if cancel.clicked() {
+        Some(UnsavedChoice::Cancel)
+    } else {
+        None
     }
-    choice
 }
 
 impl eframe::App for RubriqueApp {
@@ -2952,8 +3003,42 @@ impl eframe::App for RubriqueApp {
 
 #[cfg(test)]
 mod tests {
-    use super::{appended_block, deleted_block_range, edited_block, inserted_block};
+    use super::{
+        UnsavedChoice, appended_block, ask_about_unsaved_changes, deleted_block_range, edited_block, inserted_block,
+    };
     use crate::markdown::blocks::parse_source_blocks;
+    use eframe::egui::{Context, Event, Key, Modifiers, RawInput};
+
+    /// One frame of the "unsaved changes" dialog with `keys` pressed.
+    fn unsaved_answer(ctx: &Context, keys: &[Key]) -> Option<UnsavedChoice> {
+        let events = keys
+            .iter()
+            .map(|&key| Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: Modifiers::NONE,
+            })
+            .collect();
+        let mut answer = None;
+        let mut output = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+            answer = ask_about_unsaved_changes(ui.ctx(), "todo.md");
+        });
+        // Fonts are uploaded as textures; a test has no painter to take them.
+        output.textures_delta.clear();
+        answer
+    }
+
+    #[test]
+    fn unsaved_dialog_saves_on_enter_and_cancels_on_escape() {
+        let ctx = Context::default();
+        // The first frame lays the dialog out and makes it the top modal.
+        assert!(unsaved_answer(&ctx, &[]).is_none());
+        assert!(unsaved_answer(&ctx, &[]).is_none());
+        assert!(matches!(unsaved_answer(&ctx, &[Key::Enter]), Some(UnsavedChoice::Save)));
+        assert!(matches!(unsaved_answer(&ctx, &[Key::Escape]), Some(UnsavedChoice::Cancel)));
+    }
 
     /// `text` with its top-level block `index` deleted.
     fn delete(text: &str, index: usize) -> String {
