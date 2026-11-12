@@ -1,5 +1,6 @@
 //! Which panels and sections are open: the right panel (Structure or
-//! Notes) and the Files and Terminals sections of the explorer.
+//! Notes), the Files and Terminals sections of the explorer, and where the
+//! tabs are.
 
 /// What the right panel shows when it is open.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -35,6 +36,68 @@ impl SideView {
     }
 }
 
+/// Where the tabs are listed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabPosition {
+    /// A row above the page.
+    #[default]
+    Top,
+    /// A list in the explorer, behind its Files | Tabs switch, which shows
+    /// long names in full. The row above the page then lists no tabs.
+    Explorer,
+}
+
+impl TabPosition {
+    /// Both positions, in the order Settings shows them.
+    pub const ALL: [TabPosition; 2] = [TabPosition::Top, TabPosition::Explorer];
+
+    /// The word stored in the settings file.
+    fn id(self) -> &'static str {
+        match self {
+            TabPosition::Top => "top",
+            TabPosition::Explorer => "explorer",
+        }
+    }
+
+    /// Read a stored word; anything unknown is Top.
+    fn parse(value: &str) -> Self {
+        if value == TabPosition::Explorer.id() { TabPosition::Explorer } else { TabPosition::Top }
+    }
+
+    /// The name Settings shows.
+    pub fn name(self) -> &'static str {
+        match self {
+            TabPosition::Top => "Top",
+            TabPosition::Explorer => "In the explorer",
+        }
+    }
+}
+
+/// What the explorer shows when the tabs are listed in it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExplorerView {
+    /// The folders and the Terminals section.
+    #[default]
+    Files,
+    /// The open tabs, one per row.
+    Tabs,
+}
+
+impl ExplorerView {
+    /// The word stored in the settings file.
+    fn id(self) -> &'static str {
+        match self {
+            ExplorerView::Files => "files",
+            ExplorerView::Tabs => "tabs",
+        }
+    }
+
+    /// Read a stored word; anything unknown is Files.
+    fn parse(value: &str) -> Self {
+        if value == ExplorerView::Tabs.id() { ExplorerView::Tabs } else { ExplorerView::Files }
+    }
+}
+
 /// Open and closed panels, remembered between runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutSettings {
@@ -48,6 +111,10 @@ pub struct LayoutSettings {
     pub files_collapsed: bool,
     /// The Terminals section is folded down to its header.
     pub terminals_collapsed: bool,
+    /// Where the tabs are: above the page (the default) or in the explorer.
+    pub tab_position: TabPosition,
+    /// Files or Tabs, when the tabs are in the explorer.
+    pub explorer_view: ExplorerView,
 }
 
 impl LayoutSettings {
@@ -58,6 +125,8 @@ impl LayoutSettings {
             "side_view" => self.side_view = SideView::parse(value),
             "files_collapsed" => self.files_collapsed = value == "true",
             "terminals_collapsed" => self.terminals_collapsed = value == "true",
+            "tab_position" => self.tab_position = TabPosition::parse(value),
+            "explorer_view" => self.explorer_view = ExplorerView::parse(value),
             _ => return false,
         }
         true
@@ -66,11 +135,13 @@ impl LayoutSettings {
     /// The `key=value` lines that [`LayoutSettings::parse_line`] reads.
     pub fn to_lines(self) -> String {
         format!(
-            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\n",
+            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\ntab_position={}\nexplorer_view={}\n",
             self.side_panel_open,
             self.side_view.id(),
             self.files_collapsed,
-            self.terminals_collapsed
+            self.terminals_collapsed,
+            self.tab_position.id(),
+            self.explorer_view.id()
         )
     }
 }
@@ -86,6 +157,8 @@ mod tests {
             side_view: SideView::Notes,
             files_collapsed: true,
             terminals_collapsed: true,
+            tab_position: TabPosition::Explorer,
+            explorer_view: ExplorerView::Tabs,
         };
         let mut parsed = LayoutSettings::default();
         for line in layout.to_lines().lines() {
@@ -100,5 +173,12 @@ mod tests {
         let mut layout = LayoutSettings::default();
         layout.parse_line("side_view", "outline");
         assert_eq!(layout.side_view, SideView::Structure);
+    }
+
+    #[test]
+    fn unknown_tab_position_falls_back_to_top() {
+        let mut layout = LayoutSettings { tab_position: TabPosition::Explorer, ..LayoutSettings::default() };
+        layout.parse_line("tab_position", "right");
+        assert_eq!(layout.tab_position, TabPosition::Top);
     }
 }

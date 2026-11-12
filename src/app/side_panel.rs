@@ -138,21 +138,27 @@ impl RubriqueApp {
     }
 }
 
-/// One segment of the side panel's switch: an icon, with the number of
-/// items after it when there are any. The name shows on hover and is what
-/// screen readers announce; the panel is too narrow for the words.
-struct ViewChoice {
-    view: SideView,
-    icon: Icon,
-    name: &'static str,
-    count: usize,
+/// One segment of the side panel's switch (or the explorer's Files | Tabs
+/// switch): an icon, with the number of items after it when there are any.
+/// The name shows on hover and is what screen readers announce; the panel
+/// is too narrow for the words.
+pub(super) struct ViewChoice<View> {
+    pub(super) view: View,
+    pub(super) icon: Icon,
+    pub(super) name: &'static str,
+    pub(super) count: usize,
 }
 
 /// A segmented switch in the style of the Preview | Source switch: the
 /// chosen segment filled like the page. It leaves `reserved` points of the
 /// row free, with less space around the icons when the panel is narrow.
 /// Returns the segment clicked.
-fn view_switch(ui: &mut Ui, choices: &[ViewChoice], current: SideView, reserved: f32) -> Option<SideView> {
+pub(super) fn view_switch<View: Copy + PartialEq>(
+    ui: &mut Ui,
+    choices: &[ViewChoice<View>],
+    current: View,
+    reserved: f32,
+) -> Option<View> {
     let visuals = ui.visuals().clone();
     let font = egui::TextStyle::Body.resolve(ui.style());
     // The count after an icon, or nothing when there are no items.

@@ -50,9 +50,9 @@ const SWITCH_HALF_RADIUS: u8 = 4;
 /// Space between the switch and the right edge of the tab strip.
 const SWITCH_MARGIN: f32 = 10.0;
 
-/// Something the user did on the tab strip.
+/// Something the user did on the tab strip (or the tab list in the explorer).
 #[derive(Clone, Copy, Debug)]
-enum TabAction {
+pub(super) enum TabAction {
     /// The tab is being dragged (the strip shows where it would land).
     Dragging(usize),
     Switch(usize),
@@ -345,6 +345,31 @@ impl RubriqueApp {
         tabs_rect
     }
 
+    /// The bar above the page while the tabs are listed in the explorer:
+    /// the active tab's name, then the same controls as at the end of the
+    /// tab strip (Preview | Source and the right panel toggle).
+    pub(super) fn page_bar(&mut self, ui: &mut Ui) {
+        let (strip, _) = ui.allocate_exact_size(vec2(ui.available_width(), TAB_HEIGHT), Sense::hover());
+        ui.painter().rect_filled(strip, 0, ui.visuals().panel_fill);
+        let line = ui.visuals().widgets.noninteractive.bg_stroke;
+        ui.painter().hline(strip.x_range(), strip.bottom() - line.width / 2.0, line);
+        let name_rect = self.preview_controls(ui, strip);
+        let tab = self.tab_view(self.active_tab, None);
+        let color = ui.visuals().strong_text_color();
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let mut job = egui::text::LayoutJob::simple_singleline(tab.name, font, color);
+        job.wrap = egui::text::TextWrapping::truncate_at_width((name_rect.width() - TAB_PADDING * 2.0).max(0.0));
+        let galley = ui.painter().layout_job(job);
+        let text_pos = pos2(name_rect.left() + TAB_PADDING, strip.center().y - galley.size().y / 2.0);
+        let response = ui.interact(
+            egui::Rect::from_min_size(text_pos, galley.size()),
+            ui.scope_id().with("page-bar-name"),
+            Sense::hover(),
+        );
+        ui.painter().galley(text_pos, galley, color);
+        response.on_hover_text(tab.path);
+    }
+
     /// The row of tabs above the page.
     pub(super) fn tab_bar(&mut self, ui: &mut Ui) {
         let mut action = None;
@@ -383,20 +408,7 @@ impl RubriqueApp {
                             if folded && index != self.active_tab {
                                 continue;
                             }
-                            let file = self.tab(index);
-                            let tab = TabView {
-                                file: file.path().map(Path::to_path_buf),
-                                name: file.title(),
-                                path: file.path().map(absolute_path_text).unwrap_or_default(),
-                                dirty: file.is_dirty(),
-                                active: index == self.active_tab,
-                                group_color: self.group_color_of(group),
-                                terminal: match file {
-                                    OpenFile::Terminal { terminal } => Some(terminal.name.clone()),
-                                    _ => None,
-                                },
-                                encrypted: file.is_encrypted(),
-                            };
+                            let tab = self.tab_view(index, group);
                             let left = ui.cursor().left();
                             if let Some(found) = show_tab(ui, &tab, index, self.tabs.len(), &mut self.tab_rename) {
                                 action = Some(found);
@@ -464,8 +476,26 @@ impl RubriqueApp {
         }
     }
 
+    /// What tab `index`, in `group`, shows.
+    pub(super) fn tab_view(&self, index: usize, group: Option<usize>) -> TabView {
+        let file = self.tab(index);
+        TabView {
+            file: file.path().map(Path::to_path_buf),
+            name: file.title(),
+            path: file.path().map(absolute_path_text).unwrap_or_default(),
+            dirty: file.is_dirty(),
+            active: index == self.active_tab,
+            group_color: self.group_color_of(group),
+            terminal: match file {
+                OpenFile::Terminal { terminal } => Some(terminal.name.clone()),
+                _ => None,
+            },
+            encrypted: file.is_encrypted(),
+        }
+    }
+
     /// Do what the user asked for on the tab strip.
-    fn apply_tab_action(&mut self, ctx: &egui::Context, action: TabAction) {
+    pub(super) fn apply_tab_action(&mut self, ctx: &egui::Context, action: TabAction) {
         match action {
             TabAction::Switch(index) => self.switch_to_tab(index),
             TabAction::Close(index) => self.request_close_tab(index),
@@ -609,20 +639,100 @@ fn paint_tab_ghost(
 }
 
 /// What one tab shows.
-struct TabView {
+pub(super) struct TabView {
     /// The tab's file; `None` for a terminal opened from the Terminals list.
-    file: Option<PathBuf>,
-    name: String,
+    pub(super) file: Option<PathBuf>,
+    pub(super) name: String,
     /// Full path, for the hover tip.
     path: String,
-    dirty: bool,
-    active: bool,
+    pub(super) dirty: bool,
+    pub(super) active: bool,
     /// The color of the tab's folder, when tabs are grouped.
     group_color: Option<Color32>,
     /// The tmux session the tab shows, if it is a terminal.
     terminal: Option<String>,
     /// The file is stored encrypted: a padlock after the name.
-    encrypted: bool,
+    pub(super) encrypted: bool,
+}
+
+impl TabView {
+    /// True while this tab's name is being edited in place.
+    pub(super) fn is_renamed(&self, rename: Option<&InlineRename>) -> bool {
+        self.file.is_some() && rename.map(|rename| &rename.target) == self.file.as_ref()
+    }
+
+    /// The line along the tab's edge: the accent (or the group color) on
+    /// the active tab, the group color, softer, on the others.
+    pub(super) fn line_color(&self, visuals: &egui::Visuals) -> Option<Color32> {
+        match (self.active, self.group_color) {
+            (true, Some(color)) => Some(color),
+            (true, None) => Some(visuals.hyperlink_color),
+            (false, Some(color)) => Some(color.gamma_multiply(GROUP_LINE_TINT)),
+            (false, None) => None,
+        }
+    }
+
+    /// The hover tip: the full path, and whether the file is encrypted or unsaved.
+    fn tip(&self) -> String {
+        let mut tip = self.path.clone();
+        if self.encrypted {
+            tip.push_str("\nEncrypted");
+        }
+        if self.dirty {
+            tip.push_str("\nUnsaved changes");
+        }
+        tip
+    }
+}
+
+/// The close cross at `close_rect`, or the unsaved dot while the file has
+/// unsaved changes and the pointer is elsewhere. The cross shows on the
+/// active tab and under the pointer. Returns a click on it.
+pub(super) fn close_or_dirty_mark(
+    ui: &mut Ui,
+    tab: &TabView,
+    index: usize,
+    close_rect: egui::Rect,
+    hovered: bool,
+) -> Option<TabAction> {
+    if tab.dirty && !hovered {
+        ui.painter().circle_filled(close_rect.center(), DIRTY_DOT, ui.visuals().text_color());
+        return None;
+    }
+    if !hovered && !tab.active {
+        return None;
+    }
+    // A child ui at the cross's rect, not `ui.put`: `put` moves the row's
+    // cursor back to the cross's right edge, which shifted the tabs after
+    // this one 6 points left whenever the cross appeared.
+    let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
+    let mut cross = ui.new_child(egui::UiBuilder::new().id_salt(("close", index)).max_rect(close_rect).layout(layout));
+    let close = small_icon_button(&mut cross, Icon::Close, CLOSE_SIZE, "Close tab", "Close (Cmd+W)");
+    close.clicked().then_some(TabAction::Close(index))
+}
+
+/// What a click on a tab asks for: a double click renames its file, a click
+/// switches to it, a middle click closes it, a right click opens its menu.
+/// `action` is what the tab's close cross asked for, if anything; a click
+/// on the cross is not also a switch.
+pub(super) fn tab_click_action(
+    response: egui::Response,
+    tab: &TabView,
+    index: usize,
+    count: usize,
+    mut action: Option<TabAction>,
+) -> Option<TabAction> {
+    let response = response.on_hover_text(tab.tip());
+    if response.double_clicked() && tab.file.is_some() {
+        action = Some(TabAction::Rename(index));
+    } else if action.is_none() && response.clicked() {
+        action = Some(TabAction::Switch(index));
+    }
+    if response.middle_clicked() {
+        action = Some(TabAction::Close(index));
+    }
+    tab_menu(&response, tab, index, count, &mut action);
+    action
 }
 
 /// One tab: the file name, then a close cross (a dot instead while the file
@@ -635,7 +745,7 @@ fn show_tab(
     count: usize,
     rename: &mut Option<InlineRename>,
 ) -> Option<TabAction> {
-    if tab.file.is_some() && rename.as_ref().map(|rename| &rename.target) == tab.file.as_ref() {
+    if tab.is_renamed(rename.as_ref()) {
         renaming_tab(ui, tab, rename);
         return None;
     }
@@ -666,14 +776,7 @@ fn show_tab(
     };
     let painter = ui.painter();
     painter.rect_filled(rect, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, fill);
-    // The line on top: the accent (or the group color) on the active tab,
-    // the group color, softer, on the others.
-    let line = match (tab.active, tab.group_color) {
-        (true, Some(color)) => Some(color),
-        (true, None) => Some(visuals.hyperlink_color),
-        (false, Some(color)) => Some(color.gamma_multiply(GROUP_LINE_TINT)),
-        (false, None) => None,
-    };
+    let line = tab.line_color(&visuals);
     if let Some(color) = line {
         let top = egui::Rect::from_min_size(rect.min, vec2(rect.width(), ACTIVE_LINE));
         painter.rect_filled(top, CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 }, color);
@@ -694,48 +797,19 @@ fn show_tab(
         pos2(rect.right() - TAB_PADDING / 2.0 - CLOSE_SIZE / 2.0, rect.center().y),
         vec2(CLOSE_SIZE, CLOSE_SIZE),
     );
-    let mut action = None;
-    if tab.dirty && !hovered {
-        ui.painter().circle_filled(close_rect.center(), DIRTY_DOT, visuals.text_color());
-    } else if hovered || tab.active {
-        // A child ui at the cross's rect, not `ui.put`: `put` moves the row's
-        // cursor back to the cross's right edge, which shifted the tabs after
-        // this one 6 points left whenever the cross appeared.
-        let layout = egui::Layout::centered_and_justified(egui::Direction::TopDown);
-        let mut cross =
-            ui.new_child(egui::UiBuilder::new().id_salt(("close", index)).max_rect(close_rect).layout(layout));
-        let close = small_icon_button(&mut cross, Icon::Close, CLOSE_SIZE, "Close tab", "Close (Cmd+W)");
-        if close.clicked() {
-            action = Some(TabAction::Close(index));
-        }
-    }
-
-    let mut tip = tab.path.clone();
-    if tab.encrypted {
-        tip.push_str("\nEncrypted");
-    }
-    if tab.dirty {
-        tip.push_str("\nUnsaved changes");
-    }
-    let response = response.on_hover_text(tip);
-    if response.double_clicked() && tab.file.is_some() {
-        action = Some(TabAction::Rename(index));
-    } else if action.is_none() && response.clicked() {
-        action = Some(TabAction::Switch(index));
-    }
+    let close = close_or_dirty_mark(ui, tab, index, close_rect, hovered);
     // Drag a tab sideways and drop it where it should go.
-    if response.drag_stopped()
+    let drag = if response.drag_stopped()
         && let Some(pos) = response.interact_pointer_pos()
     {
-        action = Some(TabAction::Drop { index, x: pos.x });
+        Some(TabAction::Drop { index, x: pos.x })
     } else if response.dragged() {
-        action = Some(TabAction::Dragging(index));
-    }
-    if response.middle_clicked() {
-        action = Some(TabAction::Close(index));
-    }
-    tab_menu(&response, tab, index, count, &mut action);
-    action
+        Some(TabAction::Dragging(index))
+    } else {
+        None
+    };
+    let action = tab_click_action(response, tab, index, count, close);
+    drag.or(action)
 }
 
 /// The tab's right-click menu: the close actions, then Exit terminal (for

@@ -10,6 +10,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Tabs in the explorer.** Settings > Appearance > Tabs: In the explorer
+  lists the open tabs in the explorer, one per row, so long names show in
+  full. A Files | Tabs switch at the top of the explorer flips between the
+  folders and the tabs (with how many are open), and the bar above the
+  page then shows just the file's name and the Preview | Source switch.
+  Tabs keep their folder groups, colors, close cross and right-click menu.
 - **Import from Sublime Text.** File > Import from Sublime Text (or the
   button under Settings > Files > Scratches) copies every unsaved Sublime
   Text tab, new tabs and files with edits not saved yet, into a new

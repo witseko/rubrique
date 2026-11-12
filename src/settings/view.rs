@@ -17,6 +17,7 @@ use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::install::view::{InstallAction, install_prompt};
 use crate::install::{InstallStatus, Recipe};
 use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, PAGE_ZOOM_PERCENTS, TextSize};
+use crate::settings::layout::TabPosition;
 use crate::settings::privacy::PrivacySettings;
 use crate::theme::catalog::{ThemeChoice, Themes};
 use crate::theme::code_colors::CodeColors;
@@ -105,6 +106,17 @@ pub enum SettingsAction {
     Close,
 }
 
+/// What the Appearance group shows: the themes, the current choices and
+/// the folder for the user's own themes. Where the tabs go is changed in place.
+#[derive(Debug)]
+pub struct AppearanceInfo<'a> {
+    pub themes: &'a Themes,
+    pub current: &'a ThemeChoice,
+    pub code_colors: CodeColors,
+    pub themes_folder: Option<&'a Path>,
+    pub tab_position: &'a mut TabPosition,
+}
+
 /// Voice memo settings to edit, and where the transcription program was found.
 #[derive(Debug)]
 pub struct VoiceInfo<'a> {
@@ -184,6 +196,12 @@ const PREVIEW_PADDING: f32 = 8.0;
 const PREVIEW_BARS: [(f32, f32, BarKind); 4] =
     [(0.55, 5.0, BarKind::Accent), (0.85, 4.0, BarKind::Text), (0.7, 4.0, BarKind::Text), (0.45, 4.0, BarKind::Weak)];
 const PREVIEW_BAR_GAP: f32 = 5.0;
+/// The three tabs in the Tabs cards' tiny windows: how long and thick each
+/// one is, the space between them and the active one's accent line.
+const PREVIEW_TAB_WIDTH: f32 = 30.0;
+const PREVIEW_TAB_THICKNESS: f32 = 9.0;
+const PREVIEW_TAB_GAP: f32 = 3.0;
+const PREVIEW_TAB_LINE: f32 = 2.0;
 const CHECK_SIZE: f32 = 12.0;
 /// The code in a Code colors card: a keyword, a defined name, a comment, a
 /// string and a number, so each choice shows its main colors.
@@ -282,10 +300,7 @@ const CONTENT_MARGIN: i8 = 22;
 pub fn show_settings(
     ui: &mut Ui,
     group: &mut SettingsGroup,
-    themes: &Themes,
-    current: &ThemeChoice,
-    code_colors: CodeColors,
-    themes_folder: Option<&Path>,
+    appearance: AppearanceInfo,
     highlight: HighlightInfo,
     accessibility: &mut AccessibilitySettings,
     scratch: ScratchInfo,
@@ -333,7 +348,7 @@ pub fn show_settings(
             egui::Frame::new().inner_margin(CONTENT_MARGIN).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let picked = match *group {
-                    SettingsGroup::Appearance => appearance_section(ui, themes, current, code_colors, themes_folder),
+                    SettingsGroup::Appearance => appearance_section(ui, appearance),
                     SettingsGroup::Highlights => highlights_section(ui, highlight),
                     SettingsGroup::Accessibility => accessibility_section(ui, accessibility),
                     SettingsGroup::Files => files_section(ui, scratch, note_marks),
@@ -393,14 +408,10 @@ fn version_label(ui: &mut Ui) {
     });
 }
 
-/// Appearance: the theme cards, the code colors and the user's own themes.
-fn appearance_section(
-    ui: &mut Ui,
-    themes: &Themes,
-    current: &ThemeChoice,
-    code_colors: CodeColors,
-    themes_folder: Option<&Path>,
-) -> Option<SettingsAction> {
+/// Appearance: the theme cards, the code colors, where the tabs go and the
+/// user's own themes.
+fn appearance_section(ui: &mut Ui, appearance: AppearanceInfo) -> Option<SettingsAction> {
+    let AppearanceInfo { themes, current, code_colors, themes_folder, tab_position } = appearance;
     let mut action = None;
     ui.label(RichText::new("Theme").strong());
     if let Some(choice) = theme_cards(ui, themes, current) {
@@ -418,6 +429,16 @@ fn appearance_section(
     );
     if let Some(choice) = code_color_cards(ui, code_colors) {
         action = Some(SettingsAction::PickCodeColors(choice));
+    }
+    ui.add_space(6.0);
+    ui.separator();
+    ui.label(RichText::new("Tabs").strong());
+    ui.label(
+        RichText::new("Where the open files are listed: a row above the page, or a list in the explorer (its Files | Tabs switch) that shows long names in full.")
+            .weak(),
+    );
+    if let Some(choice) = tab_position_cards(ui, *tab_position) {
+        *tab_position = choice;
     }
     ui.add_space(10.0);
     ui.label(RichText::new("Your themes").strong());
@@ -1267,6 +1288,21 @@ fn code_color_cards(ui: &mut Ui, current: CodeColors) -> Option<CodeColors> {
     picked
 }
 
+/// One card per tab position, side by side. Returns the clicked choice.
+fn tab_position_cards(ui: &mut Ui, current: TabPosition) -> Option<TabPosition> {
+    let card_width = ((ui.available_width() - CARD_GAP) / 2.0).floor();
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = CARD_GAP;
+        for choice in TabPosition::ALL {
+            if theme_card(ui, card_width, choice.name(), &CardLook::Tabs(choice), choice == current).clicked() {
+                picked = Some(choice);
+            }
+        }
+    });
+    picked
+}
+
 /// What a card's preview shows.
 enum CardLook<'a> {
     One(&'a Theme),
@@ -1274,6 +1310,8 @@ enum CardLook<'a> {
     Split(&'a Theme, &'a Theme),
     /// A few lines of code in these code colors, on the current theme.
     Code(CodeColors),
+    /// A tiny window with its tabs in this position, in the current theme.
+    Tabs(TabPosition),
 }
 
 /// A clickable card: a small picture of the theme (or code colors) and its name.
@@ -1306,6 +1344,7 @@ fn theme_card(ui: &mut Ui, width: f32, name: &str, look: &CardLook, selected: bo
             paint_preview(painter, right_rect, &right.palette, false);
         }
         CardLook::Code(choice) => paint_code_preview(ui, preview, *choice),
+        CardLook::Tabs(position) => paint_tabs_preview(painter, visuals, preview, *position),
     }
     painter.rect_stroke(preview, 0, visuals.widgets.noninteractive.bg_stroke, StrokeKind::Inside);
 
@@ -1352,6 +1391,55 @@ fn paint_code_preview(ui: &Ui, rect: Rect, choice: CodeColors) {
     let galley = painter.layout_job(job);
     let top = (rect.height() - galley.size().y) / 2.0;
     painter.galley(rect.min + vec2(PREVIEW_PADDING, top), galley, ui.visuals().text_color());
+}
+
+/// A tiny window in the current theme: the explorer, three tabs (the first
+/// one active, with the accent line) in a row above the page or listed in
+/// the explorer, and the page with text bars.
+fn paint_tabs_preview(painter: &egui::Painter, visuals: &egui::Visuals, rect: Rect, position: TabPosition) {
+    let page_color = crate::theme::style::page_fill(visuals);
+    let tab_color = visuals.widgets.inactive.weak_bg_fill;
+    let accent = visuals.hyperlink_color;
+    let (explorer, window) = rect.split_left_right_at_fraction(PREVIEW_SIDEBAR_SHARE);
+    painter.rect_filled(explorer, 0, visuals.panel_fill);
+    painter.rect_filled(window, 0, visuals.panel_fill);
+    let tab_rect = |index: f32| match position {
+        TabPosition::Top => {
+            let left = window.left() + PREVIEW_TAB_GAP + index * (PREVIEW_TAB_WIDTH + PREVIEW_TAB_GAP);
+            Rect::from_min_size(pos2(left, window.top()), vec2(PREVIEW_TAB_WIDTH, PREVIEW_TAB_THICKNESS))
+        }
+        TabPosition::Explorer => {
+            let top = explorer.top() + PREVIEW_TAB_GAP + index * (PREVIEW_TAB_THICKNESS + PREVIEW_TAB_GAP);
+            Rect::from_min_size(pos2(explorer.left(), top), vec2(explorer.width(), PREVIEW_TAB_THICKNESS))
+        }
+    };
+    for index in [0.0, 1.0, 2.0] {
+        painter.rect_filled(tab_rect(index), 0, if index == 0.0 { page_color } else { tab_color });
+    }
+    // The active tab's accent line: on top in a row, on the left in a list.
+    let active = tab_rect(0.0);
+    let line = match position {
+        TabPosition::Top => Rect::from_min_size(active.min, vec2(active.width(), PREVIEW_TAB_LINE)),
+        TabPosition::Explorer => Rect::from_min_size(active.min, vec2(PREVIEW_TAB_LINE, active.height())),
+    };
+    painter.rect_filled(line, 0, accent);
+    let page = match position {
+        TabPosition::Top => window.with_min_y(window.top() + PREVIEW_TAB_THICKNESS),
+        TabPosition::Explorer => window,
+    };
+    painter.rect_filled(page, 0, page_color);
+    let mut y = page.top() + PREVIEW_PADDING;
+    let inner_width = page.width() - 2.0 * PREVIEW_PADDING;
+    for (share, height, kind) in PREVIEW_BARS {
+        let bar_color = match kind {
+            BarKind::Accent => accent,
+            BarKind::Text => visuals.text_color(),
+            BarKind::Weak => visuals.weak_text_color(),
+        };
+        let bar = Rect::from_min_size(pos2(page.left() + PREVIEW_PADDING, y), vec2(inner_width * share, height));
+        painter.rect_filled(bar, height / 2.0, bar_color);
+        y += height + PREVIEW_BAR_GAP;
+    }
 }
 
 /// A check mark centered on `center`.

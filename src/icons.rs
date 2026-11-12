@@ -83,6 +83,12 @@ pub enum Icon {
     /// Unsaved changes (the side panel's Changes): a plus over a minus;
     /// the plus is the accent.
     Changes,
+    /// The folders (the explorer's Files view): a folder with a tab; the
+    /// line across its front is the accent.
+    Files,
+    /// The open tabs listed one per row (the explorer's Tabs view): three
+    /// rows, the start of the first one (the active tab's line) the accent.
+    TabList,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -203,6 +209,8 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Outline => paint_outline(painter, center, line, detail),
         Icon::Checklist => paint_checklist(painter, center, line, detail),
         Icon::Changes => paint_changes(painter, center, line, detail),
+        Icon::Files => paint_files(painter, center, line, detail),
+        Icon::TabList => paint_tab_list(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -368,6 +376,24 @@ fn paint_mic(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
     stroke_path(painter, &cradle, false, line);
     stroke_path(painter, &[at(0.0, 3.5), at(0.0, 6.5)], false, detail);
     stroke_path(painter, &[at(-2.5, 6.5), at(2.5, 6.5)], false, detail);
+}
+
+/// A folder with a tab; the line across its front is the accent.
+fn paint_files(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let outline = [at(-6.5, -5.5), at(-2.0, -5.5), at(-0.4, -3.9), at(6.5, -3.9), at(6.5, 5.5), at(-6.5, 5.5)];
+    stroke_path(painter, &round_corners(&outline, CORNER, true), true, line);
+    stroke_path(painter, &[at(-6.5, -1.2), at(6.5, -1.2)], false, detail);
+}
+
+/// Three rows, the last one shorter; the start of the first row is the
+/// accent, like the line on the active tab.
+fn paint_tab_list(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    stroke_path(painter, &[at(-6.5, -4.5), at(-3.0, -4.5)], false, detail);
+    stroke_path(painter, &[at(-1.0, -4.5), at(6.5, -4.5)], false, line);
+    stroke_path(painter, &[at(-6.5, 0.0), at(6.5, 0.0)], false, line);
+    stroke_path(painter, &[at(-6.5, 4.5), at(2.5, 4.5)], false, line);
 }
 
 /// A plus over a minus; the plus is the accent.

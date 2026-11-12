@@ -69,6 +69,7 @@ Agents run only when you ask, read-only by default.
   resume. A `.tmux` file opens a terminal in its folder.
 - Hand a step of any document to a terminal's agent: `@tmux-qa: check this`, then Send.
 - Tabs grouped and colored by explorer folder; drag tabs and groups to reorder them.
+  Or list them in the explorer (Settings > Appearance > Tabs), behind a Files | Tabs switch.
 
 <img src="docs/screenshots/themes.png" alt="One Rubrique window shown in five themes: Light, Indigo, Sepia, Midnight and High contrast" width="880">
 
