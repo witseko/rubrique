@@ -27,7 +27,7 @@ egui_extras = { version = "0.37.0", default-features = false, features = ["file"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico"] }
 # Native "choose a folder" window for adding explorer folders. On Linux it
 # uses the desktop's XDG portal, so no GTK libraries are needed.
-rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
 # Microphone and speakers for voice memos: CoreAudio on macOS, ALSA on Linux
 # (which reaches PipeWire and PulseAudio through their ALSA plugins). macOS
 # has no built-in command-line recorder, so running one would mean asking
