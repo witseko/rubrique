@@ -69,6 +69,8 @@ type TouchIdResult = Result<Zeroizing<[u8; KEY_LEN]>, TouchIdError>;
 pub(super) enum AfterPassword {
     /// Make a new encrypted scratch.
     NewEncryptedScratch,
+    /// Import Sublime Text's unsaved tabs as encrypted scratches.
+    ImportFromSublime,
     /// Store the scratch at this path encrypted (`true`) or plain.
     SetEncrypted { path: PathBuf, encrypt: bool },
     /// Keep the key behind Touch ID.
@@ -268,6 +270,7 @@ impl RubriqueApp {
     fn after_password(&mut self, ctx: &Context, then: AfterPassword) {
         match then {
             AfterPassword::NewEncryptedScratch => self.new_scratch(ctx, true),
+            AfterPassword::ImportFromSublime => self.import_from_sublime(),
             AfterPassword::SetEncrypted { path, encrypt } => self.set_scratch_encrypted(&path, encrypt),
             AfterPassword::EnableTouchId => self.enable_touch_id(),
         }
