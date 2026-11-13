@@ -13,6 +13,7 @@ mod delegate;
 mod delete;
 mod drafts;
 mod find;
+mod git_branch;
 mod helm;
 mod images;
 mod install;
@@ -395,6 +396,8 @@ pub struct RubriqueApp {
     remote: remote::RemoteState,
     /// The open file's Helm chart and the Helm panel.
     helm: helm::HelmState,
+    /// The git branch of the open file's folder, and switch or pull in flight.
+    git: git_branch::GitState,
 }
 
 /// A note in the making (new, or an existing one being edited).
@@ -491,6 +494,7 @@ impl RubriqueApp {
             privacy,
             remote: remote::RemoteState::default(),
             helm: helm::HelmState::default(),
+            git: git_branch::GitState::default(),
         };
         preview_selection::install(ctx);
         egui_extras::install_image_loaders(ctx);
@@ -2498,6 +2502,7 @@ impl RubriqueApp {
             }
             let left = egui::Layout::left_to_right(egui::Align::Center);
             ui.allocate_ui_with_layout(ui.available_size(), left, |ui| {
+                self.branch_button(ui);
                 ui.add(egui::Label::new(path_text.as_str()).truncate()).on_hover_text(path_text.as_str());
             });
         });
@@ -2962,6 +2967,7 @@ impl eframe::App for RubriqueApp {
         self.poll_remote();
         self.poll_pending_sends();
         self.poll_agent_sessions(&ctx);
+        self.poll_git(&ctx);
 
         let style = ctx.global_style();
         let bar_frame =

@@ -10,6 +10,7 @@ mod document;
 mod explorer;
 mod find;
 mod format;
+mod git;
 mod helm;
 mod highlight;
 mod icons;
