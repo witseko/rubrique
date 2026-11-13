@@ -8,6 +8,22 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Git in the status bar.** When the open file is in a git folder, its
+  branch shows at the left of the status bar, and a click opens a menu:
+  - **Pull** brings in new commits, fast-forward only, so a pull never
+    leaves conflicts in your files.
+  - **Commit…** asks for a message and commits every change, new files too.
+  - **Stash** puts every change aside, and **Unstash** brings back the
+    last one.
+  - The local and remote branches are listed, with a filter field; click
+    one to switch to it (a remote branch becomes a local branch that
+    tracks it). Type a name no branch has to create that branch.
+
+  When git refuses, for example because of local changes, its reason
+  shows in the status bar and nothing changes.
+
 ### Fixed
 
 - **Deeply nested quotes and lists.** A Markdown file with thousands of

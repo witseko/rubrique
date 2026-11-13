@@ -89,6 +89,9 @@ pub enum Icon {
     /// The open tabs listed one per row (the explorer's Tabs view): three
     /// rows, the start of the first one (the active tab's line) the accent.
     TabList,
+    /// A git branch (the status bar's branch button): a trunk with two
+    /// commits and a side branch; the side branch is the accent.
+    Branch,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -211,6 +214,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Changes => paint_changes(painter, center, line, detail),
         Icon::Files => paint_files(painter, center, line, detail),
         Icon::TabList => paint_tab_list(painter, center, line, detail),
+        Icon::Branch => paint_branch(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -394,6 +398,19 @@ fn paint_tab_list(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke)
     stroke_path(painter, &[at(-1.0, -4.5), at(6.5, -4.5)], false, line);
     stroke_path(painter, &[at(-6.5, 0.0), at(6.5, 0.0)], false, line);
     stroke_path(painter, &[at(-6.5, 4.5), at(2.5, 4.5)], false, line);
+}
+
+/// Two commits on a trunk and a third on a branch that curves into the
+/// trunk; the branch and its commit are the accent.
+fn paint_branch(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    const COMMIT: f32 = 1.8;
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    stroke_path(painter, &circle_points(at(-3.5, -4.5), COMMIT), true, line);
+    stroke_path(painter, &circle_points(at(-3.5, 4.5), COMMIT), true, line);
+    stroke_path(painter, &[at(-3.5, -2.7), at(-3.5, 2.7)], false, line);
+    stroke_path(painter, &circle_points(at(3.5, -3.0), COMMIT), true, detail);
+    let curve = [at(3.5, -1.2), at(3.3, 0.4), at(2.0, 1.4), at(-1.5, 2.0), at(-3.5, 2.6)];
+    stroke_path(painter, &curve, false, detail);
 }
 
 /// A plus over a minus; the plus is the accent.
