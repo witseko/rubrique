@@ -96,6 +96,10 @@ pub struct Document {
     revision: u64,
     /// The key when the file is stored encrypted; `None` for plain files.
     vault: Option<Arc<Vault>>,
+    /// Tells this open of the file from any other, even of the same path, so
+    /// a save that finishes in the background lands on the buffer it was
+    /// taken from.
+    id: u64,
 }
 
 impl Document {
@@ -137,6 +141,7 @@ impl Document {
             disk_modified: stamp,
             revision: next_revision(),
             vault: sealed_with,
+            id: next_revision(),
         }))
     }
 
@@ -152,6 +157,7 @@ impl Document {
             base_text,
             revision: next_revision(),
             vault,
+            id: next_revision(),
         }
     }
 
@@ -196,6 +202,11 @@ impl Document {
         self.revision
     }
 
+    /// Which open of the file this is (see the field).
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     /// True when the buffer has unsaved changes.
     pub fn is_dirty(&self) -> bool {
         self.dirty
@@ -216,15 +227,33 @@ impl Document {
     /// Fails when the temp file cannot be written or renamed; the file on
     /// disk is then left as it was.
     pub fn save(&mut self) -> io::Result<()> {
-        let stamp = match &self.vault {
-            Some(vault) => vfs::save(&self.path, &vault.encrypt(self.text.as_bytes()))?,
-            None => vfs::save(&self.path, self.text.as_bytes())?,
-        };
-        self.saved_hash = Some(hash_text(&self.text));
-        self.dirty = false;
-        self.disk_modified = stamp;
-        self.base_text.clone_from(&self.text);
+        let stamp = vfs::save(&self.path, &self.stored_bytes())?;
+        self.mark_saved(self.text.clone(), stamp);
         Ok(())
+    }
+
+    /// The buffer as the file stores it: encrypted with its key, if any.
+    pub fn stored_bytes(&self) -> Vec<u8> {
+        match &self.vault {
+            Some(vault) => vault.encrypt(self.text.as_bytes()),
+            None => self.text.as_bytes().to_vec(),
+        }
+    }
+
+    /// Note that the file now holds `saved_text`, written with the new
+    /// `stamp`. A save that ran in the background may have taken the text
+    /// before later edits: the buffer then stays dirty, so the next save
+    /// writes them.
+    pub fn mark_saved(&mut self, saved_text: String, stamp: Option<Stamp>) {
+        let saved_hash = hash_text(&saved_text);
+        self.saved_hash = Some(saved_hash);
+        self.disk_modified = stamp;
+        self.base_text = saved_text;
+        self.dirty = hash_text(&self.text) != saved_hash;
+        if self.dirty {
+            // The draft holds the old base text; a new revision writes it again.
+            self.revision = next_revision();
+        }
     }
 
     /// The text as last read from or written to disk.
@@ -424,6 +453,28 @@ mod tests {
 
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
         assert_eq!(fs::read_to_string(&real).unwrap(), "b");
+    }
+
+    #[test]
+    fn marking_older_text_saved_keeps_later_edits_dirty() {
+        let temp = TempFolder::new();
+        let path = temp.write("note.md", "one");
+        let mut document = open_text(&path);
+        document.text = "two".to_string();
+        document.on_text_changed();
+        let uploaded = document.text.clone();
+        document.text.push_str(" three");
+        document.on_text_changed();
+        let revision = document.revision();
+
+        document.mark_saved(uploaded, None);
+        assert!(document.is_dirty(), "edits after the upload are still unsaved");
+        assert_eq!(document.base_text(), "two");
+        assert_ne!(document.revision(), revision, "the draft is written again");
+
+        let uploaded = document.text.clone();
+        document.mark_saved(uploaded, None);
+        assert!(!document.is_dirty());
     }
 
     #[test]

@@ -17,7 +17,7 @@ impl RubriqueApp {
     /// Add an image file to the open note: copied into the `images` folder
     /// next to it (unless it is already there) and linked at the cursor.
     pub(super) fn add_image_file(&mut self, ctx: &Context, image: &Path) {
-        if self.refuse_remote_note("images") {
+        if self.refuse_remote_note("images") || self.refuse_encrypted_note("images") {
             return;
         }
         let Some((note, _)) = self.memo_note() else {
@@ -105,6 +105,24 @@ mod tests {
         assert_eq!(copy_into(&folder, &same).unwrap(), folder.join("photo.png"));
         assert_eq!(copy_into(&folder, &other).unwrap(), folder.join("photo-2.png"));
         assert_eq!(std::fs::read(folder.join("photo-2.png")).unwrap(), b"two");
+    }
+
+    #[test]
+    fn encrypted_scratches_take_no_images() {
+        use crate::document::text_file::Document;
+        let temp = TempFolder::new();
+        let photo = temp.write("downloads/photo.png", "one");
+        let ctx = Context::default();
+        let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![temp.path().into()], None);
+        let vault = std::sync::Arc::new(crate::crypto::Vault::create("pw").0);
+        let document = Document::missing(&temp.path().join("secret.md"), String::new(), String::new(), Some(vault));
+        app.open_file =
+            super::super::OpenFile::Text { document, preview: None, disk_notice: None, editor: None, source: false };
+        app.add_image_file(&ctx, &photo);
+        // No plain copy of the image lands next to the scratch.
+        assert!(!temp.path().join(IMAGES_FOLDER).exists());
+        let status = app.status_message.as_ref().map(|(message, _)| message.as_str());
+        assert!(status.is_some_and(|message| message.contains("encrypted scratches")), "{status:?}");
     }
 
     #[test]

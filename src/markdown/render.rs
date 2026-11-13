@@ -12,7 +12,7 @@ use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
 use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url, parse_inlines};
 use super::table_edit::TableCell;
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
-use crate::media::{MediaKind, image_uri, media_kind_of_url};
+use crate::media::{MAX_IMAGE_BYTES, MediaKind, image_uri, is_image_path, media_kind_of_url};
 use crate::theme::palette::Rgb;
 use crate::theme::style::page_fill;
 
@@ -1094,6 +1094,52 @@ fn local_media_path(ctx: &egui::Context, url: &str) -> Option<PathBuf> {
     Some(folder.join(path))
 }
 
+/// Seconds a verdict of [`image_refusal`] is trusted before the file is
+/// looked at again, so the preview does not ask the disk every frame yet
+/// notices an image that changes.
+const IMAGE_CHECK_SECONDS: f64 = 1.0;
+
+/// [`image_refusal`] for a file that is not there.
+const IMAGE_MISSING: &str = "The file is missing";
+
+/// Why the preview will not load the file at `path` as an image, or `None`
+/// when it may: it must be a regular file (not a folder, a device such as
+/// `/dev/zero` or a pipe that never ends), have an image extension, and be
+/// at most [`MAX_IMAGE_BYTES`] long, since egui reads all of it at once.
+fn image_refusal(path: &Path) -> Option<&'static str> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Some(IMAGE_MISSING);
+    };
+    if !metadata.is_file() {
+        Some("Not a file")
+    } else if !is_image_path(path) {
+        Some("Not an image file the preview shows")
+    } else if metadata.len() > MAX_IMAGE_BYTES {
+        Some("The image is too large to show in the preview")
+    } else {
+        None
+    }
+}
+
+/// [`image_refusal`] for `path`, remembered for [`IMAGE_CHECK_SECONDS`].
+/// A missing file is not remembered: a remote image shows the frame after
+/// its download lands, which may be the last frame for a while.
+fn cached_image_refusal(ctx: &egui::Context, path: &Path) -> Option<&'static str> {
+    let id = egui::Id::unique(("rubrique-image-check", path));
+    let now = ctx.input(|input| input.time);
+    let known = ctx.data(|data| data.get_temp::<(Option<&'static str>, f64)>(id));
+    if let Some((refusal, checked)) = known
+        && now - checked < IMAGE_CHECK_SECONDS
+    {
+        return refusal;
+    }
+    let refusal = image_refusal(path);
+    if refusal != Some(IMAGE_MISSING) {
+        ctx.data_mut(|data| data.insert_temp(id, (refusal, now)));
+    }
+    refusal
+}
+
 /// The video a preview card asked to play this frame, if any (taken once).
 pub fn take_play_request(ctx: &egui::Context) -> Option<PathBuf> {
     ctx.data_mut(|data| {
@@ -1120,6 +1166,10 @@ fn render_image(ui: &mut Ui, alt: &str, url: &str, size: ImageSize, link: Option
     };
     if media_kind_of_url(url) == Some(MediaKind::Video) {
         video_card(ui, alt, &path);
+        return;
+    }
+    if let Some(refusal) = cached_image_refusal(ui.ctx(), &path) {
+        image_fallback(ui, alt, &format!("{}\n{refusal}", path.display()));
         return;
     }
     let max_width = ui.max_rect().width();
@@ -1283,9 +1333,25 @@ mod tests {
     use eframe::egui;
 
     use super::{
-        Color32, MIN_TEXT_CONTRAST, TABLE_COLUMN_MIN_WIDTH, cached_blocks, contrast_ratio, fit_column_widths,
-        parse_blocks, readable_color, split_long_words,
+        Color32, IMAGE_MISSING, MAX_IMAGE_BYTES, MIN_TEXT_CONTRAST, TABLE_COLUMN_MIN_WIDTH, cached_blocks,
+        contrast_ratio, fit_column_widths, image_refusal, parse_blocks, readable_color, split_long_words,
     };
+    use crate::test_support::TempFolder;
+
+    #[test]
+    fn only_regular_image_files_up_to_the_limit_are_loaded() {
+        let temp = TempFolder::new();
+        assert_eq!(image_refusal(&temp.path().join("gone.png")), Some(IMAGE_MISSING));
+        assert_eq!(image_refusal(&temp.make_folder("folder.png")), Some("Not a file"));
+        #[cfg(unix)]
+        assert_eq!(image_refusal(std::path::Path::new("/dev/zero")), Some("Not a file"));
+        assert_eq!(image_refusal(&temp.write("notes.txt", "text")), Some("Not an image file the preview shows"));
+        let large = temp.write("large.png", "");
+        // A sparse file: as long as the limit plus one byte, without writing it.
+        std::fs::File::options().write(true).open(&large).unwrap().set_len(MAX_IMAGE_BYTES + 1).unwrap();
+        assert_eq!(image_refusal(&large), Some("The image is too large to show in the preview"));
+        assert_eq!(image_refusal(&temp.write("photo.png", "png bytes")), None);
+    }
 
     const LIGHT_PAGE: Color32 = Color32::from_rgb(0xfd, 0xfc, 0xfa);
     const LIGHT_TEXT: Color32 = Color32::from_rgb(0x2b, 0x2a, 0x28);

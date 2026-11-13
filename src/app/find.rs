@@ -4,6 +4,9 @@
 
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use eframe::egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat, TextWrapping};
 use eframe::egui::text_edit::TextEditState;
@@ -58,6 +61,9 @@ pub(super) const ACCENT_STROKE: f32 = 1.5;
 const OUTLINE_OPACITY: f32 = 0.6;
 /// Hits an all-files search stops at.
 const RESULT_LIMIT: usize = 300;
+/// Pause after the last change to the query before the local folders are
+/// searched: typing a word starts one search, not one per key.
+const SEARCH_DELAY_SECONDS: f64 = 0.15;
 
 /// The open find bar.
 #[derive(Debug, Default)]
@@ -84,12 +90,34 @@ pub(super) struct FindBar {
     /// After a replacement: make the first match at or after this byte the
     /// current one (the one that followed the replaced match).
     resume_at: Option<usize>,
-    /// All-files results, and the query they are for.
+    /// All-files results from local folders, and the query they are for.
     results: Option<(String, SearchOptions, SearchResults)>,
+    /// A local search running in the background.
+    local_search: Option<LocalSearch>,
+    /// The query and options as the local search last saw them, and when
+    /// they changed to that (for the pause before searching).
+    edited: Option<(String, SearchOptions, f64)>,
     /// Results from remote folders (or why they failed), and their query.
     remote_results: Option<(String, SearchOptions, Result<SearchResults, String>)>,
     /// A remote search running in the background, and its query.
     remote_search: Option<(String, SearchOptions, Task<std::io::Result<SearchResults>>)>,
+}
+
+/// A search of the local folders running in the background, and its query.
+/// Dropping it asks the thread to stop (it checks between files), so a
+/// search for an older query does not keep reading a large folder.
+#[derive(Debug)]
+struct LocalSearch {
+    query: String,
+    options: SearchOptions,
+    cancel: Arc<AtomicBool>,
+    task: Task<SearchResults>,
+}
+
+impl Drop for LocalSearch {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 /// Which field of the bar gets focus on the next frame.
@@ -104,11 +132,6 @@ enum FocusRequest {
 }
 
 impl FindBar {
-    /// The all-files search the bar asks for now.
-    fn query(&self) -> Query<'_> {
-        Query { text: &self.query, options: self.options }
-    }
-
     /// True when `results` (or another cached search) is for the current query.
     fn is_current(&self, query: &str, options: SearchOptions) -> bool {
         *query == self.query && options == self.options
@@ -659,24 +682,28 @@ fn replace_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) -> Option<F
 
 /// The all-files results under the field; a click opens the hit.
 fn results_list(ui: &mut Ui, bar: &mut FindBar, roots: &[PathBuf], metrics: &BarMetrics) -> Option<FileHit> {
+    if bar.query.trim().is_empty() {
+        // Nothing to look for: stop a search for an earlier query.
+        bar.local_search = None;
+        return None;
+    }
     let (remote_roots, local_roots): (Vec<PathBuf>, Vec<PathBuf>) =
         roots.iter().cloned().partition(|root| crate::remote::is_mirror(root));
-    if bar.results.as_ref().is_none_or(|(query, options, _)| !bar.is_current(query, *options)) {
-        let results = if bar.query.trim().is_empty() {
-            SearchResults::default()
-        } else {
-            search_files(&local_roots, bar.query(), RESULT_LIMIT)
-        };
-        bar.results = Some((bar.query.clone(), bar.options, results));
+    let searching_local = poll_local_search(ui.ctx(), bar, local_roots);
+    let searching_remote = !remote_roots.is_empty() && poll_remote_search(ui.ctx(), bar, remote_roots);
+    if searching_local {
+        // The last results are for an older query, and remote hits come
+        // after the local ones: show neither until the local ones are in.
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new().size(metrics.small));
+            ui.label(RichText::new("Searching…").small().weak());
+        });
+        return None;
     }
-    let searching_remote =
-        !remote_roots.is_empty() && !bar.query.trim().is_empty() && poll_remote_search(ui.ctx(), bar, remote_roots);
     let Some((_, _, local)) = &bar.results else {
         return None;
     };
-    if bar.query.trim().is_empty() {
-        return None;
-    }
     let mut results = local.clone();
     let mut remote_error = None;
     match &bar.remote_results {
@@ -885,6 +912,50 @@ fn excerpt_job(excerpt: &str, highlight: &Range<usize>, font: FontId, visuals: &
     job
 }
 
+/// Keep the local search in step with the query: pick up a finished one,
+/// drop (and so stop) one for an older query, and start a new one once the
+/// query has not changed for [`SEARCH_DELAY_SECONDS`]. True while results
+/// for the current query are still coming.
+fn poll_local_search(ctx: &Context, bar: &mut FindBar, local_roots: Vec<PathBuf>) -> bool {
+    if let Some(search) = &bar.local_search
+        && let Some(results) = search.task.take()
+    {
+        bar.results = Some((search.query.clone(), search.options, results));
+        bar.local_search = None;
+    }
+    if bar.local_search.as_ref().is_some_and(|search| !bar.is_current(&search.query, search.options)) {
+        bar.local_search = None;
+    }
+    if bar.results.as_ref().is_some_and(|(query, options, _)| bar.is_current(query, *options)) {
+        return false;
+    }
+    if bar.local_search.is_some() {
+        return true;
+    }
+    let now = ctx.input(|input| input.time);
+    let edited_at = match &bar.edited {
+        Some((query, options, at)) if bar.is_current(query, *options) => *at,
+        _ => {
+            bar.edited = Some((bar.query.clone(), bar.options, now));
+            now
+        }
+    };
+    let waited = now - edited_at;
+    if waited < SEARCH_DELAY_SECONDS {
+        ctx.request_repaint_after(Duration::from_secs_f64(SEARCH_DELAY_SECONDS - waited));
+        return true;
+    }
+    let query = bar.query.clone();
+    let options = bar.options;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let (task_query, task_cancel) = (query.clone(), Arc::clone(&cancel));
+    let task = spawn_with_repaint(ctx, move || {
+        search_files(&local_roots, Query { text: &task_query, options }, RESULT_LIMIT, &task_cancel)
+    });
+    bar.local_search = Some(LocalSearch { query, options, cancel, task });
+    true
+}
+
 /// Keep the remote search in step with the query: pick up a finished one,
 /// and start a new one when none is running. One search at a time, so fast
 /// typing does not start a search per key. True while results for the
@@ -1015,6 +1086,99 @@ mod tests {
         results.hits.push(text_hit("/notes/b.md", 1));
         results.truncated = true;
         assert_eq!(results_summary(&results), "First 2 matches in 2 files");
+    }
+
+    /// Run one frame at `time` seconds that keeps the bar's local search of
+    /// `roots` in step with its query. True while it is still searching.
+    fn search_frame(ctx: &Context, bar: &mut FindBar, roots: &[PathBuf], time: f64) -> bool {
+        let input = egui::RawInput { time: Some(time), ..Default::default() };
+        let mut searching = false;
+        let mut output = ctx.run_ui(input, |ui| searching = poll_local_search(ui.ctx(), bar, roots.to_vec()));
+        // No screen here: the font texture is never uploaded.
+        output.textures_delta.clear();
+        searching
+    }
+
+    /// Run frames from `time` on, one pause apart, until the local search
+    /// is done (failing after ten seconds). Returns the time of the last frame.
+    fn finish_search(ctx: &Context, bar: &mut FindBar, roots: &[PathBuf], mut time: f64) -> f64 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while search_frame(ctx, bar, roots, time) {
+            assert!(std::time::Instant::now() < deadline, "the search did not finish");
+            std::thread::yield_now();
+            time += SEARCH_DELAY_SECONDS;
+        }
+        time
+    }
+
+    /// A search of `roots` for `text` with the default options, run here.
+    fn direct_search(roots: &[PathBuf], text: &str) -> SearchResults {
+        let query = Query { text, options: SearchOptions::default() };
+        search_files(roots, query, RESULT_LIMIT, &AtomicBool::new(false))
+    }
+
+    /// The bar's local results when they are for its current query, as the
+    /// results list shows them.
+    fn shown(bar: &FindBar) -> Option<&SearchResults> {
+        let (query, options, results) = bar.results.as_ref()?;
+        bar.is_current(query, *options).then_some(results)
+    }
+
+    #[test]
+    fn local_search_waits_for_typing_to_pause_and_finds_the_same_hits() {
+        let folder = crate::test_support::TempFolder::new();
+        folder.write("notes/Plan.md", "# Plan\nbuy milk\n");
+        folder.write("milk.txt", "no match\n");
+        let roots = vec![folder.path().to_path_buf()];
+        let ctx = Context::default();
+        let mut bar = FindBar { query: "milk".into(), ..FindBar::default() };
+        assert!(search_frame(&ctx, &mut bar, &roots, 0.0));
+        // Typing has not paused long enough yet: nothing is searched.
+        assert!(search_frame(&ctx, &mut bar, &roots, SEARCH_DELAY_SECONDS / 2.0));
+        assert!(bar.local_search.is_none() && bar.results.is_none());
+        finish_search(&ctx, &mut bar, &roots, 1.0);
+        let expected = direct_search(&roots, "milk");
+        assert_eq!(expected.hits.len(), 2);
+        assert_eq!(shown(&bar), Some(&expected));
+    }
+
+    #[test]
+    fn results_for_an_old_query_are_not_shown_for_a_new_one() {
+        let folder = crate::test_support::TempFolder::new();
+        folder.write("plan.md", "buy milk\n");
+        let roots = vec![folder.path().to_path_buf()];
+        let ctx = Context::default();
+        let mut bar = FindBar { query: "milk".into(), ..FindBar::default() };
+        let time = finish_search(&ctx, &mut bar, &roots, 0.0);
+        bar.query = "plan".into();
+        // The milk results are in, but the list says it is searching.
+        assert!(search_frame(&ctx, &mut bar, &roots, time + 1.0));
+        assert_eq!(shown(&bar), None);
+        finish_search(&ctx, &mut bar, &roots, time + 2.0);
+        assert_eq!(shown(&bar), Some(&direct_search(&roots, "plan")));
+    }
+
+    #[test]
+    fn a_search_dropped_for_a_newer_query_never_comes_back() {
+        let folder = crate::test_support::TempFolder::new();
+        for index in 0..200 {
+            folder.write(&format!("note-{index}.md"), "milk\n");
+        }
+        let roots = vec![folder.path().to_path_buf()];
+        let ctx = Context::default();
+        let mut bar = FindBar { query: "milk".into(), ..FindBar::default() };
+        search_frame(&ctx, &mut bar, &roots, 0.0);
+        // Starts the search for milk, which the next query stops.
+        assert!(search_frame(&ctx, &mut bar, &roots, 1.0));
+        bar.query = "plan".into();
+        assert!(search_frame(&ctx, &mut bar, &roots, 1.0));
+        // Back to milk: whatever the stopped search found is not shown,
+        // only a full search for it.
+        bar.query = "milk".into();
+        finish_search(&ctx, &mut bar, &roots, 2.0);
+        let expected = direct_search(&roots, "milk");
+        assert_eq!(expected.hits.len(), 200);
+        assert_eq!(shown(&bar), Some(&expected));
     }
 
     #[test]

@@ -1,5 +1,6 @@
-# Checks every push to main and every pull request: formatting, lints,
-# tests on Linux and macOS, and a build with the oldest supported Rust.
+# Checks every push to main and every pull request: formatting, lints on
+# Linux and macOS, tests on Linux and macOS, and a build with the oldest
+# supported Rust. The Release workflow also calls it before it publishes.
 name: CI
 
 on:
@@ -7,12 +8,18 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Lets release.yml run these same checks before a release goes out.
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # In a called workflow github.workflow is the caller's name ("Release"),
+  # so the checks inside a Release run get their own group. With only the
+  # ref, the standalone CI run and the one inside Release for the same push
+  # to main would share a group and cancel each other.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -21,20 +28,39 @@ env:
 
 jobs:
   lint:
-    name: Format and clippy
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Clippy on macOS too, so the macOS-only code (Touch ID, the native
+        # menu, open-document events) is linted. Formatting is the same on
+        # every system, so only Linux checks it. The Linux name stays
+        # "Format and clippy": the main branch ruleset requires that check.
+        include:
+          - os: ubuntu-latest
+            name: Format and clippy
+          # macos-15 for the reason given in the test job below.
+          - os: macos-15
+            name: Clippy (macos-15)
+    runs-on: ${{ matrix.os }}
+    # A cold build with no cache takes about 10 minutes; anything near 30
+    # is a stuck runner.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
+          toolchain: stable
           components: rustfmt, clippy
       - name: Install Linux build libraries
         # A mirror outage on 2026-11-11 hung apt for 21 minutes: retry
         # each download and give up after 10 minutes.
         timeout-minutes: 10
+        if: runner.os == 'Linux'
         run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Check formatting
+        if: runner.os == 'Linux'
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --locked -- -D warnings
@@ -48,30 +74,36 @@ jobs:
         # a runner on 2026-11-03 and were cancelled after 15 minutes.
         os: [ubuntu-latest, macos-15]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
       - name: Install Linux build libraries
         # A mirror outage on 2026-11-11 hung apt for 21 minutes: retry
         # each download and give up after 10 minutes.
         timeout-minutes: 10
         if: runner.os == 'Linux'
         run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Test
         run: cargo test --locked
 
   msrv:
     name: Oldest supported Rust (1.95)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: "1.95"
       - name: Install Linux build libraries
         # A mirror outage on 2026-11-11 hung apt for 21 minutes: retry
         # each download and give up after 10 minutes.
         timeout-minutes: 10
         run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Build
         run: cargo check --all-targets --locked

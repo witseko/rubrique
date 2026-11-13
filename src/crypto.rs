@@ -124,8 +124,9 @@ impl Vault {
         let sealed = self
             .cipher()
             .encrypt(&XNonce::from(nonce), plain)
-            // Only fails for inputs far larger than any file we open.
-            .unwrap_or_default();
+            // Only fails for inputs far larger than any file we open. Going
+            // on would write a scratch with nothing in it over the real one.
+            .expect("text far below the cipher's size limit");
         let mut bytes = Vec::with_capacity(MAGIC.len() + SALT_LEN + NONCE_LEN + sealed.len());
         bytes.extend_from_slice(MAGIC);
         bytes.extend_from_slice(&self.salt);
@@ -176,14 +177,17 @@ fn argon2_with(params: Result<Params, argon2::Error>) -> Argon2<'static> {
     Argon2::new(Algorithm::Argon2id, Version::V0x13, params.unwrap_or_default())
 }
 
-fn derive_key(password: &str, salt: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
+fn derive_key(password: &str, salt: &[u8; SALT_LEN]) -> Zeroizing<[u8; KEY_LEN]> {
     derive_key_with(&argon2(), password, salt)
 }
 
-fn derive_key_with(argon2: &Argon2, password: &str, salt: &[u8]) -> Zeroizing<[u8; KEY_LEN]> {
+fn derive_key_with(argon2: &Argon2, password: &str, salt: &[u8; SALT_LEN]) -> Zeroizing<[u8; KEY_LEN]> {
     let mut key = Zeroizing::new([0; KEY_LEN]);
-    // Fails only for salts or outputs of the wrong length, which are fixed here.
-    let _ = argon2.hash_password_into(password.as_bytes(), salt, key.as_mut());
+    // Fails only for salts or outputs of the wrong length, and both are
+    // fixed by the types here. Going on would seal text with a zero key.
+    argon2
+        .hash_password_into(password.as_bytes(), salt, key.as_mut())
+        .expect("Argon2 takes 16-byte salts and 32-byte keys");
     key
 }
 

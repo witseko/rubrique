@@ -120,11 +120,25 @@ struct Transcribing {
 
 impl RubriqueApp {
     /// The open note and its kind, when it can hold memos and images.
+    /// Callers that add files check [`Self::refuse_encrypted_note`] first.
     pub(super) fn memo_note(&self) -> Option<(PathBuf, NoteKind)> {
         let OpenFile::Text { document, .. } = &self.open_file else {
             return None;
         };
         NoteKind::of(&document.path).map(|kind| (document.path.clone(), kind))
+    }
+
+    /// Say why `what` (voice memos, audio, images) cannot go into the open
+    /// file when it is an encrypted scratch; true when refused. They are
+    /// separate files next to the note, and only the note is encrypted.
+    pub(super) fn refuse_encrypted_note(&mut self, what: &str) -> bool {
+        let is_encrypted = self.open_file.is_encrypted();
+        if is_encrypted {
+            self.show_status(format!(
+                "Adding {what} to encrypted scratches is not supported: they would be stored unencrypted"
+            ));
+        }
+        is_encrypted
     }
 
     /// Start recording, or stop and add the memo when already recording.
@@ -137,7 +151,7 @@ impl RubriqueApp {
     }
 
     fn start_recording(&mut self) {
-        if self.refuse_remote_note("voice memos") {
+        if self.refuse_remote_note("voice memos") || self.refuse_encrypted_note("voice memos") {
             return;
         }
         let Some((note, _)) = self.memo_note() else {
@@ -236,7 +250,7 @@ impl RubriqueApp {
     /// Add an audio file to the open note: copied into the memos folder
     /// when it comes from elsewhere (unless Settings says to link it in place).
     fn add_audio_file(&mut self, ctx: &Context, audio: &Path) {
-        if self.refuse_remote_note("audio") {
+        if self.refuse_remote_note("audio") || self.refuse_encrypted_note("audio") {
             return;
         }
         let Some((note, _)) = self.memo_note() else {
@@ -268,7 +282,7 @@ impl RubriqueApp {
 
     /// Pick an audio file in the system dialog and add it.
     pub(super) fn choose_audio_file(&mut self, ctx: &Context) {
-        if self.refuse_remote_note("audio") {
+        if self.refuse_remote_note("audio") || self.refuse_encrypted_note("audio") {
             return;
         }
         let Some((note, _)) = self.memo_note() else {
@@ -313,7 +327,9 @@ impl RubriqueApp {
         if !ctx.input(|input| !input.raw.hovered_files.is_empty()) {
             return;
         }
-        let text = if self.memo_note().is_some() {
+        let text = if self.open_file.is_encrypted() {
+            "Encrypted scratches do not take images or audio"
+        } else if self.memo_note().is_some() {
             "Drop images or audio to add them here"
         } else {
             "Open a Markdown or HTML file to add images or audio"

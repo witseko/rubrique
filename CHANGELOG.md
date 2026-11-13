@@ -8,6 +8,31 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deeply nested quotes and lists.** A Markdown file with thousands of
+  nested `>` or list markers no longer crashes the app on open; content
+  past 32 levels shows as plain text.
+- **Voice memos and images in encrypted scratches.** Recording, adding
+  audio or dropping an image into an encrypted scratch is refused with a
+  message, instead of saving an unencrypted copy next to it.
+- **Settings saves.** A failed settings save now shows in the status bar,
+  and the file is replaced in one step, so a crash mid-save cannot lose
+  the PIN or the scratch password. A settings file kept as a link stays
+  a link.
+- **Preview images.** The preview loads only regular image files up to
+  20 MB, so a link to `/dev/zero`, a pipe or a huge file no longer hangs
+  it or fills the memory.
+- **Find in all files stays responsive.** Large folders are searched in
+  the background after you pause typing, so the window no longer freezes
+  on each key.
+- **Remote saves in the background.** Saving a file in a remote folder no
+  longer freezes the window while the host answers; edits made meanwhile
+  stay unsaved until the next save.
+- **Remote folders open without waiting.** Unfolding a folder on another
+  computer shows "Loading…" and fills in when the listing arrives,
+  instead of freezing the window.
+
 ## [1.0.0] - 2026-11-12
 
 ### Added
