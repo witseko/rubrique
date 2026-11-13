@@ -67,6 +67,11 @@ impl RubriqueApp {
 
     /// Delete the file, close its tab and re-read the tree.
     fn delete_now(&mut self, path: &Path) {
+        // The upload would bring the file back.
+        if self.remote_save_running(path) {
+            self.show_status(format!("Cannot delete {} while it is being saved", name_text(path)));
+            return;
+        }
         if let Err(error) = crate::vfs::delete(path) {
             self.show_status(format!("Cannot delete {}: {error}", name_text(path)));
             return;

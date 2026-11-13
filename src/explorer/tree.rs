@@ -6,6 +6,8 @@ use std::cmp::Ordering;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::remote::task::Task;
+
 /// Extensions treated as Markdown (compared case-insensitively).
 const MARKDOWN_EXTENSIONS: [&str; 5] = ["md", "markdown", "mdown", "mkd", "mdx"];
 
@@ -38,6 +40,9 @@ pub fn root_name(path: &Path) -> String {
 pub enum Children {
     /// Never expanded; nothing read from disk yet.
     NotLoaded,
+    /// A remote folder being listed in the background (see
+    /// [`FsNode::start_loading`]).
+    Loading(Task<std::io::Result<Vec<FsNode>>>),
     /// Entries read from disk, sorted for display.
     Loaded(Vec<FsNode>),
     /// Reading the folder failed (permissions, deleted, ...).
@@ -99,23 +104,44 @@ impl FsNode {
         matches!(self.kind, NodeKind::Folder | NodeKind::SymlinkLoop)
     }
 
-    /// Expand or collapse a folder, reading it from disk on first expand.
-    pub fn toggle_expanded(&mut self) {
+    /// Expand or collapse a folder, reading it on first expand (see
+    /// [`FsNode::start_loading`]; `wake` is called when a remote listing
+    /// arrives). Folding it again while it loads starts nothing new.
+    pub fn toggle_expanded(&mut self, wake: impl FnOnce() + Send + 'static) {
         if self.kind != NodeKind::Folder {
             return;
         }
         self.expanded = !self.expanded;
         if self.expanded && matches!(self.children, Children::NotLoaded) {
-            self.load_children();
+            self.start_loading(wake);
         }
     }
 
     /// Read this folder's entries from disk, replacing any loaded children.
     pub fn load_children(&mut self) {
-        self.children = match read_folder(&self.path) {
-            Ok(children) => Children::Loaded(children),
-            Err(error) => Children::Failed(error.to_string()),
+        self.children = children_from(read_folder(&self.path));
+    }
+
+    /// Read this folder's entries: a local folder at once, a remote one in
+    /// the background, so a slow host does not freeze the window. `wake` is
+    /// called when the listing arrives; [`FsNode::poll_loading`] then puts it in.
+    pub fn start_loading(&mut self, wake: impl FnOnce() + Send + 'static) {
+        if !crate::remote::is_mirror(&self.path) {
+            self.load_children();
+            return;
+        }
+        let path = self.path.clone();
+        self.children = Children::Loading(Task::spawn(wake, move || read_folder(&path)));
+    }
+
+    /// Put in the entries of a finished background listing.
+    pub fn poll_loading(&mut self) {
+        let Children::Loading(task) = &self.children else {
+            return;
         };
+        if let Some(result) = task.take() {
+            self.children = children_from(result);
+        }
     }
 
     /// Open every folder from this one down to `target`, so its row shows,
@@ -147,7 +173,8 @@ impl FsNode {
 
     /// Re-read every loaded folder, keeping which folders are expanded.
     pub fn refresh(&mut self) {
-        if matches!(self.children, Children::NotLoaded) {
+        // A listing under way is as fresh as a new one would be.
+        if matches!(self.children, Children::NotLoaded | Children::Loading(_)) {
             return;
         }
         let previous = std::mem::replace(&mut self.children, Children::NotLoaded);
@@ -168,6 +195,14 @@ impl FsNode {
             new_child.children = old_child.children;
             new_child.refresh();
         }
+    }
+}
+
+/// A folder's children from the result of reading it.
+fn children_from(result: std::io::Result<Vec<FsNode>>) -> Children {
+    match result {
+        Ok(children) => Children::Loaded(children),
+        Err(error) => Children::Failed(error.to_string()),
     }
 }
 
@@ -362,7 +397,7 @@ mod tests {
             _ => unreachable!(),
         }[0];
         assert!(matches!(docs.children, Children::NotLoaded));
-        docs.toggle_expanded();
+        docs.toggle_expanded(|| {});
         assert_eq!(names(loaded(docs)), ["inner.md"]);
     }
 
@@ -383,7 +418,7 @@ mod tests {
         temp.write("docs/one.md", "");
         let mut root = FsNode::new_root(temp.path().to_path_buf());
         if let Children::Loaded(children) = &mut root.children {
-            children[0].toggle_expanded();
+            children[0].toggle_expanded(|| {});
         }
         temp.write("docs/two.md", "");
         temp.write("top.md", "");
@@ -411,15 +446,70 @@ mod tests {
         temp.make_folder("zeta");
         temp.write("docs/inner.md", "");
         let mirror = crate::remote::testing::mirror_of("tree-host", temp.path());
-        let mut root = FsNode::new_root(mirror.clone());
+        let root = FsNode::new_root(mirror.clone());
         assert!(root.name.ends_with(" on tree-host"), "{}", root.name);
         assert_eq!(names(loaded(&root)), ["docs", "zeta", "A.txt", "b.md"]);
         assert_eq!(loaded(&root)[3].path, mirror.join("b.md"));
-        if let Children::Loaded(children) = &mut root.children {
-            children[0].toggle_expanded();
-        }
-        assert_eq!(names(loaded(&loaded(&root)[0])), ["inner.md"]);
         assert!(mirror.is_dir());
+    }
+
+    /// Put in a background listing of `node`, waiting for it (failing after
+    /// ten seconds).
+    fn finish_loading(node: &mut FsNode) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while matches!(node.children, Children::Loading(_)) {
+            assert!(std::time::Instant::now() < deadline, "the listing did not arrive");
+            std::thread::yield_now();
+            node.poll_loading();
+        }
+    }
+
+    #[test]
+    fn remote_folders_expand_in_the_background_once() {
+        let temp = TempFolder::new();
+        temp.write("docs/inner.md", "");
+        temp.make_folder("gone");
+        let mirror = crate::remote::testing::mirror_of("tree-host", temp.path());
+        let mut root = FsNode::new_root(mirror);
+        let Children::Loaded(children) = &mut root.children else {
+            panic!("the root is listed");
+        };
+        // Every listing started calls back once on this channel.
+        let (woken, wakes) = std::sync::mpsc::channel();
+        let wake = || {
+            let woken = woken.clone();
+            move || {
+                let _ = woken.send(());
+            }
+        };
+        children[0].toggle_expanded(wake());
+        assert!(matches!(children[0].children, Children::Loading(_)), "the window does not wait");
+        // Folding and unfolding while it loads starts no second listing.
+        children[0].toggle_expanded(wake());
+        children[0].toggle_expanded(wake());
+        assert!(matches!(children[0].children, Children::Loading(_)));
+        // Nor does a refresh; the listing under way is kept.
+        temp.write("docs/new.md", "");
+        root.refresh();
+        let docs = &mut match &mut root.children {
+            Children::Loaded(children) => children,
+            _ => unreachable!(),
+        }[0];
+        assert!(matches!(docs.children, Children::Loading(_)));
+        finish_loading(docs);
+        wakes.recv().unwrap();
+        assert_eq!(names(loaded(docs)), ["inner.md", "new.md"]);
+
+        // A folder gone from the host shows why, as before.
+        let gone = &mut match &mut root.children {
+            Children::Loaded(children) => children,
+            _ => unreachable!(),
+        }[1];
+        std::fs::remove_dir(temp.path().join("gone")).unwrap();
+        gone.toggle_expanded(|| {});
+        finish_loading(gone);
+        assert!(matches!(gone.children, Children::Failed(_)));
+        assert_eq!(wakes.try_iter().count(), 0, "only one listing of docs ran");
     }
 
     #[test]
@@ -437,7 +527,7 @@ mod tests {
         let inner = read_folder(&temp.path().join("inner")).unwrap();
         assert_eq!(inner[0].kind, NodeKind::SymlinkLoop);
         let mut looping = FsNode { expanded: false, ..inner.into_iter().next().unwrap() };
-        looping.toggle_expanded();
+        looping.toggle_expanded(|| {});
         assert!(!looping.expanded);
     }
 }

@@ -6,6 +6,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ai::AiSettings;
+use crate::document::text_file::write_atomically;
 use crate::remote::settings_text;
 use crate::settings::accessibility::AccessibilitySettings;
 use crate::settings::explorer_filter::ExplorerFilter;
@@ -73,7 +74,9 @@ impl Settings {
             .unwrap_or_default()
     }
 
-    /// Write settings to the config folder, creating it when needed.
+    /// Write settings to the config folder, creating it when needed. The
+    /// file is replaced in one step, so a crash mid-write cannot leave it
+    /// cut short (and lose the PIN or the scratch password's salt).
     ///
     /// # Errors
     ///
@@ -82,10 +85,19 @@ impl Settings {
         let Some(path) = config_folder().map(|folder| folder.join("settings")) else {
             return Err(io::Error::new(io::ErrorKind::NotFound, "no home folder"));
         };
+        self.save_to(&path)
+    }
+
+    /// Write settings to `path`, creating its folder when needed.
+    fn save_to(&self, path: &Path) -> io::Result<()> {
         if let Some(folder) = path.parent() {
             fs::create_dir_all(folder)?;
         }
-        fs::write(path, self.to_text())
+        // A settings file kept as a link (to a dotfiles folder, say) is
+        // written through the link: renaming over it would replace the link
+        // with a plain file.
+        let target = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        write_atomically(&target, self.to_text().as_bytes())
     }
 
     /// Parse `key=value` lines. Unknown keys and bad values are ignored.
@@ -257,6 +269,36 @@ fn config_folder() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempFolder;
+
+    #[test]
+    fn save_creates_the_file_then_replaces_it_whole() {
+        let temp = TempFolder::new();
+        let path = temp.path().join("config/rubrique/settings");
+        let mut settings = Settings { note_marks: true, ..Settings::default() };
+        settings.save_to(&path).unwrap();
+        assert_eq!(Settings::parse(&fs::read_to_string(&path).unwrap()), settings);
+        settings.note_marks = false;
+        settings.save_to(&path).unwrap();
+        assert_eq!(Settings::parse(&fs::read_to_string(&path).unwrap()), settings);
+        // Only the settings file is left: no temporary file beside it.
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn save_writes_through_a_linked_settings_file() {
+        let temp = TempFolder::new();
+        let real = temp.write("dotfiles/settings", "");
+        let link = temp.path().join("config/settings");
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let settings = Settings { note_marks: true, ..Settings::default() };
+        settings.save_to(&link).unwrap();
+        // The link is still a link, and the file it points at got the settings.
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+        assert_eq!(Settings::parse(&fs::read_to_string(&real).unwrap()), settings);
+    }
 
     #[test]
     fn round_trip() {

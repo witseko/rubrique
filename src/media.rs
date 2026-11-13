@@ -14,6 +14,12 @@ const IMAGE_EXTENSIONS: [&str; 10] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"
 const VIDEO_EXTENSIONS: [&str; 12] =
     ["mp4", "m4v", "mov", "webm", "mkv", "avi", "ogv", "mpg", "mpeg", "wmv", "flv", "3gp"];
 
+/// Largest image file the preview loads, local or downloaded from a remote
+/// folder. egui reads the whole file into memory before decoding it, so a
+/// link to a disk image or a log named `.png` must not fill the memory; a
+/// full-size phone photo or a large screenshot is well under 20 MB.
+pub const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+
 /// What kind of media a file is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaKind {

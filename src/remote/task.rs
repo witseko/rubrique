@@ -8,6 +8,8 @@ use std::thread;
 #[derive(Debug)]
 pub struct Task<T> {
     result: Arc<Mutex<Option<T>>>,
+    /// The thread, for [`Task::wait`]; taken by the first wait.
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
 }
 
 impl<T: Send + 'static> Task<T> {
@@ -16,17 +18,28 @@ impl<T: Send + 'static> Task<T> {
     pub fn spawn(wake: impl FnOnce() + Send + 'static, work: impl FnOnce() -> T + Send + 'static) -> Self {
         let result = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&result);
-        thread::spawn(move || {
+        let thread = thread::spawn(move || {
             let value = work();
             *slot.lock().unwrap_or_else(PoisonError::into_inner) = Some(value);
             wake();
         });
-        Task { result }
+        Task { result, thread: Mutex::new(Some(thread)) }
     }
 
     /// The result once the work is done (handed out once).
     pub fn take(&self) -> Option<T> {
         self.result.lock().unwrap_or_else(PoisonError::into_inner).take()
+    }
+
+    /// Block until the work is done and hand out its result (`None` when
+    /// it was taken already or the work panicked). Freezes the window while
+    /// it waits, so only for steps that cannot go on without the result.
+    pub fn wait(&self) -> Option<T> {
+        let thread = self.thread.lock().unwrap_or_else(PoisonError::into_inner).take();
+        if let Some(thread) = thread {
+            thread.join().ok()?;
+        }
+        self.take()
     }
 }
 
@@ -51,5 +64,13 @@ mod tests {
         receiver.recv().unwrap();
         assert_eq!(task.take(), Some(42));
         assert_eq!(task.take(), None);
+    }
+
+    #[test]
+    fn waits_for_the_result() {
+        let task = Task::spawn(|| {}, || 6 * 7);
+        assert_eq!(task.wait(), Some(42));
+        let panicked: Task<u8> = Task::spawn(|| {}, || panic!("broken work"));
+        assert_eq!(panicked.wait(), None);
     }
 }

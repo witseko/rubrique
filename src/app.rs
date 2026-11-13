@@ -535,6 +535,8 @@ impl RubriqueApp {
                 None => self.remove_root_now(&folder),
             },
             GuardedAction::Quit => {
+                // No upload is cut off; drafts keep the edits made since.
+                self.wait_for_remote_saves(None);
                 // Asking is the fallback for when the edits cannot be kept.
                 if !self.keep_drafts()
                     && let Some(index) = self.dirty_tab(|_| true)
@@ -650,9 +652,27 @@ impl RubriqueApp {
         self.sort_tabs_into_groups();
     }
 
-    /// Save the open document; returns false when saving failed.
+    /// Save the open document; returns false when saving failed. A remote
+    /// file is saved in the background (see `remote.rs`): true then means
+    /// the save started, and its result shows when it is done.
     fn save(&mut self) -> bool {
+        if matches!(&self.open_file, OpenFile::Text { document, .. } if crate::remote::is_mirror(&document.path)) {
+            self.finish_block_edit();
+            self.start_remote_save();
+            return true;
+        }
+        self.save_now()
+    }
+
+    /// Save the open document before going on, waiting for the host on a
+    /// remote file (after its background saves); returns false when saving
+    /// failed.
+    fn save_now(&mut self) -> bool {
         self.finish_block_edit();
+        if let Some(path) = self.open_file.path().filter(|path| crate::remote::is_mirror(path)) {
+            let path = path.to_path_buf();
+            self.wait_for_remote_saves(Some(&path));
+        }
         let OpenFile::Text { document, disk_notice, .. } = &mut self.open_file else {
             return true;
         };
@@ -1027,7 +1047,7 @@ impl RubriqueApp {
             self.settings.window_size = Some((rect.width() * zoom, rect.height() * zoom));
         }
         self.remember_tabs();
-        self.write_settings();
+        self.write_settings_on_exit();
     }
 
     /// Keep the settings' tab list and active file in step with the tabs.
@@ -1036,9 +1056,18 @@ impl RubriqueApp {
         self.settings.last_file = self.open_file.path().map(Path::to_path_buf);
     }
 
-    /// Write the settings file. A failure is only reported on stderr: the
-    /// window is closing and there is nowhere else to show it.
-    fn write_settings(&self) {
+    /// Write the settings file during normal use. A failure shows in the
+    /// status bar: the PIN, the scratch password or a folder permission
+    /// would otherwise be lost without a word.
+    fn write_settings(&mut self) {
+        if let Err(error) = self.settings.save() {
+            self.show_status(format!("Cannot save settings: {error}"));
+        }
+    }
+
+    /// Write the settings file as the app quits. A failure is only reported
+    /// on stderr: the window is closing and there is nowhere else to show it.
+    fn write_settings_on_exit(&self) {
         if let Err(error) = self.settings.save() {
             eprintln!("rubrique: could not save settings: {error}");
         }
@@ -1507,6 +1536,10 @@ impl RubriqueApp {
         let target = rename_target(path, new_name)?;
         if target == path {
             return Ok(());
+        }
+        // The upload would land at the old name, leaving the new one unsaved.
+        if self.remote_save_running(path) {
+            return Err("Cannot rename while it is being saved; try again in a moment".to_string());
         }
         crate::vfs::rename(path, &target).map_err(|error| format!("Cannot rename: {error}"))?;
         let uri = image_uri(path);
@@ -2614,7 +2647,8 @@ impl RubriqueApp {
             return;
         };
         let proceed = match choice {
-            UnsavedChoice::Save => self.save(),
+            // The tab goes next, so the file must be saved first, remote or not.
+            UnsavedChoice::Save => self.save_now(),
             UnsavedChoice::Discard => {
                 // Back to the file, so the next step sees nothing unsaved here
                 // (and the draft goes with the edits).
@@ -2950,6 +2984,7 @@ impl eframe::App for RubriqueApp {
         self.poll_touch_id(&ctx);
         if self.app_locked() {
             // Only the PIN screen; drafts and background work go on.
+            self.poll_remote_saves();
             self.poll_drafts(&ctx);
             self.poll_voice(&ctx);
             self.poll_install(&ctx);
@@ -2969,6 +3004,7 @@ impl eframe::App for RubriqueApp {
         self.poll_voice(&ctx);
         self.poll_install(&ctx);
         self.poll_remote();
+        self.poll_remote_saves();
         self.poll_pending_sends();
         self.poll_agent_sessions(&ctx);
         self.poll_git(&ctx);
@@ -3040,9 +3076,10 @@ impl eframe::App for RubriqueApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // Usually done when the window asked to close; this covers other exits.
+        self.wait_for_remote_saves(None);
         self.keep_drafts();
         self.remember_tabs();
-        self.write_settings();
+        self.write_settings_on_exit();
     }
 }
 

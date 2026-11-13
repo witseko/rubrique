@@ -403,7 +403,7 @@ fn folder_is_shown(folder: &FsNode, context: &TreeContext) -> bool {
 /// file is in sight without opening every folder on the way (the filter
 /// already hides the folders that hold none). Reads the folder from disk
 /// the first time it is shown that way.
-fn shows_contents(folder: &mut FsNode, context: &TreeContext) -> bool {
+fn shows_contents(ui: &Ui, folder: &mut FsNode, context: &TreeContext) -> bool {
     if folder.expanded {
         return true;
     }
@@ -411,9 +411,15 @@ fn shows_contents(folder: &mut FsNode, context: &TreeContext) -> bool {
         && folder.kind == NodeKind::Folder
         && context.dirty_files.iter().any(|path| path.starts_with(&folder.path));
     if holds_unsaved && matches!(folder.children, Children::NotLoaded) {
-        folder.load_children();
+        folder.start_loading(repaint_when_done(ui));
     }
     holds_unsaved
+}
+
+/// Repaints the window when a remote folder's listing arrives.
+fn repaint_when_done(ui: &Ui) -> impl FnOnce() + Send + 'static {
+    let ctx = ui.ctx().clone();
+    move || ctx.request_repaint()
 }
 
 /// What the tree shows before any folder is added (the first run): a
@@ -442,13 +448,13 @@ fn show_root(
     }
     let response = response.on_hover_text(absolute_path_text(&root.path));
     scroll_if_revealed(ui, context, &root.path, &response);
-    let open = shows_contents(root, context);
+    let open = shows_contents(ui, root, context);
     paint_arrow(ui, &response, open);
     if let Some(color) = context.root_color {
         paint_root_bar(ui, &response, color);
     }
     if toggles_fold(&response) {
-        root.toggle_expanded();
+        root.toggle_expanded(repaint_when_done(ui));
     }
     root_menu(&response, &root.path, context, action);
     if open {
@@ -466,8 +472,12 @@ fn show_children(
     edits: &mut ExplorerEdits,
     action: &mut Option<ExplorerAction>,
 ) {
+    folder.poll_loading();
     match &mut folder.children {
         Children::NotLoaded => {}
+        Children::Loading(_) => {
+            ui.label(RichText::new("Loading\u{2026}").weak().italics());
+        }
         Children::Failed(error) => {
             ui.label(RichText::new(format!("Cannot read: {error}")).weak().italics());
         }
@@ -508,16 +518,16 @@ fn show_folder(
     if folder.kind == NodeKind::SymlinkLoop {
         response.clone().on_hover_text("Link to a parent folder; not expanded to avoid a loop");
     } else {
-        paint_arrow(ui, &response, shows_contents(folder, context));
+        paint_arrow(ui, &response, shows_contents(ui, folder, context));
     }
     if toggles_fold(&response) {
-        folder.toggle_expanded();
+        folder.toggle_expanded(repaint_when_done(ui));
     }
     if response.double_clicked() {
         *action = Some(ExplorerAction::RenameInTree(folder.path.clone()));
     }
     folder_menu(&response, &folder.path, context, action);
-    if shows_contents(folder, context) {
+    if shows_contents(ui, folder, context) {
         let indent_id = folder.path.clone();
         ui.indent(indent_id, |ui| show_children(ui, folder, context, edits, action));
     }

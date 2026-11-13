@@ -94,11 +94,16 @@ const MAX_HEADING_LEVEL: u8 = 6;
 /// CommonMark allows at most this many digits in an ordered list number.
 const MAX_LIST_NUMBER_DIGITS: usize = 9;
 
+/// Deepest nesting of containers (quotes, list items) read as blocks;
+/// content nested deeper stays as paragraph text, so a hostile file (a
+/// line of thousands of `>`) cannot overflow the stack.
+const MAX_BLOCK_DEPTH: usize = 32;
+
 /// Parse a whole document.
 pub fn parse_blocks(text: &str) -> Vec<Block> {
     let lines: Vec<String> = text.lines().map(expand_leading_tabs).collect();
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    parse_lines(&line_refs)
+    parse_lines(&line_refs, 0)
 }
 
 /// A top-level block and where its source text is.
@@ -126,7 +131,7 @@ pub fn parse_source_blocks(text: &str) -> Vec<SourceBlock> {
     let mut blocks = Vec::new();
     let mut index = 0;
     while index < line_refs.len() {
-        let (block, next) = parse_block(&line_refs, index);
+        let (block, next) = parse_block(&line_refs, index, 0);
         if let Some(block) = block {
             // Blank lines a block swallowed at its end are not part of its text.
             let mut last = next.max(index + 1) - 1;
@@ -142,20 +147,32 @@ pub fn parse_source_blocks(text: &str) -> Vec<SourceBlock> {
     blocks
 }
 
-/// Parse lines into blocks; used for the document and for container content.
-fn parse_lines(lines: &[&str]) -> Vec<Block> {
+/// Parse lines into blocks, `depth` containers deep; used for the
+/// document and for container content.
+fn parse_lines(lines: &[&str], depth: usize) -> Vec<Block> {
+    if depth > MAX_BLOCK_DEPTH {
+        // Too deep to nest further: keep the text, markers and all, as one
+        // paragraph rather than dropping it.
+        let text = lines.join("\n");
+        let text = text.trim();
+        if text.is_empty() {
+            return Vec::new();
+        }
+        return vec![Block::Paragraph(parse_inlines(text))];
+    }
     let mut blocks = Vec::new();
     let mut index = 0;
     while index < lines.len() {
-        let (block, next) = parse_block(lines, index);
+        let (block, next) = parse_block(lines, index, depth);
         blocks.extend(block);
         index = next;
     }
     blocks
 }
 
-/// Parse the block starting at `lines[index]`; returns it and the next index.
-fn parse_block(lines: &[&str], index: usize) -> (Option<Block>, usize) {
+/// Parse the block starting at `lines[index]`, `depth` containers deep;
+/// returns it and the next index.
+fn parse_block(lines: &[&str], index: usize, depth: usize) -> (Option<Block>, usize) {
     let line = lines[index];
     if is_blank(line) {
         return (None, index + 1);
@@ -177,10 +194,10 @@ fn parse_block(lines: &[&str], index: usize) -> (Option<Block>, usize) {
         return (Some(Block::ThematicBreak), index + 1);
     }
     if trimmed.starts_with('>') {
-        return parse_quote(lines, index);
+        return parse_quote(lines, index, depth);
     }
     if let Some(marker) = ListMarker::parse(line) {
-        return parse_list(lines, index, marker);
+        return parse_list(lines, index, marker, depth);
     }
     if let Some((table, next)) = parse_table(lines, index) {
         return (Some(Block::Table(table)), next);
@@ -556,7 +573,7 @@ fn parse_html_block(lines: &[&str], start: usize, kind: HtmlStart) -> (Option<Bl
 // ---------- block quotes ----------
 
 /// Lines starting with `>` (plus lazy continuation lines), parsed as blocks.
-fn parse_quote(lines: &[&str], start: usize) -> (Option<Block>, usize) {
+fn parse_quote(lines: &[&str], start: usize, depth: usize) -> (Option<Block>, usize) {
     let mut inner: Vec<&str> = Vec::new();
     let mut index = start;
     while index < lines.len() {
@@ -572,7 +589,7 @@ fn parse_quote(lines: &[&str], start: usize) -> (Option<Block>, usize) {
         }
         index += 1;
     }
-    (Some(Block::Quote(parse_lines(&inner))), index)
+    (Some(Block::Quote(parse_lines(&inner, depth + 1))), index)
 }
 
 /// A non-blank line continuing the paragraph on the previous (non-blank) line.
@@ -635,12 +652,12 @@ impl ListMarker {
 }
 
 /// Consecutive items with matching markers.
-fn parse_list(lines: &[&str], start: usize, first_marker: ListMarker) -> (Option<Block>, usize) {
+fn parse_list(lines: &[&str], start: usize, first_marker: ListMarker, depth: usize) -> (Option<Block>, usize) {
     let mut items = Vec::new();
     let mut marker = first_marker;
     let mut index = start;
     loop {
-        let (item, next) = parse_list_item(lines, index, marker);
+        let (item, next) = parse_list_item(lines, index, marker, depth);
         items.push(item);
         index = next;
         let next_marker = lines
@@ -658,7 +675,8 @@ fn parse_list(lines: &[&str], start: usize, first_marker: ListMarker) -> (Option
 }
 
 /// One item: its first line plus indented, blank, and lazy lines below it.
-fn parse_list_item(lines: &[&str], start: usize, marker: ListMarker) -> (ListItem, usize) {
+/// The item's blocks are one container deeper than its list.
+fn parse_list_item(lines: &[&str], start: usize, marker: ListMarker, depth: usize) -> (ListItem, usize) {
     let first_line = lines[start].get(marker.content_column..).unwrap_or("");
     let mut item_lines = vec![first_line];
     let mut index = start + 1;
@@ -684,7 +702,7 @@ fn parse_list_item(lines: &[&str], start: usize, marker: ListMarker) -> (ListIte
     }
     let (task, first_line) = split_task_box(item_lines[0]);
     item_lines[0] = first_line;
-    (ListItem { task, blocks: parse_lines(&item_lines) }, index)
+    (ListItem { task, blocks: parse_lines(&item_lines, depth + 1) }, index)
 }
 
 /// `[ ] text` -> (Some(false), "text"); `[x] text` -> (Some(true), "text").
@@ -1027,5 +1045,45 @@ mod tests {
     #[test]
     fn html_blocks_work_inside_quotes() {
         assert_eq!(parse_blocks("> <div>q</div>"), [Block::Quote(vec![html("<div>q</div>")])]);
+    }
+
+    #[test]
+    fn deep_quotes_stay_text_past_the_limit() {
+        let source = format!("{}deep text", ">".repeat(100_000));
+        let mut blocks = parse_blocks(&source);
+        let mut depth = 0;
+        while let [Block::Quote(inner)] = blocks.as_slice() {
+            depth += 1;
+            blocks = inner.clone();
+        }
+        assert!(depth <= MAX_BLOCK_DEPTH + 1, "{depth}");
+        let [Block::Paragraph(inlines)] = blocks.as_slice() else { panic!("{blocks:?}") };
+        assert!(super::super::inlines::plain_text(inlines).ends_with(">deep text"));
+    }
+
+    #[test]
+    fn deep_lists_stay_text_past_the_limit() {
+        let source = format!("{}deep text", "- ".repeat(100_000));
+        let mut blocks = parse_blocks(&source);
+        let mut depth = 0;
+        while let [Block::List(List { items, .. })] = blocks.as_slice()
+            && let [ListItem { blocks: inner, .. }] = items.as_slice()
+        {
+            depth += 1;
+            blocks = inner.clone();
+        }
+        assert!(depth <= MAX_BLOCK_DEPTH + 1, "{depth}");
+        let [Block::Paragraph(inlines)] = blocks.as_slice() else { panic!("{blocks:?}") };
+        assert!(super::super::inlines::plain_text(inlines).ends_with("- deep text"));
+    }
+
+    #[test]
+    fn nesting_below_the_limit_is_unchanged() {
+        let source = format!("{}text", "> ".repeat(MAX_BLOCK_DEPTH));
+        let mut expected = paragraph("text");
+        for _ in 0..MAX_BLOCK_DEPTH {
+            expected = Block::Quote(vec![expected]);
+        }
+        assert_eq!(parse_blocks(&source), [expected]);
     }
 }

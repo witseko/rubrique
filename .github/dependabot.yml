@@ -1,5 +1,6 @@
-# Weekly pull requests for outdated Rust crates and GitHub Actions.
-# Security fixes come as soon as an advisory is published.
+# Weekly pull requests for outdated Rust crates and GitHub Actions. Once
+# Dependabot security updates are enabled in the repository settings,
+# security fixes also come as soon as an advisory is published.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -10,11 +11,11 @@ updates:
       # One pull request for all small updates instead of one per crate.
       minor-and-patch:
         update-types: [minor, patch]
+  # The workflows pin each action to a commit SHA with its release tag in a
+  # trailing comment; Dependabot moves both together. dtolnay/rust-toolchain
+  # is pinned the same way (its v1 tag), and the Rust version to install is
+  # its toolchain input, which Dependabot does not touch.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
-    ignore:
-      # Its tag is the Rust version to install (stable, or 1.95 for the
-      # oldest supported Rust), not a version of the action.
-      - dependency-name: dtolnay/rust-toolchain
