@@ -1,6 +1,7 @@
 # Checks dependencies for known security problems (RustSec advisories),
-# licenses and sources with cargo-deny. Runs on dependency changes, on pull
-# requests, and every Monday, because new advisories appear for old crates.
+# licenses and sources with cargo-deny, and reviews the dependencies each
+# pull request changes. Runs on dependency changes, on pull requests, and
+# every Monday, because new advisories appear for old crates.
 name: Security
 
 on:
@@ -8,7 +9,9 @@ on:
     branches: [main]
     paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/security.yml]
   pull_request:
-    paths: [Cargo.toml, Cargo.lock, deny.toml, .github/workflows/security.yml]
+    # Any workflow file, because the dependency review below also covers
+    # the GitHub Actions a pull request adds or updates.
+    paths: [Cargo.toml, Cargo.lock, deny.toml, ".github/workflows/**"]
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
@@ -20,19 +23,44 @@ jobs:
   cargo-deny:
     name: cargo-deny (${{ matrix.checks }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
         # Advisories on their own, so a new advisory does not hide a license problem.
         checks: [advisories, "bans licenses sources"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
       # The cargo-deny binary comes from its GitHub release through an
       # installer with retries. The EmbarkStudios/cargo-deny-action image
       # downloads it with a bare curl inside a Docker build, which came back
       # as a non-gzip page (rate limit) two runs in a row.
-      - uses: taiki-e/install-action@v2
+      # The installer's commit also fixes the cargo-deny version (the newest
+      # one it knew at that commit), so Dependabot moves both together. The
+      # advisory check does not go stale: the RustSec database is fetched
+      # fresh on every run.
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny
       - run: cargo deny check ${{ matrix.checks }}
+
+  # Looks only at what a pull request changes: fails when it adds or updates
+  # a crate or a GitHub Action to a version with a known vulnerability in the
+  # GitHub Advisory Database. cargo-deny above reads RustSec and checks the
+  # whole tree but knows nothing about Actions, so the two overlap on crates
+  # and this one alone covers the workflows.
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # Any severity fails: the tree is small enough to fix or to
+          # decide on each one by hand.
+          fail-on-severity: low

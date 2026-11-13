@@ -55,7 +55,7 @@ impl Default for DraftState {
 
 impl DraftState {
     /// Drafts kept in `folder`, and the closed ones in a folder inside it.
-    fn in_folder(folder: PathBuf) -> Self {
+    pub(super) fn in_folder(folder: PathBuf) -> Self {
         DraftState {
             closed: Some(DraftStore::new(folder.join(CLOSED_FOLDER))),
             store: Some(DraftStore::new(folder)),

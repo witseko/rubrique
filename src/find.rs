@@ -5,6 +5,7 @@
 use std::fs;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Files larger than this are skipped in an all-files search.
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -162,29 +163,38 @@ pub struct Query<'a> {
 
 /// Search the text files under `roots` (hidden entries skipped) for `query`,
 /// stopping after `limit` hits. Files come in explorer order; name hits
-/// before text hits within a file.
-pub fn search_files(roots: &[PathBuf], query: Query<'_>, limit: usize) -> SearchResults {
+/// before text hits within a file. Setting `cancel` (from another thread)
+/// stops the search at the next file, with the hits found so far: a search
+/// nobody waits for any more should not keep reading a large folder.
+pub fn search_files(roots: &[PathBuf], query: Query<'_>, limit: usize, cancel: &AtomicBool) -> SearchResults {
     let mut results = SearchResults::default();
     if query.text.trim().is_empty() {
         return results;
     }
     for root in roots {
-        search_folder(root, root, query, limit, &mut results);
-        if results.truncated {
+        search_folder(root, root, query, limit, cancel, &mut results);
+        if results.truncated || cancel.load(Ordering::Relaxed) {
             break;
         }
     }
     results
 }
 
-fn search_folder(folder: &Path, root: &Path, query: Query<'_>, limit: usize, results: &mut SearchResults) {
+fn search_folder(
+    folder: &Path,
+    root: &Path,
+    query: Query<'_>,
+    limit: usize,
+    cancel: &AtomicBool,
+    results: &mut SearchResults,
+) {
     let Ok(entries) = fs::read_dir(folder) else {
         return;
     };
     let mut entries: Vec<fs::DirEntry> = entries.flatten().collect();
     entries.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
     for entry in entries {
-        if results.truncated {
+        if results.truncated || cancel.load(Ordering::Relaxed) {
             return;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -198,7 +208,7 @@ fn search_folder(folder: &Path, root: &Path, query: Query<'_>, limit: usize, res
         if metadata.is_dir() {
             // Links to folders are not followed, so a loop cannot happen.
             if !entry.file_type().is_ok_and(|kind| kind.is_symlink()) {
-                search_folder(&path, root, query, limit, results);
+                search_folder(&path, root, query, limit, cancel, results);
             }
             continue;
         }
@@ -479,7 +489,7 @@ mod tests {
         folder.write("other.txt", "no match\n");
         folder.write("image.png", "\0\0milk");
         let roots = vec![folder.path().to_path_buf()];
-        let results = search_files(&roots, plain("milk"), 10);
+        let results = search_files(&roots, plain("milk"), 10, &AtomicBool::new(false));
         let kinds: Vec<&HitKind> = results.hits.iter().map(|hit| &hit.kind).collect();
         assert_eq!(
             kinds,
@@ -493,26 +503,26 @@ mod tests {
         assert_eq!(results.file_count(), 1);
         assert_eq!(results.files_searched, 2);
 
-        let by_name = search_files(&roots, plain("plan"), 10);
+        let by_name = search_files(&roots, plain("plan"), 10, &AtomicBool::new(false));
         assert_eq!(by_name.hits[0].kind, HitKind::Name);
         assert_eq!(
             by_name.hits[1].kind,
             HitKind::Text { line: 1, excerpt: "# Plan".into(), highlight: 2..6, range: 2..6 }
         );
 
-        let capped = search_files(&roots, plain("milk"), 1);
+        let capped = search_files(&roots, plain("milk"), 1, &AtomicBool::new(false));
         assert_eq!(capped.hits.len(), 1);
         assert!(capped.truncated);
-        assert_eq!(search_files(&roots, plain("  "), 10).hits, Vec::<FileHit>::new());
+        assert_eq!(search_files(&roots, plain("  "), 10, &AtomicBool::new(false)).hits, Vec::<FileHit>::new());
 
         // The options apply to the text of the files; names ignore the case.
-        let exact = search_files(&roots, Query { text: "Milk", options: MATCH_CASE }, 10);
+        let exact = search_files(&roots, Query { text: "Milk", options: MATCH_CASE }, 10, &AtomicBool::new(false));
         assert_eq!(exact.hits.len(), 1);
         assert_eq!(
             exact.hits[0].kind,
             HitKind::Text { line: 3, excerpt: "Milk is white".into(), highlight: 0..4, range: 16..20 }
         );
-        let by_name = search_files(&roots, Query { text: "PLAN", options: MATCH_CASE }, 10);
+        let by_name = search_files(&roots, Query { text: "PLAN", options: MATCH_CASE }, 10, &AtomicBool::new(false));
         assert_eq!(
             by_name.hits,
             vec![FileHit {
@@ -524,11 +534,20 @@ mod tests {
     }
 
     #[test]
+    fn a_cancelled_search_stops_before_reading_files() {
+        let folder = TempFolder::new();
+        folder.write("milk.md", "milk\n");
+        folder.write("notes/b.md", "more milk\n");
+        let results = search_files(&[folder.path().to_path_buf()], plain("milk"), 10, &AtomicBool::new(true));
+        assert_eq!(results, SearchResults::default());
+    }
+
+    #[test]
     fn skips_the_text_of_encrypted_scratches() {
         let folder = TempFolder::new();
         // Real ones are rarely valid UTF-8; this one is, to show the check.
         folder.write("secret-milk.md", "RUBRIQUE-ENC1\nmilk");
-        let results = search_files(&[folder.path().to_path_buf()], plain("milk"), 10);
+        let results = search_files(&[folder.path().to_path_buf()], plain("milk"), 10, &AtomicBool::new(false));
         assert_eq!(results.hits.len(), 1);
         assert_eq!(results.hits[0].kind, HitKind::Name);
     }

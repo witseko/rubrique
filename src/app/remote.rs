@@ -1,6 +1,12 @@
-//! Remote folders in the app: the "Add remote folder" dialog, checking the
-//! open remote file for changes in the background, and downloading the
-//! images a remote note shows.
+//! Remote folders in the app: the "Add remote folder" dialog, saving remote
+//! files and checking the open one for changes in the background, and
+//! downloading the images a remote note shows.
+//!
+//! Saving a remote file runs in the background, so a slow or unreachable
+//! host does not freeze the window. One save per file at a time: a save asked
+//! for meanwhile runs after it, with the newest text. Closing a tab with
+//! "Save", and quitting, wait for the saves under way (see
+//! [`RubriqueApp::wait_for_remote_saves`]); drafts keep any later edits.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -10,15 +16,13 @@ use eframe::egui::{self, Context, Key, RichText};
 
 use super::{OpenFile, RubriqueApp};
 use crate::alert::{self, ButtonKind};
-use crate::document::text_file::DiskState;
-use crate::media::{MediaKind, image_uri, media_kind_of_url};
+use crate::document::text_file::{DiskState, Document};
+use crate::media::{MAX_IMAGE_BYTES, MediaKind, image_uri, media_kind_of_url};
 use crate::remote::task::{Task, spawn_with_repaint};
 use crate::remote::{self, ProgramCheck, commands};
 use crate::settings::view::SettingsGroup;
 use crate::vfs::{self, Stamp};
 
-/// Largest image downloaded for a remote note's preview.
-const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 /// Most images downloaded for one note.
 const MAX_IMAGES: usize = 60;
 /// Largest image or video opened from a remote folder.
@@ -37,8 +41,26 @@ pub(super) struct RemoteState {
     check: Option<(PathBuf, Task<io::Result<Option<Stamp>>>)>,
     /// Image downloads for remote notes; each gives the mirror paths it wrote.
     images: Vec<Task<Vec<PathBuf>>>,
+    /// Saves under way, at most one per file.
+    saves: Vec<RemoteSave>,
     /// The "Add remote folder" dialog, while it is open.
     dialog: Option<AddRemote>,
+}
+
+/// A remote file being saved in the background.
+#[derive(Debug)]
+struct RemoteSave {
+    /// The file being written.
+    path: PathBuf,
+    /// The [`Document::id`] the text was taken from.
+    document: u64,
+    /// The text being uploaded: the document is clean only if it still
+    /// holds exactly this.
+    text: String,
+    /// Another save was asked for meanwhile; it runs when this one is done.
+    again: bool,
+    /// The upload; gives the file's new stamp.
+    task: Task<io::Result<Option<Stamp>>>,
 }
 
 /// State of the "Add remote folder" dialog.
@@ -191,14 +213,119 @@ impl RubriqueApp {
         }
     }
 
-    /// Ask the host in the background whether the open file changed.
+    /// Ask the host in the background whether the open file changed. Not
+    /// while our own save of it is under way: the file is about to change.
     pub(super) fn start_remote_check(&mut self, path: &Path) {
-        if self.remote.check.is_some() {
+        if self.remote.check.is_some() || self.remote_save_running(path) {
             return;
         }
         let task_path = path.to_path_buf();
         let task = spawn_with_repaint(&self.repaint, move || vfs::current_stamp(&task_path));
         self.remote.check = Some((path.to_path_buf(), task));
+    }
+
+    /// True while a save of `path`, or of a file inside the folder `path`,
+    /// runs in the background.
+    pub(super) fn remote_save_running(&self, path: &Path) -> bool {
+        self.remote.saves.iter().any(|save| save.path.starts_with(path))
+    }
+
+    /// Save the open remote document in the background. While a save of
+    /// the same file runs, this one waits for it (so two uploads never mix)
+    /// and then saves the text as it is by then.
+    pub(super) fn start_remote_save(&mut self) {
+        let OpenFile::Text { document, .. } = &self.open_file else {
+            return;
+        };
+        let name = remote::display(&document.path);
+        if let Some(running) = self.remote.saves.iter_mut().find(|save| save.path == document.path) {
+            running.again = true;
+            self.show_status(format!("Saving {name}\u{2026}"));
+            return;
+        }
+        // A change check running now could see our own upload as an
+        // outside change; drop it (its thread ends on its own).
+        if self.remote.check.as_ref().is_some_and(|(path, _)| *path == document.path) {
+            self.remote.check = None;
+        }
+        let save = spawn_save(&self.repaint, document);
+        self.remote.saves.push(save);
+        self.show_status(format!("Saving {name}\u{2026}"));
+    }
+
+    /// Each frame (also behind the PIN screen): pick up finished saves.
+    pub(super) fn poll_remote_saves(&mut self) {
+        let mut index = 0;
+        while index < self.remote.saves.len() {
+            match self.remote.saves[index].task.take() {
+                Some(result) => {
+                    let save = self.remote.saves.remove(index);
+                    self.finish_remote_save(&save, result);
+                }
+                None => index += 1,
+            }
+        }
+    }
+
+    /// Wait for the background saves of `path` (of every file with `None`)
+    /// and note their results, without starting the saves asked for
+    /// meanwhile. The window freezes while it waits, up to the upload
+    /// timeout; that is the rule for closing a tab with "Save" (which then
+    /// saves the newest text itself) and for quitting (where drafts keep
+    /// edits made after the upload started), so no upload is cut off and
+    /// no two uploads of one file mix.
+    pub(super) fn wait_for_remote_saves(&mut self, path: Option<&Path>) {
+        let (waiting, others): (Vec<RemoteSave>, Vec<RemoteSave>) = std::mem::take(&mut self.remote.saves)
+            .into_iter()
+            .partition(|save| path.is_none_or(|path| save.path == path));
+        self.remote.saves = others;
+        for mut save in waiting {
+            save.again = false;
+            let result = save.task.wait().unwrap_or_else(|| Err(io::Error::other("the save stopped unexpectedly")));
+            self.finish_remote_save(&save, result);
+        }
+    }
+
+    /// Note how a background save went: the document it was taken from is
+    /// clean if it still holds the uploaded text, and a save asked for
+    /// meanwhile starts now. A failed save leaves the document dirty.
+    fn finish_remote_save(&mut self, save: &RemoteSave, result: io::Result<Option<Stamp>>) {
+        let name = remote::display(&save.path);
+        match result {
+            Ok(stamp) => {
+                // Not found when its tab was closed (the edits went to a
+                // draft or were discarded) or its scratch was locked.
+                if let Some(OpenFile::Text { document, disk_notice, .. }) =
+                    self.all_tabs_mut().find(|file| is_document(file, save.document))
+                {
+                    document.mark_saved(save.text.clone(), stamp);
+                    *disk_notice = None;
+                }
+                self.show_status(format!("Saved {name}"));
+            }
+            Err(error) => self.show_status(format!("Save failed: {error}")),
+        }
+        if save.again {
+            self.save_again(save);
+        }
+    }
+
+    /// Start the save that was asked for while `finished` ran: of the same
+    /// document if it is still open, otherwise of whatever tab now shows
+    /// that file.
+    fn save_again(&mut self, finished: &RemoteSave) {
+        let files = || std::iter::once(&self.open_file).chain(self.tabs.iter());
+        let same_path =
+            |file: &&OpenFile| matches!(file, OpenFile::Text { document, .. } if document.path == finished.path);
+        let target = files().find(|file| is_document(file, finished.document)).or_else(|| files().find(same_path));
+        let Some(OpenFile::Text { document, .. }) = target else {
+            return;
+        };
+        if !document.is_dirty() || !remote::is_mirror(&document.path) {
+            return;
+        }
+        let save = spawn_save(&self.repaint, document);
+        self.remote.saves.push(save);
     }
 
     /// Download the images a remote note links to, so its preview shows them.
@@ -523,6 +650,20 @@ fn add_label(folder: &str) -> String {
     if folder.is_empty() { "Add".to_string() } else { format!("Add {folder}") }
 }
 
+/// Start uploading `document`'s text to its host.
+fn spawn_save(ctx: &Context, document: &Document) -> RemoteSave {
+    let path = document.path.clone();
+    let bytes = document.stored_bytes();
+    let task_path = path.clone();
+    let task = spawn_with_repaint(ctx, move || vfs::save(&task_path, &bytes));
+    RemoteSave { path, document: document.id(), text: document.text.clone(), again: false, task }
+}
+
+/// True when `file` is the open document with [`Document::id`] `id`.
+fn is_document(file: &OpenFile, id: u64) -> bool {
+    matches!(file, OpenFile::Text { document, .. } if document.id() == id)
+}
+
 /// Fetch images from their hosts into the mirror. Returns the mirror paths
 /// that were written. Images that cannot be read are skipped.
 fn download_images(paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -759,5 +900,214 @@ mod tests {
         // No answer from the host is no news, not "deleted".
         let unreachable = document.disk_state_from(Err(io::Error::other("timeout")));
         assert_eq!(unreachable, DiskState::Unchanged);
+    }
+
+    /// An app showing the remote file `notes/a.md` (holding `text`) of
+    /// `temp` through the fake ssh. Returns the app and the file's real path.
+    fn app_with_remote_file(temp: &TempFolder, text: &str) -> (RubriqueApp, PathBuf) {
+        let real = temp.write("notes/a.md", text);
+        let mirror = mirror_of("save-host", &real);
+        let settings = crate::settings::Settings::default();
+        let mut app = RubriqueApp::new(&Context::default(), settings, vec![temp.path().to_path_buf()], None);
+        // `new` reopens the drafts in this machine's config folder as tabs.
+        app.tabs.clear();
+        app.active_tab = 0;
+        app.open_file = OpenFile::Nothing;
+        // Never this machine's drafts: quitting syncs (and so deletes) them.
+        app.drafts = super::super::drafts::DraftState::in_folder(temp.path().join("drafts"));
+        app.open_in_tab(mirror);
+        (app, real)
+    }
+
+    /// Replace the active document's text, as typing would.
+    fn type_text(app: &mut RubriqueApp, text: &str) {
+        let OpenFile::Text { document, .. } = &mut app.open_file else {
+            panic!("no text file open");
+        };
+        document.text = text.to_string();
+        document.on_text_changed();
+    }
+
+    /// The active document, which must be a text file.
+    fn active_document(app: &RubriqueApp) -> &Document {
+        match &app.open_file {
+            OpenFile::Text { document, .. } => document,
+            _ => panic!("no text file open"),
+        }
+    }
+
+    /// Pick up finished saves, as frames do, until none runs (failing after
+    /// ten seconds).
+    fn finish_saves(app: &mut RubriqueApp) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            app.poll_remote_saves();
+            if app.remote.saves.is_empty() {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "the save did not finish");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Run the change check of the open file to the end, as frames do.
+    fn finish_check(app: &mut RubriqueApp) {
+        let path = active_document(app).path.clone();
+        app.start_remote_check(&path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.remote.check.is_some() {
+            assert!(std::time::Instant::now() < deadline, "the check did not finish");
+            std::thread::yield_now();
+            app.poll_remote();
+        }
+    }
+
+    fn status(app: &RubriqueApp) -> &str {
+        app.status_message.as_ref().map_or("", |(message, _)| message.as_str())
+    }
+
+    fn disk_notice(app: &RubriqueApp) -> Option<&DiskState> {
+        match &app.open_file {
+            OpenFile::Text { disk_notice, .. } => disk_notice.as_ref(),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn edits_made_while_a_remote_save_runs_stay_dirty_for_the_next_save() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "one");
+        assert!(app.save());
+        assert!(app.remote_save_running(&active_document(&app).path));
+        type_text(&mut app, "one two");
+
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "one");
+        assert!(active_document(&app).is_dirty(), "the edit made during the upload is not saved yet");
+        assert_eq!(status(&app), format!("Saved {}", remote::display(&active_document(&app).path)));
+
+        app.save();
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "one two");
+        assert!(!active_document(&app).is_dirty());
+    }
+
+    #[test]
+    fn a_failed_remote_save_leaves_the_document_dirty_and_says_so() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        // The folder is gone on the host, so the upload cannot be written.
+        std::fs::remove_dir_all(real.parent().unwrap()).unwrap();
+        app.save();
+        finish_saves(&mut app);
+        assert!(active_document(&app).is_dirty());
+        assert!(status(&app).starts_with("Save failed: "), "{}", status(&app));
+    }
+
+    #[test]
+    fn a_save_asked_for_during_another_uploads_the_newest_text_after_it() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "first");
+        app.save();
+        type_text(&mut app, "second");
+        app.save();
+        assert_eq!(app.remote.saves.len(), 1, "one upload of a file at a time");
+
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "second");
+        assert!(!active_document(&app).is_dirty());
+    }
+
+    #[test]
+    fn our_own_remote_save_raises_no_changed_notice_but_outside_changes_do() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        app.save();
+        // No change check while our own upload runs.
+        let path = active_document(&app).path.clone();
+        app.start_remote_check(&path);
+        assert!(app.remote.check.is_none());
+        type_text(&mut app, "mine, more");
+        finish_saves(&mut app);
+
+        finish_check(&mut app);
+        assert_eq!(disk_notice(&app), None);
+        assert!(active_document(&app).is_dirty());
+
+        std::fs::write(&real, "theirs").unwrap();
+        finish_check(&mut app);
+        assert_eq!(disk_notice(&app), Some(&DiskState::Modified));
+    }
+
+    #[test]
+    fn closing_with_save_waits_for_the_upload_and_saves_the_newest_text() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "first");
+        app.save();
+        type_text(&mut app, "second");
+        // What "Save" in the unsaved-changes question runs before the tab closes.
+        assert!(app.save_now());
+        assert!(app.remote.saves.is_empty());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "second");
+        assert!(!active_document(&app).is_dirty());
+    }
+
+    #[test]
+    fn quitting_waits_for_remote_saves() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        app.save();
+        app.step(super::super::GuardedAction::Quit);
+        assert!(app.remote.saves.is_empty());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "mine");
+        assert!(!active_document(&app).is_dirty());
+    }
+
+    #[test]
+    fn a_save_lands_in_its_tab_after_switching_to_another() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        app.save();
+        app.open_in_tab(temp.write("local.md", "local"));
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "mine");
+        assert!(!app.tabs.iter().any(OpenFile::is_dirty), "the hidden remote tab is clean");
+        assert_eq!(active_document(&app).text, "local");
+    }
+
+    #[test]
+    fn a_file_being_saved_is_not_renamed() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        app.save();
+        let path = active_document(&app).path.clone();
+        assert!(app.finish_rename(&path, "b.md").is_err());
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "mine");
+    }
+
+    #[test]
+    fn a_save_whose_tab_closed_leaves_the_file_opened_again_alone() {
+        let temp = TempFolder::new();
+        let (mut app, real) = app_with_remote_file(&temp, "old");
+        type_text(&mut app, "mine");
+        app.save();
+        let path = active_document(&app).path.clone();
+        app.close_active_tab_now();
+        app.open_in_tab(path);
+        let reopened = active_document(&app).text.clone();
+
+        finish_saves(&mut app);
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "mine");
+        assert_eq!(active_document(&app).text, reopened);
+        assert!(!active_document(&app).is_dirty(), "the upload of the closed tab is not this buffer's");
     }
 }
