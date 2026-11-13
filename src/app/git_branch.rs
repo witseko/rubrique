@@ -168,7 +168,8 @@ impl RubriqueApp {
     }
 
     /// The branch button, or a spinner while git works. Nothing outside a
-    /// repository. Sits at the left of the status bar, before the path.
+    /// repository. Sits at the left of the status bar, before the path or a
+    /// status message.
     pub(super) fn branch_button(&mut self, ui: &mut Ui) {
         if let Some((label, _)) = &self.git.job {
             ui.add(egui::Spinner::new().size(12.0));
