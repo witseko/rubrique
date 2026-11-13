@@ -1,7 +1,9 @@
 # Builds installable packages for Linux and macOS on every push to main
 # (downloadable from the run's artifacts). When Cargo.toml holds a version that
 # has no rubrique-vX.Y.Z tag yet, or a rubrique-vX.Y.Z tag is pushed, it also creates that tag
-# and a GitHub release with the packages and the CHANGELOG notes.
+# and a GitHub release with the packages and the CHANGELOG notes. A version with
+# a pre-release suffix (1.1.0-rc.1) is published as a GitHub pre-release, which
+# never becomes the "latest" release.
 name: Release
 
 on:
@@ -27,6 +29,7 @@ jobs:
     outputs:
       version: ${{ steps.plan.outputs.version }}
       release: ${{ steps.plan.outputs.release }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,9 +52,15 @@ jobs:
           elif ! git rev-parse -q --verify "refs/tags/rubrique-v$version" > /dev/null; then
             release=true
           fi
-          echo "Version $version, release: $release"
+          # SemVer: a hyphen after X.Y.Z starts a pre-release suffix (-rc.1).
+          case "$version" in
+            *-*) prerelease=true ;;
+            *) prerelease=false ;;
+          esac
+          echo "Version $version, release: $release, pre-release: $prerelease"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux package
@@ -198,5 +207,9 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Rubrique ${{ needs.plan.outputs.version }}
           body_path: notes.md
+          # A release candidate stays off the "latest" spot, so download
+          # links to the latest release keep pointing at the stable version.
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.plan.outputs.prerelease == 'true' && 'false' || 'true' }}
           files: dist/*
           fail_on_unmatched_files: true

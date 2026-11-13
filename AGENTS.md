@@ -24,8 +24,17 @@ Branch names are words joined by `-` only (`table-cell-edit-preview`), no
 ## Releasing
 
 A release is a commit on `main` plus a tag; no release branch or pull
-request. Minor versions (0.x.0) are for new features, patch versions for
-fixes only.
+request. Versions follow [Semantic Versioning](https://semver.org): pick
+the bump from what the unreleased changelog entries hold.
+
+- **Major** (2.0.0): a user has to change something on their side, such
+  as a settings file that no longer loads without a migration, a removed
+  feature or keybinding, a dropped OS version, or files saved differently.
+- **Minor** (1.1.0): anything under Added, or a Changed entry that breaks
+  nothing.
+- **Patch** (1.0.1): Fixed entries only. One Added entry makes it a minor.
+
+Group fixes from the same day into one patch release where you can.
 
 1. In `CHANGELOG.md`, insert `## [X.Y.Z] - YYYY-MM-DD` under the
    `## [Unreleased]` heading (keep that heading, empty, above it), so the
@@ -48,6 +57,26 @@ section for that version. It runs on the tag push, and also on any push
 to `main` whose `Cargo.toml` version has no tag yet. If Actions did not
 run (for example the account's spending limit was reached), start it by
 hand from the Actions tab (`workflow_dispatch`) once that is fixed.
+
+### Release candidates
+
+Before a major or a large minor release, ship release candidates so
+testers get the build first: `1.1.0-rc.1`, `1.1.0-rc.2`, and so on. Keep
+the dot before the number (`rc.10` sorts after `rc.2`; `rc10` would not).
+
+- Follow the same four steps with the full version (`1.1.0-rc.1`) in the
+  changelog heading, `Cargo.toml`, the commit and the tag
+  (`rubrique-v1.1.0-rc.1`).
+- The workflow sees the hyphen and publishes a GitHub pre-release, which
+  never becomes the "latest" release. The macOS app reports `1.1.0` in
+  its bundle version (macOS accepts only numbers there); the file names
+  and the About screen keep the suffix.
+- After the first candidate, only fixes go in. Each fix ships as the next
+  candidate, with its own changelog section.
+- The stable release (`1.1.0`) is the last candidate with only the version
+  changed. Its changelog section lists everything since the previous
+  stable release: move the candidates' entries into it and remove their
+  sections, so the release notes are complete.
 
 Touch ID for encrypted scratches needs the signed app to embed a Developer
 ID provisioning profile for `io.github.witseko.rubrique` (the data
