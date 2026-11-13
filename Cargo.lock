@@ -2740,7 +2740,7 @@ dependencies = [
 
 [[package]]
 name = "rubrique"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "argon2",
  "chacha20poly1305",

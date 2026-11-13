@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-13
+
 ### Added
 
 - **Git in the status bar.** When the open file is in a git folder, its
