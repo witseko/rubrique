@@ -350,6 +350,7 @@ mod tests {
                 terminals_collapsed: true,
                 tab_position: layout::TabPosition::Explorer,
                 explorer_view: layout::ExplorerView::Tabs,
+                preview_mode: layout::PreviewMode::Edit,
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {

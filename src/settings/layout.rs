@@ -36,6 +36,31 @@ impl SideView {
     }
 }
 
+/// What a click does in the Markdown preview.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PreviewMode {
+    /// A click selects text or opens a link; nothing is edited.
+    #[default]
+    Read,
+    /// A click opens the block for editing in place.
+    Edit,
+}
+
+impl PreviewMode {
+    /// The word stored in the settings file.
+    fn id(self) -> &'static str {
+        match self {
+            PreviewMode::Read => "read",
+            PreviewMode::Edit => "edit",
+        }
+    }
+
+    /// Read a stored word; anything unknown is Read.
+    fn parse(value: &str) -> Self {
+        if value == PreviewMode::Edit.id() { PreviewMode::Edit } else { PreviewMode::Read }
+    }
+}
+
 /// Where the tabs are listed.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TabPosition {
@@ -115,6 +140,8 @@ pub struct LayoutSettings {
     pub tab_position: TabPosition,
     /// Files or Tabs, when the tabs are in the explorer.
     pub explorer_view: ExplorerView,
+    /// Read or Edit, for the Markdown preview of every file.
+    pub preview_mode: PreviewMode,
 }
 
 impl LayoutSettings {
@@ -127,6 +154,7 @@ impl LayoutSettings {
             "terminals_collapsed" => self.terminals_collapsed = value == "true",
             "tab_position" => self.tab_position = TabPosition::parse(value),
             "explorer_view" => self.explorer_view = ExplorerView::parse(value),
+            "preview" => self.preview_mode = PreviewMode::parse(value),
             _ => return false,
         }
         true
@@ -135,13 +163,14 @@ impl LayoutSettings {
     /// The `key=value` lines that [`LayoutSettings::parse_line`] reads.
     pub fn to_lines(self) -> String {
         format!(
-            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\ntab_position={}\nexplorer_view={}\n",
+            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\ntab_position={}\nexplorer_view={}\npreview={}\n",
             self.side_panel_open,
             self.side_view.id(),
             self.files_collapsed,
             self.terminals_collapsed,
             self.tab_position.id(),
-            self.explorer_view.id()
+            self.explorer_view.id(),
+            self.preview_mode.id()
         )
     }
 }
@@ -159,6 +188,7 @@ mod tests {
             terminals_collapsed: true,
             tab_position: TabPosition::Explorer,
             explorer_view: ExplorerView::Tabs,
+            preview_mode: PreviewMode::Edit,
         };
         let mut parsed = LayoutSettings::default();
         for line in layout.to_lines().lines() {
@@ -173,6 +203,13 @@ mod tests {
         let mut layout = LayoutSettings::default();
         layout.parse_line("side_view", "outline");
         assert_eq!(layout.side_view, SideView::Structure);
+    }
+
+    #[test]
+    fn unknown_preview_mode_falls_back_to_read() {
+        let mut layout = LayoutSettings { preview_mode: PreviewMode::Edit, ..LayoutSettings::default() };
+        layout.parse_line("preview", "write");
+        assert_eq!(layout.preview_mode, PreviewMode::Read);
     }
 
     #[test]

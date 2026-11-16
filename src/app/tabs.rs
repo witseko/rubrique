@@ -10,10 +10,11 @@ use std::path::{Path, PathBuf};
 use eframe::egui::{self, Color32, CornerRadius, Sense, Ui, pos2, vec2};
 
 use super::tab_groups::ChipClick;
-use super::{GuardedAction, OpenFile, RubriqueApp, side_panel};
+use super::{GuardedAction, OpenFile, PageMode, RubriqueApp, side_panel};
 use crate::document::preview_selection;
 use crate::document::view::{focus_editor, restore_editor_state, take_editor_state};
 use crate::explorer::paths::absolute_path_text;
+use crate::explorer::tree::is_markdown_path;
 use crate::explorer::view::{InlineRename, rename_field};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button};
 use crate::markdown::html::is_html_path;
@@ -310,13 +311,23 @@ impl RubriqueApp {
         }
     }
 
-    /// The Preview | Source switch of a Markdown or HTML file at the right
-    /// end of the tab strip, and for Markdown the side panel toggle after
-    /// it. Returns the part of `strip` left for the tabs.
+    /// The Read | Edit | Source switch of a Markdown file (Read | Source
+    /// for HTML, which is not edited in place) at the right end of the tab
+    /// strip, and for Markdown the side panel toggle after it. Returns the
+    /// part of `strip` left for the tabs.
     fn preview_controls(&mut self, ui: &mut Ui, strip: egui::Rect) -> egui::Rect {
         let has_toggle = self.can_show_side_panel();
-        let has_switch = has_toggle || self.open_file.path().is_some_and(is_html_path);
-        let switch_width = SWITCH_SEGMENT * 2.0 + SWITCH_INSET * 2.0;
+        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
+        let modes: &[PageMode] = if is_markdown {
+            &[PageMode::Read, PageMode::Edit, PageMode::Source]
+        } else if self.open_file.path().is_some_and(is_html_path) {
+            &[PageMode::Read, PageMode::Source]
+        } else {
+            &[]
+        };
+        let has_switch = !modes.is_empty();
+        #[expect(clippy::cast_precision_loss, reason = "two or three segments")]
+        let switch_width = SWITCH_SEGMENT * modes.len() as f32 + SWITCH_INSET * 2.0;
         let toggle_width = if has_toggle { side_panel::TOGGLE_WIDTH + SWITCH_MARGIN } else { 0.0 };
         let controls_width = switch_width + SWITCH_MARGIN * 2.0 + toggle_width;
         let tabs_rect = if has_switch { strip.with_max_x(strip.right() - controls_width) } else { strip };
@@ -332,12 +343,12 @@ impl RubriqueApp {
                 pos2(strip.right() - toggle_width - SWITCH_MARGIN - switch_width / 2.0, strip.center().y),
                 vec2(switch_width, SWITCH_HEIGHT),
             );
-            let showing = self.showing_any_preview();
-            if let Some(preview) = preview_switch(ui, switch, showing)
-                && preview != showing
+            let current = self.page_mode();
+            if let Some(mode) = mode_switch(ui, switch, modes, current)
+                && mode != current
             {
-                self.toggle_preview();
-                if !self.showing_any_preview() {
+                self.set_page_mode(mode);
+                if mode == PageMode::Source {
                     focus_editor(ui.ctx());
                 }
             }
@@ -538,23 +549,29 @@ fn drop_target(spans: &[(usize, f32, f32)], x: f32) -> Option<usize> {
     spans.iter().find(|(_, left, right)| (*left..=*right).contains(&x)).map_or(Some(last.0), |span| Some(span.0))
 }
 
-/// The Preview | Source switch: two icon halves (the eye, the code
-/// brackets), the current mode filled like the page. The names and the
-/// shortcut are in the hover tips. Returns the mode that was clicked.
-fn preview_switch(ui: &mut Ui, rect: egui::Rect, preview: bool) -> Option<bool> {
+/// The page mode switch: one icon segment per mode in `modes` (the eye,
+/// the pencil, the code brackets), the current mode filled like the page.
+/// The names and the shortcuts are in the hover tips. Returns the mode that
+/// was clicked.
+fn mode_switch(ui: &mut Ui, rect: egui::Rect, modes: &[PageMode], current: PageMode) -> Option<PageMode> {
     let visuals = ui.visuals().clone();
     let frame_fill = visuals.widgets.inactive.weak_bg_fill;
     ui.painter().rect_filled(rect, SWITCH_RADIUS, frame_fill);
     let mut clicked = None;
-    let halves = [(true, "Preview", Icon::Eye, 0.0), (false, "Source", Icon::Code, SWITCH_SEGMENT)];
-    for (mode, label, icon, offset) in halves {
-        let left = rect.left() + SWITCH_INSET + offset;
-        let half = egui::Rect::from_min_size(
+    let mut left = rect.left() + SWITCH_INSET;
+    for &mode in modes {
+        let (label, icon, tip) = match mode {
+            PageMode::Read => ("Read", Icon::Eye, "Read the preview (Cmd+E)"),
+            PageMode::Edit => ("Edit", Icon::Pencil, "Edit blocks in the preview (Cmd+Shift+E)"),
+            PageMode::Source => ("Source", Icon::Code, "Show the source (Cmd+E)"),
+        };
+        let segment = egui::Rect::from_min_size(
             pos2(left, rect.top() + SWITCH_INSET),
             vec2(SWITCH_SEGMENT, rect.height() - SWITCH_INSET * 2.0),
         );
-        let response = ui.interact(half, ui.scope_id().with(("preview-switch", label)), Sense::click());
-        let selected = mode == preview;
+        left += SWITCH_SEGMENT;
+        let response = ui.interact(segment, ui.scope_id().with(("page-mode-switch", label)), Sense::click());
+        let selected = mode == current;
         let fill = if selected {
             page_fill(&visuals)
         } else if response.hovered() {
@@ -562,11 +579,10 @@ fn preview_switch(ui: &mut Ui, rect: egui::Rect, preview: bool) -> Option<bool> 
         } else {
             frame_fill
         };
-        ui.painter().rect_filled(half, SWITCH_HALF_RADIUS, fill);
+        ui.painter().rect_filled(segment, SWITCH_HALF_RADIUS, fill);
         let color = if selected { visuals.strong_text_color() } else { visuals.weak_text_color() };
         let accent = if selected { visuals.hyperlink_color } else { color };
-        paint_icon(ui.painter(), icon, half.center(), color, accent, fill);
-        let tip = if mode { "Show the preview (Cmd+E)" } else { "Show the source (Cmd+E)" };
+        paint_icon(ui.painter(), icon, segment.center(), color, accent, fill);
         let response = response.on_hover_text(tip);
         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, selected, label));
         if response.clicked() {

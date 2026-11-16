@@ -92,6 +92,9 @@ pub enum Icon {
     /// A git branch (the status bar's branch button): a trunk with two
     /// commits and a side branch; the side branch is the accent.
     Branch,
+    /// Edit the preview in place (the middle of the Read | Edit | Source
+    /// switch): a slanted pencil whose tip is the accent.
+    Pencil,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -215,6 +218,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Files => paint_files(painter, center, line, detail),
         Icon::TabList => paint_tab_list(painter, center, line, detail),
         Icon::Branch => paint_branch(painter, center, line, detail),
+        Icon::Pencil => paint_pencil(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -504,6 +508,21 @@ fn paint_highlighter(painter: &Painter, center: Pos2, line: Stroke, detail: Stro
     let chisel = [collar + half_width, nib + across * 0.7, nib - across * 0.7, collar - half_width];
     stroke_path(painter, &chisel, false, line);
     stroke_path(painter, &[at(-6.5, 6.5), at(1.5, 6.5)], false, detail);
+}
+
+/// A pencil slanted up to the right: the body as an outline, the tip at
+/// the bottom left in the accent.
+fn paint_pencil(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let along = vec2(1.0, -1.0).normalized();
+    let across = vec2(1.0, 1.0).normalized();
+    let point = at(-6.0, 6.0);
+    let collar = point + along * 4.0;
+    let back = point + along * 15.5;
+    let half_width = across * 2.2;
+    let body = [collar + half_width, back + half_width, back - half_width, collar - half_width];
+    stroke_path(painter, &round_corners(&body, 1.0, true), true, line);
+    stroke_path(painter, &[collar + half_width, point, collar - half_width], false, detail);
 }
 
 /// A table as a box split in two (rows, or columns for the column icons),
