@@ -1,6 +1,6 @@
 //! "Import from Sublime Text" (File menu, Settings → Files): copies every
-//! unsaved Sublime Text tab into a new scratch, so moving over loses none
-//! of the notes Sublime kept without saving them.
+//! unsaved Sublime Text tab into a new plain text (`.txt`) scratch, so
+//! moving over loses none of the notes Sublime kept without saving them.
 
 use super::RubriqueApp;
 use super::privacy::AfterPassword;

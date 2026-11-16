@@ -537,8 +537,8 @@ fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Op
     if ui
         .button("Import from Sublime Text")
         .on_hover_text(
-            "Copy every unsaved Sublime Text tab (new tabs and edited files) into a new scratch here. Texts \
-             already in a scratch are skipped, so it is safe to run again",
+            "Copy every unsaved Sublime Text tab (new tabs and edited files) into a new plain text scratch \
+             here. Texts already in a scratch are skipped, so it is safe to run again",
         )
         .clicked()
     {
