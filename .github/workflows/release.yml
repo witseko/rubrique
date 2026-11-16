@@ -2,7 +2,7 @@
 # (downloadable from the run's artifacts). When Cargo.toml holds a version that
 # has no rubrique-vX.Y.Z tag yet, or a rubrique-vX.Y.Z tag is pushed, it also creates that tag
 # and a GitHub release with the packages and the CHANGELOG notes, but only
-# after the same checks as ci.yml pass for that commit. A version with a
+# after CI and dependency checks pass for that commit. A version with a
 # pre-release suffix (1.1.0-rc.1) is published as a GitHub pre-release, which
 # never becomes the "latest" release.
 name: Release
@@ -74,6 +74,12 @@ jobs:
     needs: plan
     if: needs.plan.outputs.release == 'true'
     uses: ./.github/workflows/ci.yml
+
+  security:
+    name: Dependency checks
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    uses: ./.github/workflows/security.yml
 
   linux:
     name: Linux package
@@ -190,7 +196,7 @@ jobs:
     name: GitHub release
     # No always() or other status function here, so this job runs only when
     # every job it needs succeeded: failed or skipped checks skip it.
-    needs: [plan, checks, linux, macos]
+    needs: [plan, checks, security, linux, macos]
     if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10

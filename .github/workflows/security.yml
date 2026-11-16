@@ -1,7 +1,7 @@
 # Checks dependencies for known security problems (RustSec advisories),
 # licenses and sources with cargo-deny, and reviews the dependencies each
-# pull request changes. Runs on dependency changes, on pull requests, and
-# every Monday, because new advisories appear for old crates.
+# pull request changes. Runs on dependency changes, before publishing a
+# release, and every Monday, because new advisories appear for old crates.
 name: Security
 
 on:
@@ -15,6 +15,7 @@ on:
   schedule:
     - cron: "17 6 * * 1"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -45,7 +46,7 @@ jobs:
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny
-      - run: cargo deny check ${{ matrix.checks }}
+      - run: cargo deny --locked check ${{ matrix.checks }}
 
   # Looks only at what a pull request changes: fails when it adds or updates
   # a crate or a GitHub Action to a version with a known vulnerability in the
