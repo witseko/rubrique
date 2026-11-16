@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Read mode for the Markdown preview.** The Preview | Source switch is
+  now Read | Edit | Source. Read is the default: a click selects text or
+  opens a link instead of opening the block, so a note reads like a
+  document. Edit is the preview as it was, where a click edits the block.
+  Cmd+Shift+E (or View > Edit in preview) flips between them, and the
+  choice is kept for every file.
+
 ### Changed
 
 - **Import from Sublime Text saves plain text.** Imported tabs become

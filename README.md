@@ -35,7 +35,9 @@ Agents run only when you ask, read-only by default.
 
 **Writing**
 
-- Live preview: click a block to edit it. In a table, click a cell to edit
+- Live preview in three modes, switched at the end of the tab bar: Read
+  (the default: select text and follow links), Edit (click a block to
+  edit it) and Source. In Edit, click a table cell to edit
   just that cell; buttons under it add or remove rows and columns.
   HTML in a Markdown file shows as GitHub shows it in a README (centered
   logos, badges, `<details>`, `<kbd>` and the like). HTML files get a
@@ -88,6 +90,7 @@ Settings → Accessibility.
 | Cmd+K | Ask an agent |
 | Cmd+F | Find |
 | Cmd+E | Preview / source |
+| Cmd+Shift+E | Read / edit the preview |
 | Cmd+N | New scratch file |
 | Cmd+Shift+M | Add a note |
 

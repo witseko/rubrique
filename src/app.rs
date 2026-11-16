@@ -73,7 +73,7 @@ use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
-use crate::settings::layout::{ExplorerView, TabPosition};
+use crate::settings::layout::{ExplorerView, PreviewMode, TabPosition};
 use crate::settings::view::{
     AiInfo, AppearanceInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
@@ -125,6 +125,9 @@ const STATUS_SEPARATOR_HEIGHT: f32 = 16.0;
 
 const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const TOGGLE_PREVIEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
+/// Switch the Markdown preview between Read and Edit.
+const TOGGLE_PREVIEW_EDITING: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::E);
 const TOGGLE_HIGHLIGHTS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::H);
 const ADD_NOTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 const FORMAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
@@ -252,6 +255,18 @@ impl OpenFile {
             _ => false,
         }
     }
+}
+
+/// How a Markdown or HTML file is shown: the three segments of the switch
+/// at the end of the tab strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageMode {
+    /// The preview as a document: clicks select text and open links.
+    Read,
+    /// The preview where a click opens a block for editing (Markdown only).
+    Edit,
+    /// The raw text in the editor.
+    Source,
 }
 
 /// An action that closes files, so it may need the "unsaved changes"
@@ -714,8 +729,47 @@ impl RubriqueApp {
         }
     }
 
-    /// True when the right panel shows the Markdown preview, where blocks
-    /// are edited in place.
+    /// Switch the Markdown preview between Read and Edit (an app-wide
+    /// choice). From the source of a Markdown file this also shows the
+    /// preview, so the shortcut always lands on the mode it names.
+    fn toggle_preview_editing(&mut self) {
+        self.finish_block_edit();
+        let layout = &mut self.settings.layout;
+        layout.preview_mode =
+            if layout.preview_mode == PreviewMode::Edit { PreviewMode::Read } else { PreviewMode::Edit };
+        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
+        if is_markdown && let OpenFile::Text { source, .. } = &mut self.open_file {
+            *source = false;
+        }
+    }
+
+    /// Show the open file in `mode`: Read or Edit set the app-wide preview
+    /// mode and show the preview, Source shows the editor.
+    fn set_page_mode(&mut self, mode: PageMode) {
+        self.finish_block_edit();
+        let has_preview = self.open_file.path().is_some_and(|path| is_markdown_path(path) || is_html_path(path));
+        match mode {
+            PageMode::Read => self.settings.layout.preview_mode = PreviewMode::Read,
+            PageMode::Edit => self.settings.layout.preview_mode = PreviewMode::Edit,
+            PageMode::Source => {}
+        }
+        if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
+            *source = mode == PageMode::Source;
+        }
+    }
+
+    /// How the open file is shown, for the Read | Edit | Source switch.
+    fn page_mode(&self) -> PageMode {
+        if !self.showing_any_preview() {
+            PageMode::Source
+        } else if self.showing_preview() && self.settings.layout.preview_mode == PreviewMode::Edit {
+            PageMode::Edit
+        } else {
+            PageMode::Read
+        }
+    }
+
+    /// True when the right panel shows the Markdown preview (Read or Edit).
     fn showing_preview(&self) -> bool {
         matches!(self.open_file, OpenFile::Text { source: false, .. })
             && self.open_file.path().is_some_and(is_markdown_path)
@@ -912,6 +966,10 @@ impl RubriqueApp {
         }
         if ctx.input_mut(|input| input.consume_shortcut(&SAVE)) {
             self.save();
+        }
+        // Shift first: egui lets Cmd+Shift+E also match Cmd+E.
+        if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_PREVIEW_EDITING)) {
+            self.toggle_preview_editing();
         }
         if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_PREVIEW)) {
             self.toggle_preview();
@@ -1866,6 +1924,7 @@ impl RubriqueApp {
                         ui,
                         &document.path,
                         blocks,
+                        self.settings.layout.preview_mode == PreviewMode::Edit,
                         self.block_edit.as_mut(),
                         &mentions,
                         &self.block_changes.list,
