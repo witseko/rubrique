@@ -52,7 +52,7 @@ Agents run only when you ask, read-only by default.
   `Cmd+Shift+N` for a new encrypted one. Touch ID opens them on a Mac.
   Optional app PIN.
 - Coming from Sublime Text? File → Import from Sublime Text turns its
-  unsaved tabs into scratch files.
+  unsaved tabs into plain text scratch files.
 - Format JSON, SQL, XML (`Cmd+Shift+F`). Render and lint Helm charts.
 
 **Files**

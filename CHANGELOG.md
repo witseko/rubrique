@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Import from Sublime Text saves plain text.** Imported tabs become
+  `.txt` scratches instead of `.md`, so a note written in Sublime opens as
+  the text it was and is not read as Markdown. Running the import again
+  still skips texts that are already a scratch, `.md` or `.txt`.
+
 ## [1.1.0] - 2026-11-13
 
 ### Added
