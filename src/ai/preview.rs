@@ -135,7 +135,9 @@ pub fn has_system(command: &str) -> bool {
 }
 
 /// The template asks the tool not to change files: Claude's plan mode or
-/// Codex's read-only sandbox.
+/// Codex's read-only sandbox. Gemini's plan mode does not count: in a
+/// headless run Gemini may leave plan mode on its own and then approve
+/// every tool (its `exit_plan_mode` switches to YOLO when not interactive).
 pub fn is_read_only(command: &str) -> bool {
     let words = split_command(command);
     let flag = |name: &str, value: &str| {
@@ -234,6 +236,7 @@ mod tests {
         assert!(is_read_only(CLAUDE));
         assert!(is_read_only("codex exec --sandbox=read-only {prompt}"));
         assert!(!is_read_only("grok --prompt {prompt}"));
+        assert!(!is_read_only(AiTool::Gemini.default_command()));
         assert!(has_system(CLAUDE));
         assert!(!has_system("ollama run x {prompt}"));
         assert!(!has_system("{system} {prompt}"));

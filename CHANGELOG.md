@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Gemini CLI as an agent.** Settings → AI lists Google's `gemini` next
+  to Claude Code, Codex and Grok, with a one-click npm install. It runs in
+  plan mode, Gemini's read-only mode. Skills from `~/.gemini/skills` and
+  agents from `~/.gemini/agents` show up too, each with its own switch.
+  Gemini only runs in folders you trusted in Gemini.
+
 ### Fixed
 
 - **Inline code sits on the line.** `Code` in the Markdown preview now

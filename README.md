@@ -4,8 +4,8 @@ A fast editor, agentic on demand. [rubrique.dev](https://rubrique.dev)
 
 Write Markdown (or plain text, JSON, SQL, XML) in a small native editor.
 Press `Cmd/Ctrl+K` to hand the text to an agent, then accept or reject the
-change. Uses the agents already on your computer: Claude Code, Codex, Grok or
-a local model. No API keys. macOS and Linux.
+change. Uses the agents already on your computer: Claude Code, Codex, Gemini
+CLI, Grok or a local model. No API keys. macOS and Linux.
 
 <img src="docs/screenshots/ai.png" alt="Rubrique comparing Claude and Codex answers in the merge screen, with the Ask bar and a hover summary from a local model" width="880">
 
@@ -28,7 +28,7 @@ The macOS app is signed and notarized by Apple, so it opens without a warning.
 - **Ask** (`Cmd+K`): a request, or Shorter, Fix grammar, Table, Translate, Explain.
 - **Review**: every change opens in a merge screen. Nothing applies until you accept.
 - **Compare**: one request to two agents, keep the best of each.
-- **Named agents and skills**: type `@ai-` to pick one. Claude Code agents work too, and skills from Claude Code, Codex (`~/.agents/skills`) and Grok. See them all in Settings → Skills.
+- **Named agents and skills**: type `@ai-` to pick one. Claude Code and Gemini CLI agents work too, and skills from Claude Code, Codex (`~/.agents/skills`), Gemini CLI and Grok. See them all in Settings → Skills.
 - **Notes**: leave a note on a passage, let an agent resolve it.
 
 Agents run only when you ask, read-only by default.
@@ -135,7 +135,7 @@ installed; Settings → Terminals offers the install command.
 
 | Program | Used for |
 | --- | --- |
-| `claude`, `codex`, `grok` | Ask, Compare, Notes |
+| `claude`, `codex`, `gemini`, `grok` | Ask, Compare, Notes |
 | `ollama` | Local summaries, file names |
 | `whisper-cli` | Transcribing memos |
 | `helm` | Helm charts |

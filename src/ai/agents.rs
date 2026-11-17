@@ -185,6 +185,12 @@ pub fn claude_agents_folder() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| Path::new(&home).join(".claude/agents"))
 }
 
+/// Gemini CLI's own agents folder, `~/.gemini/agents`. Its `<name>.md`
+/// files have the same front matter (`name`, `description`, `model`).
+pub fn gemini_agents_folder() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| Path::new(&home).join(".gemini/agents"))
+}
+
 /// Agents whose mention starts with `typed` (with or without `@` and `ai-`),
 /// or whose name does. An empty `typed` matches every agent.
 pub fn matching<'a>(agents: &'a [Agent], typed: &str) -> Vec<&'a Agent> {
@@ -277,7 +283,7 @@ const EXAMPLE_AGENT: &str = "---
 name: Editor
 handle: editor
 description: Tightens prose. Keeps the meaning, the tone and the language.
-# tool: claude        (claude, codex, grok or local; default: the tool picked in Ask)
+# tool: claude        (claude, codex, gemini, grok or local; default: the tool picked in Ask)
 # model: opus         (passed as --model)
 # skills: action-items
 ---

@@ -48,6 +48,14 @@ const CODEX_FLAGS: [Flag; 2] = [
     },
 ];
 
+const GEMINI_FLAGS: [Flag; 2] = [
+    MODEL,
+    Flag {
+        label: "Approval",
+        kind: FlagKind::Choice { option: "--approval-mode", values: &["plan", "default", "auto_edit", "yolo"] },
+    },
+];
+
 const LOCAL_FLAGS: [Flag; 1] = [MODEL];
 
 /// The flags Rubrique knows for `tool`, in chip order. Grok has none yet.
@@ -55,6 +63,7 @@ pub fn known_flags(tool: AiTool) -> &'static [Flag] {
     match tool {
         AiTool::Claude => &CLAUDE_FLAGS,
         AiTool::Codex => &CODEX_FLAGS,
+        AiTool::Gemini => &GEMINI_FLAGS,
         AiTool::Local => &LOCAL_FLAGS,
         AiTool::Grok => &[],
     }
@@ -236,6 +245,12 @@ mod tests {
             with_value("claude -p {prompt}", AiTool::Claude, &mode, Some("plan")),
             "claude --permission-mode plan -p {prompt}"
         );
+        let approval = flag(AiTool::Gemini, "Approval");
+        assert_eq!(
+            with_value("gemini --prompt {prompt}", AiTool::Gemini, &approval, Some("plan")),
+            "gemini --approval-mode plan --prompt {prompt}"
+        );
+        assert_eq!(value(AiTool::Gemini.default_command(), AiTool::Gemini, &approval).as_deref(), Some("plan"));
         let sandbox = flag(AiTool::Codex, "Sandbox");
         assert_eq!(
             with_value("codex exec --color never {prompt}", AiTool::Codex, &sandbox, Some("read-only")),
@@ -263,6 +278,7 @@ mod tests {
     fn every_tool_lists_its_chips() {
         assert_eq!(known_flags(AiTool::Claude).len(), 2);
         assert_eq!(known_flags(AiTool::Codex).len(), 2);
+        assert_eq!(known_flags(AiTool::Gemini).len(), 2);
         assert_eq!(known_flags(AiTool::Local).len(), 1);
         assert_eq!(known_flags(AiTool::Grok), &[] as &[Flag]);
     }
