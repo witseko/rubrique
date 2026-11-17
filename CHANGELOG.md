@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Install with Cargo**: `cargo install rubrique` builds the editor from
+  crates.io. Every stable release is published there automatically.
+
 ## [1.3.0] - 2026-11-17
 
 ### Added
