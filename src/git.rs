@@ -180,6 +180,61 @@ pub fn switch(repo: &Path, target: &SwitchTarget) -> Result<String, String> {
     Ok(format!("Switched to {}.", target.branch_name()))
 }
 
+/// Address prefixes [`clone_url_problem`] accepts besides the short SSH form.
+const CLONE_SCHEMES: [&str; 4] = ["https://", "http://", "ssh://", "git://"];
+
+/// Why `url` cannot be cloned, or `None` when it looks like a repository
+/// address: `https://`, `http://`, `ssh://` or `git://`, or the short SSH
+/// form `git@github.com:owner/repo.git`.
+pub fn clone_url_problem(url: &str) -> Option<&'static str> {
+    if url.is_empty() {
+        return Some("Paste the address of a repository");
+    }
+    if url.starts_with('-') || url.chars().any(|character| character.is_whitespace() || character.is_control()) {
+        return Some("Not a repository address");
+    }
+    let has_scheme = CLONE_SCHEMES.iter().any(|scheme| url.starts_with(scheme));
+    // `user@host:path`: the colon comes before any slash, or git reads it
+    // as a local path.
+    let short_ssh = url.split_once(':').is_some_and(|(user_host, path)| {
+        user_host.split_once('@').is_some_and(|(user, host)| !user.is_empty() && !host.is_empty())
+            && !user_host.contains('/')
+            && !path.is_empty()
+    });
+    (!has_scheme && !short_ssh).then_some("Use an https:// address or an SSH one like git@github.com:owner/repo.git")
+}
+
+/// The folder name `git clone` would pick for `url`: its last part
+/// without `.git` (`repo` for `git@github.com:owner/repo.git`), or `None`
+/// when the address has no such part.
+pub fn repository_name(url: &str) -> Option<String> {
+    let trimmed = url.trim().trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next()?;
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    (!name.is_empty() && name != "." && name != "..").then(|| name.to_string())
+}
+
+/// Clone the repository at `url` into `destination`, a folder that must
+/// not exist yet. Returns the status message to show.
+///
+/// # Errors
+///
+/// A bad address, an existing destination, or `git`'s reason (no access,
+/// no network, no such repository). Git removes a half-made folder itself.
+pub fn clone_repository(url: &str, destination: &Path) -> Result<String, String> {
+    if let Some(problem) = clone_url_problem(url) {
+        return Err(problem.to_string());
+    }
+    if destination.exists() {
+        return Err(format!("{} already exists", destination.display()));
+    }
+    let parent = destination.parent().ok_or("Choose a folder to clone into")?;
+    let destination_text = destination.to_str().ok_or("The folder path is not valid text")?;
+    // `--` so neither argument is ever read as an option.
+    run_git(parent, &["clone", "--", url, destination_text])?;
+    Ok(format!("Cloned {url}."))
+}
+
 /// Pull the current branch, fast-forward only: a pull that would need a
 /// merge is refused instead of leaving conflicts in the files. Returns the
 /// status message to show.
@@ -424,6 +479,41 @@ mod tests {
         assert_eq!(commit_all(folder.path(), "Add new notes\n\nbody").unwrap(), "Committed: Add new notes");
         assert_eq!(read_status(folder.path()).unwrap().changed_files, 0);
         assert!(commit_all(folder.path(), "again").is_err());
+    }
+
+    #[test]
+    fn accepts_https_and_ssh_clone_addresses() {
+        for url in [
+            "https://github.com/owner/repo",
+            "https://github.com/owner/repo.git",
+            "http://example.com/repo.git",
+            "ssh://git@github.com/owner/repo.git",
+            "git@github.com:owner/repo.git",
+        ] {
+            assert_eq!(clone_url_problem(url), None, "{url}");
+        }
+        for url in ["", "--upload-pack=x", "github.com/owner/repo", "/local/repo", "git@github.com:", "a b"] {
+            assert!(clone_url_problem(url).is_some(), "{url}");
+        }
+    }
+
+    #[test]
+    fn names_the_folder_like_git_clone() {
+        assert_eq!(repository_name("git@github.com:owner/repo.git").as_deref(), Some("repo"));
+        assert_eq!(repository_name("https://github.com/owner/repo/").as_deref(), Some("repo"));
+        assert_eq!(repository_name("https://github.com/owner/repo.git").as_deref(), Some("repo"));
+        assert_eq!(repository_name("https://github.com/"), Some("github.com".to_string()));
+        assert_eq!(repository_name(""), None);
+    }
+
+    #[test]
+    fn clone_refuses_an_existing_folder_or_a_bad_address() {
+        let folder = TempFolder::new();
+        let taken = folder.path().join("taken");
+        std::fs::create_dir(&taken).unwrap();
+        assert!(clone_repository("https://github.com/owner/repo", &taken).unwrap_err().contains("already exists"));
+        assert!(clone_repository("-x", &folder.path().join("new")).is_err());
+        assert!(!folder.path().join("new").exists());
     }
 
     #[test]

@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Clone repository.** File > Clone repository (also in the explorer's
+  Add folder right-click menu) clones a git repository from an https
+  address or an SSH one like `git@github.com:owner/repo.git`. Choose the
+  folder to clone into and, if you like, another folder name; the clone
+  opens as a new explorer folder, and git's reason shows if it fails.
+
 ## [1.3.0] - 2026-11-17
 
 ### Added

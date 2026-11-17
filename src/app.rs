@@ -9,6 +9,7 @@ use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, RichText, Ui
 mod agent_history;
 mod ask;
 mod changes_panel;
+mod clone_repo;
 mod delegate;
 mod delete;
 mod drafts;
@@ -387,6 +388,8 @@ pub struct RubriqueApp {
     deleting: Option<PathBuf>,
     /// The "Open path" dialog, while it is open.
     open_path: Option<open_path::OpenPathDialog>,
+    /// The "Clone repository" dialog, while it is open.
+    clone_repo: Option<clone_repo::CloneDialog>,
     /// Watches the tmux sessions for the explorer; `None` when tmux is not installed.
     terminals: Option<TerminalMonitor>,
     /// The merge screen for the open file, while it is open.
@@ -499,6 +502,7 @@ impl RubriqueApp {
             scroll_to_revealed: false,
             deleting: None,
             open_path: None,
+            clone_repo: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
             merging: None,
             last_disk_check: 0.0,
@@ -964,6 +968,7 @@ impl RubriqueApp {
             && self.tab_rename.is_none()
             && self.deleting.is_none()
             && self.open_path.is_none()
+            && self.clone_repo.is_none()
             && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.settings_open = false;
@@ -1846,6 +1851,7 @@ impl RubriqueApp {
             }
             Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
             Some(ExplorerAction::OpenPath) => self.start_open_path(),
+            Some(ExplorerAction::CloneRepository) => self.start_clone_repo(),
             Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
             Some(ExplorerAction::NewScratch { encrypted }) => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
@@ -3139,6 +3145,7 @@ impl eframe::App for RubriqueApp {
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
         self.open_path_dialog(&ctx);
+        self.clone_repo_dialog(&ctx);
         self.add_remote_dialog(&ctx);
         self.secret_dialog(&ctx);
         self.update_title(&ctx);
