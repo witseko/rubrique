@@ -8,6 +8,16 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **reStructuredText preview.** `.rst` files open in a read-only preview,
+  like HTML files, with a Read | Source switch: section titles, inline
+  markup and roles, links and footnotes, bullet, numbered, field and
+  definition lists, simple, grid, list and CSV tables, code and literal
+  blocks, and admonitions such as `.. note::` and `.. warning::` as
+  quotes under their name. Images and figures show, comments and
+  targets stay hidden, and Open in browser works for them too.
+
 ## [1.3.0] - 2026-11-17
 
 ### Added
