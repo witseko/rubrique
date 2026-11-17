@@ -47,6 +47,9 @@ Agents run only when you ask, read-only by default.
   preview to draw them with Chrome, Chromium, Edge or Brave instead (or
   Google's headless Chrome, installed in one click): the full layout,
   style sheets and web fonts, with scripts off.
+- reStructuredText (`.rst`) files get a read-only preview as well:
+  section titles, lists, simple and grid tables, links and footnotes,
+  code blocks, admonitions such as `.. note::`, images and figures.
 - YAML front matter shows as a card at the top of the preview, and a
   click on a link to another `.md` file opens it in a tab. Folders in the
   [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)

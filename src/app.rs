@@ -53,7 +53,7 @@ use crate::document::text_file::{DiskState, Document, Opened, Unsupported};
 use crate::document::text_stats::TextStats;
 use crate::document::view::{
     BlockEdit, EditorState, PreviewEvent, apply_with_undo, editor_selection, focus_editor, handle_editor_shortcuts,
-    set_editor_cursor, show_editor, show_preview, step_editor_history,
+    set_editor_cursor, show_editor, show_preview, show_read_only_preview, step_editor_history,
 };
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
@@ -72,6 +72,7 @@ use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, r
 use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
+use crate::rst::{is_rst_path, parse_rst, rst_source_blocks};
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
 use crate::settings::layout::{ExplorerView, PreviewMode, TabPosition};
@@ -727,11 +728,11 @@ impl RubriqueApp {
         ctx.copy_text(text);
     }
 
-    /// Switch a Markdown or HTML file between editor and preview (no-op for
-    /// other files).
+    /// Switch a Markdown, HTML or reStructuredText file between editor and
+    /// preview (no-op for other files).
     fn toggle_preview(&mut self) {
         self.finish_block_edit();
-        let has_preview = self.open_file.path().is_some_and(|path| is_markdown_path(path) || is_html_path(path));
+        let has_preview = self.open_file.path().is_some_and(has_preview);
         if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = !*source;
         }
@@ -755,7 +756,7 @@ impl RubriqueApp {
     /// mode and show the preview, Source shows the editor.
     fn set_page_mode(&mut self, mode: PageMode) {
         self.finish_block_edit();
-        let has_preview = self.open_file.path().is_some_and(|path| is_markdown_path(path) || is_html_path(path));
+        let has_preview = self.open_file.path().is_some_and(has_preview);
         match mode {
             PageMode::Read => self.settings.layout.preview_mode = PreviewMode::Read,
             PageMode::Edit => self.settings.layout.preview_mode = PreviewMode::Edit,
@@ -789,9 +790,15 @@ impl RubriqueApp {
             && self.open_file.path().is_some_and(is_html_path)
     }
 
-    /// True when the right panel shows either preview instead of the editor.
+    /// True when the right panel shows the read-only preview of a
+    /// reStructuredText file.
+    fn showing_rst_preview(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { source: false, .. }) && self.open_file.path().is_some_and(is_rst_path)
+    }
+
+    /// True when the right panel shows any preview instead of the editor.
     fn showing_any_preview(&self) -> bool {
-        self.showing_preview() || self.showing_html_preview()
+        self.showing_preview() || self.showing_html_preview() || self.showing_rst_preview()
     }
 
     /// When the window regains focus, look for changes made by other programs.
@@ -1411,8 +1418,11 @@ impl RubriqueApp {
             html_page(&name_text(&path), &parse_blocks(&document.text), &palette, Some(&folder))
         } else if is_html_path(&path) {
             with_base(&document.text, &folder)
+        } else if is_rst_path(&path) {
+            let palette = self.current_palette(ctx);
+            html_page(&name_text(&path), &parse_rst(&document.text), &palette, Some(&folder))
         } else {
-            self.show_status("Open in browser works for Markdown and HTML files".to_string());
+            self.show_status("Open in browser works for Markdown, HTML and reStructuredText files".to_string());
             return;
         };
         match write_browser_copy(&path, &page) {
@@ -1917,7 +1927,7 @@ impl RubriqueApp {
                 media_event = show_video(ui, path, *bytes);
             }
             OpenFile::Unsupported { path, reason } => unsupported_notice(ui, path, reason),
-            OpenFile::Text { document, preview, disk_notice, .. } => {
+            OpenFile::Text { document, preview, disk_notice, source, .. } => {
                 if let Some(session) = &mut self.merging {
                     merge_action = show_merge(ui, session, &name_text(&document.path));
                 } else if let Some(state) = disk_notice {
@@ -1949,6 +1959,8 @@ impl RubriqueApp {
                 } else if showing_html_preview {
                     let use_browser = self.settings.html_browser_preview;
                     preview_event = self.html_snapshots.show_preview(ui, document, preview, use_browser);
+                } else if !*source && is_rst_path(&document.path) {
+                    preview_event = show_rst_preview(ui, document, preview);
                 } else {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
@@ -2605,13 +2617,12 @@ impl RubriqueApp {
         let path_text = format!("{dirty}{}", crate::remote::display(path));
         let is_text = matches!(self.open_file, OpenFile::Text { .. });
         let showing_preview = self.showing_any_preview();
-        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
-        let is_html = self.open_file.path().is_some_and(is_html_path);
+        let is_page = self.open_file.path().is_some_and(has_preview);
         // Right side first, so a long path is shortened instead of overlapping it.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.media_status(ui);
             if is_text {
-                self.text_file_buttons(ui, is_markdown || is_html, showing_preview);
+                self.text_file_buttons(ui, is_page, showing_preview);
             }
             let left = egui::Layout::left_to_right(egui::Align::Center);
             ui.allocate_ui_with_layout(ui.available_size(), left, |ui| {
@@ -2749,6 +2760,17 @@ impl RubriqueApp {
 /// file is empty or already ends with one, and a line break after it. Empty
 /// input gives an empty string, so nothing is added.
 /// The hint under the notes: how to add one and what Resolve does.
+/// True for a file with a preview: Markdown, HTML and reStructuredText.
+fn has_preview(path: &Path) -> bool {
+    is_markdown_path(path) || is_html_path(path) || is_rst_path(path)
+}
+
+/// The read-only preview of a reStructuredText file, parsed once per change.
+fn show_rst_preview(ui: &mut Ui, document: &Document, preview: &mut Option<Vec<SourceBlock>>) -> Option<PreviewEvent> {
+    let blocks = preview.get_or_insert_with(|| rst_source_blocks(&document.text));
+    show_read_only_preview(ui, &document.path, blocks)
+}
+
 /// A hairline between two groups of buttons in the status bar.
 fn status_separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, STATUS_SEPARATOR_HEIGHT), egui::Sense::hover());

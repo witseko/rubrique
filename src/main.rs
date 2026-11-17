@@ -20,6 +20,7 @@ mod markdown;
 mod media;
 mod open_documents;
 mod remote;
+mod rst;
 mod scratch;
 mod settings;
 mod shell_path;
