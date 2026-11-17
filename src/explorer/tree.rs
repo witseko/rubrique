@@ -14,6 +14,11 @@ const MARKDOWN_EXTENSIONS: [&str; 5] = ["md", "markdown", "mdown", "mkd", "mdx"]
 /// Extension-less file names that are usually Markdown.
 const MARKDOWN_BARE_NAMES: [&str; 4] = ["README", "CHANGELOG", "LICENSE", "CONTRIBUTING"];
 
+/// Most folders one "Expand all" reads from disk. A big tree (a
+/// `node_modules`) would freeze the window while every folder is listed;
+/// the folders past the limit stay folded.
+const EXPAND_ALL_READ_LIMIT: usize = 500;
+
 /// True when a file should get the Markdown preview and pass the
 /// "Markdown only" filter.
 pub fn is_markdown_path(path: &Path) -> bool {
@@ -169,6 +174,52 @@ impl FsNode {
             return false;
         };
         children.iter_mut().any(|child| child.open_folder(folder))
+    }
+
+    /// Fold this folder and every folder inside it. Their entries stay
+    /// loaded, so opening them again reads nothing.
+    pub fn collapse_all(&mut self) {
+        self.expanded = false;
+        if let Children::Loaded(children) = &mut self.children {
+            children.iter_mut().for_each(FsNode::collapse_all);
+        }
+    }
+
+    /// Open this folder and every folder inside it, reading local folders
+    /// from disk on the way, at most [`EXPAND_ALL_READ_LIMIT`] of them.
+    /// Remote folders open only as far as they are already listed, since
+    /// each listing is a trip to the host.
+    pub fn expand_all(&mut self) {
+        let mut reads_left = EXPAND_ALL_READ_LIMIT;
+        self.expand_within(&mut reads_left);
+    }
+
+    /// Open this folder and every folder inside it that was listed before;
+    /// nothing is read from disk.
+    pub fn expand_loaded(&mut self) {
+        self.expand_within(&mut 0);
+    }
+
+    /// Open this folder and the folders inside it, reading at most
+    /// `reads_left` unread local folders (counted down). A folder that is
+    /// not read stays folded.
+    fn expand_within(&mut self, reads_left: &mut usize) {
+        if self.kind != NodeKind::Folder {
+            return;
+        }
+        if matches!(self.children, Children::NotLoaded) {
+            if *reads_left == 0 || crate::remote::is_mirror(&self.path) {
+                return;
+            }
+            *reads_left -= 1;
+            self.load_children();
+        }
+        self.expanded = true;
+        if let Children::Loaded(children) = &mut self.children {
+            for child in children {
+                child.expand_within(reads_left);
+            }
+        }
     }
 
     /// Re-read every loaded folder, keeping which folders are expanded.
@@ -428,6 +479,72 @@ mod tests {
         let docs = &loaded(&root)[0];
         assert!(docs.expanded);
         assert_eq!(names(loaded(docs)), ["one.md", "two.md"]);
+    }
+
+    #[test]
+    fn expand_all_opens_every_folder_inside_and_collapse_all_folds_them() {
+        let temp = TempFolder::new();
+        temp.write("a/b/c/deep.md", "");
+        temp.write("z/inner.md", "");
+        let mut root = FsNode::new_root(temp.path().to_path_buf());
+        root.expand_all();
+        let a = &loaded(&root)[0];
+        let b = &loaded(a)[0];
+        let c = &loaded(b)[0];
+        assert!(a.expanded && b.expanded && c.expanded);
+        assert_eq!(names(loaded(c)), ["deep.md"]);
+        assert!(loaded(&root)[1].expanded);
+
+        root.collapse_all();
+        assert!(!root.expanded);
+        let a = &loaded(&root)[0];
+        let c = &loaded(&loaded(a)[0])[0];
+        assert!(!a.expanded && !c.expanded, "every folder inside folds too");
+        assert_eq!(names(loaded(c)), ["deep.md"], "entries stay loaded");
+    }
+
+    #[test]
+    fn expand_loaded_reopens_only_folders_read_before() {
+        let temp = TempFolder::new();
+        temp.write("seen/one.md", "");
+        temp.write("unseen/two.md", "");
+        let mut root = FsNode::new_root(temp.path().to_path_buf());
+        if let Children::Loaded(children) = &mut root.children {
+            children[0].toggle_expanded(|| {});
+        }
+        root.collapse_all();
+        root.expand_loaded();
+        assert!(root.expanded);
+        assert!(loaded(&root)[0].expanded);
+        let unseen = &loaded(&root)[1];
+        assert!(!unseen.expanded);
+        assert!(matches!(unseen.children, Children::NotLoaded), "nothing new is read");
+    }
+
+    #[test]
+    fn expand_all_stops_reading_at_the_limit() {
+        let temp = TempFolder::new();
+        for index in 0..=EXPAND_ALL_READ_LIMIT {
+            temp.make_folder(&format!("folder{index:04}"));
+        }
+        let mut root = FsNode::new_root(temp.path().to_path_buf());
+        root.expand_all();
+        let children = loaded(&root);
+        assert!(children[..EXPAND_ALL_READ_LIMIT].iter().all(|folder| folder.expanded));
+        let last = &children[EXPAND_ALL_READ_LIMIT];
+        assert!(!last.expanded && matches!(last.children, Children::NotLoaded));
+    }
+
+    #[test]
+    fn expand_all_leaves_unlisted_remote_folders_folded() {
+        let temp = TempFolder::new();
+        temp.write("docs/inner.md", "");
+        let mirror = crate::remote::testing::mirror_of("tree-host", temp.path());
+        let mut root = FsNode::new_root(mirror);
+        root.expand_all();
+        let docs = &loaded(&root)[0];
+        assert!(!docs.expanded);
+        assert!(matches!(docs.children, Children::NotLoaded), "no trip to the host");
     }
 
     #[test]
