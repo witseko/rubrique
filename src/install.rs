@@ -1,6 +1,7 @@
 //! Install a missing tool with one click: the recipes for the programs
 //! Rubrique runs (whisper.cpp, Ollama, Claude Code, Codex, Gemini CLI, Grok,
-//! tmux) and the files they need (the whisper model, an Ollama model).
+//! tmux, a Chromium browser for the HTML preview) and the files they need
+//! (the whisper model, an Ollama model).
 //!
 //! A recipe has a one-click command only when it is a single, well-known
 //! package-manager command (`brew`, `npm`, `ollama`, or `curl` for a file)
@@ -29,6 +30,12 @@ const CODEX_PAGE: &str = "https://github.com/openai/codex#quickstart";
 const GEMINI_PAGE: &str = "https://github.com/google-gemini/gemini-cli#-installation";
 const GROK_PAGE: &str = "https://github.com/superagent-ai/grok-cli";
 const TMUX_PAGE: &str = "https://github.com/tmux/tmux/wiki/Installing";
+const CHROME_FOR_TESTING_PAGE: &str = "https://googlechromelabs.github.io/chrome-for-testing/";
+const CHROME_PAGE: &str = "https://www.google.com/chrome/";
+/// Puppeteer's browser installer: downloads Google's headless-only
+/// Chromium build, the newest stable one, into the folder after `--path`.
+const HEADLESS_SHELL_INSTALL: [&str; 5] =
+    ["--yes", "@puppeteer/browsers", "install", "chrome-headless-shell@stable", "--path"];
 /// Linux package managers and their tmux install command, in the order
 /// they are looked for. They need `sudo`, so the command is only copied.
 const LINUX_TMUX_COMMANDS: [(&str, &str); 4] = [
@@ -188,6 +195,30 @@ pub fn tmux_recipe(platform: Platform, find: &dyn Fn(&str) -> Option<PathBuf>) -
             .map(|(_, command)| (*command).to_string());
     }
     recipe
+}
+
+/// A Chromium browser for the HTML preview: Google's headless shell into
+/// `folder` with `npx` (one click when npx is there); else, on macOS,
+/// Google Chrome with Homebrew; else the npx command to copy.
+pub fn chromium_recipe(folder: &Path, platform: Platform, find: &dyn Fn(&str) -> Option<PathBuf>) -> Recipe {
+    let folder_text = folder.display().to_string();
+    let mut npx_args: Vec<&str> = HEADLESS_SHELL_INSTALL.to_vec();
+    npx_args.push(&folder_text);
+    let after = Some("The HTML preview draws with it now.");
+    if let Some(npx) = find("npx") {
+        let run = Some(InstallCommand::new(&npx, &npx_args));
+        return Recipe { run, after, page: Some(CHROME_FOR_TESTING_PAGE), ..Recipe::named("Chrome Headless Shell") };
+    }
+    if platform == Platform::Mac {
+        let mut recipe = Recipe { after, page: Some(CHROME_PAGE), ..Recipe::named("Google Chrome") };
+        match find("brew") {
+            Some(brew) => recipe.run = Some(InstallCommand::new(&brew, &["install", "--cask", "google-chrome"])),
+            None => recipe.copy = Some("brew install --cask google-chrome".to_string()),
+        }
+        return recipe;
+    }
+    let copy = Some(InstallCommand::new(Path::new("npx"), &npx_args).display());
+    Recipe { copy, after, page: Some(CHROME_FOR_TESTING_PAGE), ..Recipe::named("Chrome Headless Shell") }
 }
 
 /// Download the whisper model `url` to `model` with curl.
@@ -388,6 +419,32 @@ mod tests {
         assert_eq!((unknown.copy, unknown.page), (None, Some(TMUX_PAGE)));
         let mac = tmux_recipe(Platform::Mac, &with(&[]));
         assert_eq!(mac.copy.as_deref(), Some("brew install tmux"));
+    }
+
+    #[test]
+    fn chromium_comes_from_npx_or_homebrew() {
+        let folder = Path::new("/Users/a/Library/Application Support/rubrique/chromium");
+        let npx = chromium_recipe(folder, Platform::Mac, &with(&["npx", "brew"]));
+        assert_eq!(npx.name, "Chrome Headless Shell");
+        assert_eq!(
+            npx.shown_command().as_deref(),
+            Some(
+                "/bin/npx --yes @puppeteer/browsers install chrome-headless-shell@stable --path \
+                 '/Users/a/Library/Application Support/rubrique/chromium'"
+            )
+        );
+        assert_eq!(npx.provides, None);
+        let brew = chromium_recipe(folder, Platform::Mac, &with(&["brew"]));
+        assert_eq!(brew.shown_command().as_deref(), Some("/bin/brew install --cask google-chrome"));
+        let mac = chromium_recipe(folder, Platform::Mac, &with(&[]));
+        assert_eq!((mac.run, mac.copy.as_deref()), (None, Some("brew install --cask google-chrome")));
+        let linux = chromium_recipe(Path::new("/home/a/.config/rubrique/chromium"), Platform::Linux, &with(&[]));
+        assert_eq!(linux.run, None);
+        assert!(linux.copy.unwrap().starts_with("npx --yes @puppeteer/browsers install"));
+        assert_eq!(
+            installed_message(&npx, true),
+            "Installed Chrome Headless Shell. The HTML preview draws with it now."
+        );
     }
 
     #[test]

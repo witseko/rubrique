@@ -10,6 +10,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Chromium HTML preview.** Settings > Files > HTML preview draws `.html`
+  files with a real browser engine, so the preview shows the page as
+  Chrome would: CSS layout, gradients, shadows, web fonts and images.
+  Rubrique uses Chrome, Chromium, Edge or Brave when one is installed, and
+  otherwise offers to install Google's headless Chrome in one click, like
+  whisper.cpp and the AI tools. Scripts stay off; the picture redraws as
+  you edit and when the pane changes size. Off by default: the built-in
+  preview, which never loads anything, stays the default and the fallback.
 - **Open Knowledge Format bundles.** A Markdown file's YAML front matter
   shows as a card at the top of the preview instead of a stray heading:
   the title and description, then each field as a labeled row in plain

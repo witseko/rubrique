@@ -186,6 +186,7 @@ impl RubriqueApp {
         self.check_ai_tools();
         self.check_voice_tool();
         self.check_terminals();
+        self.check_html_browser();
         let progress = match result {
             Ok(()) => {
                 let found = recipe.provides.as_deref().is_none_or(|program| ai::find_on_path(program).is_some());

@@ -81,6 +81,8 @@ pub enum SettingsAction {
     VoiceCommandChanged,
     /// Look for tmux again (after installing it in a terminal).
     CheckTerminals,
+    /// The Chromium HTML preview was turned on or off, or asked to look again.
+    CheckHtmlBrowser,
     /// Put this text on the clipboard.
     Copy(String),
     /// A click in an install prompt.
@@ -168,6 +170,17 @@ pub struct PrivacyInfo<'a> {
     pub unlocked: bool,
     /// A fingerprint is enrolled, so Touch ID can be offered (macOS).
     pub touch_id_available: bool,
+}
+
+/// The Chromium HTML preview, for the Files section.
+#[derive(Debug)]
+pub struct HtmlPreviewInfo<'a> {
+    pub enabled: &'a mut bool,
+    /// The browser that draws, when one was found.
+    pub found: Option<&'a Path>,
+    /// How to install one, when none was found.
+    pub recipe: Option<&'a Recipe>,
+    pub install: &'a InstallStatus,
 }
 
 /// Where scratch files go, and remote folder settings, for the Files section.
@@ -309,6 +322,7 @@ pub fn show_settings(
     ai: AiInfo,
     voice: VoiceInfo,
     terminals: TerminalsInfo,
+    html_preview: HtmlPreviewInfo,
 ) -> Option<SettingsAction> {
     let mut action = None;
     let (outer, _) = ui.allocate_exact_size(window_size(ui.ctx()), Sense::hover());
@@ -351,7 +365,7 @@ pub fn show_settings(
                     SettingsGroup::Appearance => appearance_section(ui, appearance),
                     SettingsGroup::Highlights => highlights_section(ui, highlight),
                     SettingsGroup::Accessibility => accessibility_section(ui, accessibility),
-                    SettingsGroup::Files => files_section(ui, scratch, note_marks),
+                    SettingsGroup::Files => files_section(ui, scratch, note_marks, html_preview),
                     SettingsGroup::Privacy => privacy_section(ui, privacy),
                     SettingsGroup::Ai => ai_section(ui, ai),
                     SettingsGroup::Skills => {
@@ -513,11 +527,19 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
 }
 
 /// Files: where scratch files go, and the explorer's note marker.
-fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Option<SettingsAction> {
+fn files_section(
+    ui: &mut Ui,
+    scratch: ScratchInfo,
+    note_marks: &mut bool,
+    html_preview: HtmlPreviewInfo,
+) -> Option<SettingsAction> {
     let mut action = None;
     ui.label(RichText::new("Explorer").strong());
     ui.checkbox(note_marks, "Mark files that have notes")
         .on_hover_text("A small speech bubble before the name of a Markdown file with notes");
+    ui.add_space(6.0);
+    ui.separator();
+    action = html_preview_section(ui, html_preview).or(action);
     ui.add_space(6.0);
     ui.separator();
     ui.label(RichText::new("Scratches").strong());
@@ -983,6 +1005,61 @@ fn safety_row(ui: &mut Ui, settings: &AiSettings) -> Option<SettingsAction> {
             action = Some(SettingsAction::ForgetAllowedFolders);
         }
     });
+    action
+}
+
+/// The HTML preview: drawn built in, or by a Chromium browser, with the
+/// browser's status and an install prompt when none was found.
+fn html_preview_section(ui: &mut Ui, info: HtmlPreviewInfo) -> Option<SettingsAction> {
+    let HtmlPreviewInfo { enabled, found, recipe, install } = info;
+    let visuals = ui.visuals().clone();
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("HTML preview").strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match found {
+            Some(path) => {
+                let status = ui.label(RichText::new("Browser found").size(STATUS_SIZE).weak());
+                let (check, _) = ui.allocate_exact_size(vec2(CHECK_SIZE, CHECK_SIZE), Sense::hover());
+                paint_check(ui.painter(), check.center(), visuals.hyperlink_color);
+                status.on_hover_text(RichText::new(path.display().to_string()).monospace());
+            }
+            None => {
+                ui.label(RichText::new("No browser found").size(STATUS_SIZE).color(visuals.warn_fg_color));
+            }
+        });
+    });
+    if ui.checkbox(enabled, "Draw .html files with Chromium").changed() {
+        action = Some(SettingsAction::CheckHtmlBrowser);
+    }
+    ui.add(
+        egui::Label::new(
+            RichText::new(
+                "Shows the page as Chrome would: its layout, style sheets, web fonts and images. \
+                 Scripts stay off, but the page may load images and fonts from the web. \
+                 Uses Chrome, Chromium, Edge or Brave when installed. Off: the built-in preview, \
+                 which never loads anything.",
+            )
+            .weak(),
+        )
+        .wrap(),
+    );
+    if found.is_some() || !*enabled {
+        return action;
+    }
+    match recipe {
+        Some(recipe) => {
+            let message = "No Chromium browser found. Install one to draw HTML files.";
+            if let Some(clicked) = prompt(ui, message, recipe, install) {
+                action = Some(SettingsAction::Install(clicked));
+            }
+        }
+        None => {
+            ui.label(RichText::new("Install Google Chrome or Chromium.").size(SMALL_SIZE).weak());
+        }
+    }
+    if ui.button("Check again").on_hover_text("Look for a Chromium browser again").clicked() {
+        action = Some(SettingsAction::CheckHtmlBrowser);
+    }
     action
 }
 

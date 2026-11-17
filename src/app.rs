@@ -15,6 +15,7 @@ mod drafts;
 mod find;
 mod git_branch;
 mod helm;
+mod html_snapshot;
 mod images;
 mod install;
 mod menu_bar;
@@ -51,7 +52,7 @@ use crate::document::text_file::{DiskState, Document, Opened, Unsupported};
 use crate::document::text_stats::TextStats;
 use crate::document::view::{
     BlockEdit, EditorState, PreviewEvent, apply_with_undo, editor_selection, focus_editor, handle_editor_shortcuts,
-    set_editor_cursor, show_editor, show_preview, show_read_only_preview, step_editor_history,
+    set_editor_cursor, show_editor, show_preview, step_editor_history,
 };
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
@@ -66,7 +67,6 @@ use crate::icons::{Icon, icon_button};
 use crate::install::view::InstallAction;
 use crate::markdown::blocks::{SourceBlock, parse_blocks, parse_source_blocks};
 use crate::markdown::html::{file_url, html_page, is_html_path, with_base};
-use crate::markdown::html_blocks::html_source_blocks;
 use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, rewrite_note};
 use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
@@ -403,6 +403,8 @@ pub struct RubriqueApp {
     voice: voice::VoiceState,
     /// Installing missing tools.
     install: install::InstallState,
+    /// The HTML preview drawn by a Chromium browser.
+    html_snapshots: html_snapshot::HtmlSnapshots,
     /// Unsaved edits kept between runs.
     drafts: drafts::DraftState,
     /// Scratch key for this session, PIN lock screen and their dialogs.
@@ -505,6 +507,7 @@ impl RubriqueApp {
             note_draft: None,
             voice: voice::VoiceState::default(),
             install: install::InstallState::default(),
+            html_snapshots: html_snapshot::HtmlSnapshots::default(),
             drafts: drafts::DraftState::default(),
             privacy,
             remote: remote::RemoteState::default(),
@@ -517,6 +520,7 @@ impl RubriqueApp {
         // The editor suggests agents when typing `@ai-`, so read them now
         // rather than waiting for Settings or Ask to open.
         app.load_skills_and_agents();
+        app.check_html_browser();
         // Reopen last session's tabs (with their unsaved edits), then the file asked for.
         let saved_tabs = std::mem::take(&mut app.settings.open_tabs);
         app.reopen_tabs(saved_tabs);
@@ -1154,6 +1158,7 @@ impl RubriqueApp {
             self.load_skills_and_agents();
             self.check_voice_tool();
             self.check_terminals();
+            self.check_html_browser();
         }
     }
 
@@ -1293,6 +1298,8 @@ impl RubriqueApp {
         let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
         let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
         let highlight = self.rule_writer.highlight_info(&mut self.settings.text_highlight, ask_tool_name);
+        let html_preview =
+            html_snapshot::html_preview_info(&mut self.settings.html_browser_preview, &self.html_snapshots, &install);
         let action = show_settings(
             ui,
             &mut self.settings_group,
@@ -1311,6 +1318,7 @@ impl RubriqueApp {
             ai,
             voice,
             terminals,
+            html_preview,
         );
         // Rules edited in the Highlights group color plain text at once;
         // they are compiled again only when they changed.
@@ -1353,6 +1361,7 @@ impl RubriqueApp {
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
+            SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
             SettingsAction::Copy(text) => self.install_action(ui.ctx(), InstallAction::Copy(text)),
             SettingsAction::Install(action) => self.install_action(ui.ctx(), action),
             SettingsAction::Close => self.settings_open = false,
@@ -1932,8 +1941,8 @@ impl RubriqueApp {
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
                 } else if showing_html_preview {
-                    let blocks = preview.get_or_insert_with(|| html_source_blocks(&document.text));
-                    preview_event = show_read_only_preview(ui, &document.path, blocks);
+                    let use_browser = self.settings.html_browser_preview;
+                    preview_event = self.html_snapshots.show_preview(ui, document, preview, use_browser);
                 } else {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
@@ -3063,6 +3072,7 @@ impl eframe::App for RubriqueApp {
         self.poll_rule_writer();
         self.poll_voice(&ctx);
         self.poll_install(&ctx);
+        self.poll_html_snapshots();
         self.poll_remote();
         self.poll_remote_saves();
         self.poll_pending_sends();

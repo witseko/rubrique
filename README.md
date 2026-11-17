@@ -42,7 +42,10 @@ Agents run only when you ask, read-only by default.
   HTML in a Markdown file shows as GitHub shows it in a README (centered
   logos, badges, `<details>`, `<kbd>` and the like). HTML files get a
   read-only preview too, with their text colors, highlights, alignment and
-  collapsible `<details>` sections.
+  collapsible `<details>` sections. Turn on Settings > Files > HTML
+  preview to draw them with Chrome, Chromium, Edge or Brave instead (or
+  Google's headless Chrome, installed in one click): the full layout,
+  style sheets and web fonts, with scripts off.
 - YAML front matter shows as a card at the top of the preview, and a
   click on a link to another `.md` file opens it in a tab. Folders in the
   [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
