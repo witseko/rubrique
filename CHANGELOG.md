@@ -13,6 +13,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Install with Cargo**: `cargo install rubrique` builds the editor from
   crates.io. Every stable release is published there automatically.
 
+### Fixed
+
+- **Inline code at the start of a line sits on the line.** `Code` that
+  begins a paragraph, a list item or a line after a break now shares the
+  baseline of the text after it instead of riding a few pixels higher.
+
 ## [1.3.0] - 2026-11-17
 
 ### Added
