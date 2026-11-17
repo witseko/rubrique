@@ -42,7 +42,10 @@ Agents run only when you ask, read-only by default.
   HTML in a Markdown file shows as GitHub shows it in a README (centered
   logos, badges, `<details>`, `<kbd>` and the like). HTML files get a
   read-only preview too, with their text colors, highlights, alignment and
-  collapsible `<details>` sections.
+  collapsible `<details>` sections. Turn on Settings > Files > HTML
+  preview to draw them with Chrome, Chromium, Edge or Brave instead (or
+  Google's headless Chrome, installed in one click): the full layout,
+  style sheets and web fonts, with scripts off.
 - Unsaved changes are marked until you save: a bar beside each edited or
   new block (hover it to compare with the saved text and revert), a dashed
   line where a block was deleted, and the full list in the Changes panel.

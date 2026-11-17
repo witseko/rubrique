@@ -4,6 +4,7 @@
 mod ai;
 mod alert;
 mod app;
+mod chromium;
 mod crypto;
 mod date;
 mod document;
