@@ -4,10 +4,13 @@
 
 pub mod blocks;
 pub mod css;
+pub mod front_matter;
+mod front_matter_view;
 pub mod highlight;
 pub mod html;
 pub mod html_blocks;
 pub mod inlines;
+pub mod local_links;
 pub mod notes;
 pub mod outline;
 pub mod render;

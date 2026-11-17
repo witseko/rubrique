@@ -4,6 +4,7 @@
 //! Works line by line. Containers (quotes, list items) strip their markers
 //! and parse their content recursively with the same function.
 
+use super::front_matter::FrontMatter;
 use super::inlines::{Inline, parse_inlines};
 
 /// One block of the document.
@@ -42,6 +43,9 @@ pub enum Block {
     /// reads as. The preview shows it but never rewrites it: its source is
     /// edited as text, like any block.
     Html(Vec<Block>),
+    /// YAML front matter between `---` lines at the very top of the file
+    /// (an Open Knowledge Format concept keeps its metadata there).
+    FrontMatter(FrontMatter),
 }
 
 /// A pipe table (GitHub style): a header row, a delimiter row that sets
@@ -103,7 +107,14 @@ const MAX_BLOCK_DEPTH: usize = 32;
 pub fn parse_blocks(text: &str) -> Vec<Block> {
     let lines: Vec<String> = text.lines().map(expand_leading_tabs).collect();
     let line_refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-    parse_lines(&line_refs, 0)
+    match FrontMatter::parse(&line_refs) {
+        Some((front, count)) => {
+            let mut blocks = vec![Block::FrontMatter(front)];
+            blocks.extend(parse_lines(&line_refs[count..], 0));
+            blocks
+        }
+        None => parse_lines(&line_refs, 0),
+    }
 }
 
 /// A top-level block and where its source text is.
@@ -130,6 +141,11 @@ pub fn parse_source_blocks(text: &str) -> Vec<SourceBlock> {
     }
     let mut blocks = Vec::new();
     let mut index = 0;
+    if let Some((front, count)) = FrontMatter::parse(&line_refs) {
+        let end = bounds.get(count - 1).map_or(text.len(), |bound| bound.1);
+        blocks.push(SourceBlock { block: Block::FrontMatter(front), range: 0..end });
+        index = count;
+    }
     while index < line_refs.len() {
         let (block, next) = parse_block(&line_refs, index, 0);
         if let Some(block) = block {
@@ -970,6 +986,18 @@ mod tests {
         let sources: Vec<&str> = blocks.iter().map(|block| &text[block.range.clone()]).collect();
         assert_eq!(sources, ["# Title", "First line\nsecond line", "- a\n- b", "```\ncode\n```"]);
         assert_eq!(blocks.iter().map(|block| block.block.clone()).collect::<Vec<_>>(), parse_blocks(text));
+    }
+
+    #[test]
+    fn front_matter_is_one_block_at_the_top() {
+        let text = "---\ntype: Metric\ntags: [a]\n---\n\n# Revenue\n";
+        let blocks = parse_source_blocks(text);
+        let sources: Vec<&str> = blocks.iter().map(|block| &text[block.range.clone()]).collect();
+        assert_eq!(sources, ["---\ntype: Metric\ntags: [a]\n---", "# Revenue"]);
+        assert!(matches!(&blocks[0].block, Block::FrontMatter(front) if front.concept_type() == Some("Metric")));
+        assert_eq!(blocks.iter().map(|block| block.block.clone()).collect::<Vec<_>>(), parse_blocks(text));
+        // Only at the very top.
+        assert!(!parse_blocks("Intro\n\n---\ntype: Metric\n---").iter().any(|b| matches!(b, Block::FrontMatter(_))));
     }
 
     /// The HTML block `source` should read as.

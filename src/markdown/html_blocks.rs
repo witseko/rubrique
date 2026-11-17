@@ -974,7 +974,7 @@ impl TextLook {
             Block::Table(table) => {
                 table.header.iter_mut().chain(table.rows.iter_mut().flatten()).for_each(restyle);
             }
-            Block::Code { .. } | Block::ThematicBreak => {}
+            Block::Code { .. } | Block::ThematicBreak | Block::FrontMatter(_) => {}
         }
     }
 }

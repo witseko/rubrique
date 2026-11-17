@@ -43,6 +43,12 @@ Agents run only when you ask, read-only by default.
   logos, badges, `<details>`, `<kbd>` and the like). HTML files get a
   read-only preview too, with their text colors, highlights, alignment and
   collapsible `<details>` sections.
+- YAML front matter shows as a card at the top of the preview, and a
+  click on a link to another `.md` file opens it in a tab. Folders in the
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+  read as a knowledge base: each concept shows its type, status, trust
+  tier and staleness, and links that start with `/` open from the root of
+  the bundle.
 - Unsaved changes are marked until you save: a bar beside each edited or
   new block (hover it to compare with the saved text and revert), a dashed
   line where a block was deleted, and the full list in the Changes panel.
