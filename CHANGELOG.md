@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-17
+
 ### Added
 
 - **Chromium HTML preview.** Settings > Files > HTML preview draws `.html`
