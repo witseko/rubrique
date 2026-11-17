@@ -18,6 +18,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   tab, and git's reason shows if the clone fails.
 - **Install with Cargo**: `cargo install rubrique` builds the editor from
   crates.io. Every stable release is published there automatically.
+- **Collapse all and expand all in the file tree.** A button in the FILES
+  header folds every folder at once, and opens again the folders you had
+  open. Right-click a folder for "Expand all", which opens every folder
+  inside it, or "Collapse all"; Alt-click (Option-click on a Mac) a folder
+  does the same.
 
 ### Fixed
 

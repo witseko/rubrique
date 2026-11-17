@@ -264,7 +264,7 @@ pub fn show_explorer(
     if files_open {
         show_docked_terminals(ui, context, &mut layout.terminals_collapsed, edits.session, &mut action);
     }
-    if files_header(ui, context, files_open, filter, &mut action) {
+    if files_header(ui, roots, context, files_open, filter, &mut action) {
         layout.files_collapsed = files_open;
     }
     if !files_open {
@@ -297,10 +297,11 @@ pub fn show_explorer(
     action
 }
 
-/// The "FILES" header with the folder buttons and the Markdown filter.
-/// Returns true when the title was clicked.
+/// The "FILES" header with the folder buttons, the Markdown filter and the
+/// collapse / expand all button. Returns true when the title was clicked.
 fn files_header(
     ui: &mut Ui,
+    roots: &mut [FsNode],
     context: &TreeContext,
     expanded: bool,
     filter: &mut ExplorerFilter,
@@ -352,8 +353,29 @@ fn files_header(
                     *action = Some(ExplorerAction::CloneRepository);
                 }
             });
+            fold_all_button(ui, roots);
         },
     )
+}
+
+/// The header button that folds every folder while any root is open, and
+/// otherwise opens again the folders that were listed before. It reads
+/// nothing from disk; "Expand all" in a folder's menu does.
+fn fold_all_button(ui: &mut Ui, roots: &mut [FsNode]) {
+    if roots.is_empty() {
+        return;
+    }
+    if roots.iter().any(|root| root.expanded) {
+        let tip = "Collapse all folders";
+        if small_icon_button(ui, Icon::CollapseAll, HEADER_BUTTON_SIZE, "Collapse all", tip).clicked() {
+            roots.iter_mut().for_each(FsNode::collapse_all);
+        }
+    } else {
+        let tip = "Expand all folders opened before. Right-click a folder to expand everything in it";
+        if small_icon_button(ui, Icon::ExpandAll, HEADER_BUTTON_SIZE, "Expand all", tip).clicked() {
+            roots.iter_mut().for_each(FsNode::expand_loaded);
+        }
+    }
 }
 
 /// The funnel in the Files header: a click opens a menu with one box per
@@ -461,10 +483,12 @@ fn show_root(
     if let Some(color) = context.root_color {
         paint_root_bar(ui, &response, color);
     }
-    if toggles_fold(&response) {
-        root.toggle_expanded(repaint_when_done(ui));
+    click_on_folder(ui, &response, root);
+    let mut fold = None;
+    root_menu(&response, &root.path, context, &mut fold, action);
+    if let Some(fold) = fold {
+        fold_all(root, fold);
     }
-    root_menu(&response, &root.path, context, action);
     if open {
         let indent_id = root.path.clone();
         ui.indent(indent_id, |ui| show_children(ui, root, context, edits, action));
@@ -528,13 +552,15 @@ fn show_folder(
     } else {
         paint_arrow(ui, &response, shows_contents(ui, folder, context));
     }
-    if toggles_fold(&response) {
-        folder.toggle_expanded(repaint_when_done(ui));
-    }
+    click_on_folder(ui, &response, folder);
     if response.double_clicked() {
         *action = Some(ExplorerAction::RenameInTree(folder.path.clone()));
     }
-    folder_menu(&response, &folder.path, context, action);
+    let mut fold = None;
+    folder_menu(&response, &folder.path, context, &mut fold, action);
+    if let Some(fold) = fold {
+        fold_all(folder, fold);
+    }
     if shows_contents(ui, folder, context) {
         let indent_id = folder.path.clone();
         ui.indent(indent_id, |ui| show_children(ui, folder, context, edits, action));
@@ -659,6 +685,51 @@ pub(super) fn scroll_if_revealed(ui: &Ui, context: &TreeContext, path: &Path, re
     }
 }
 
+/// Fold or unfold a folder whose row was clicked. With Alt (Option on a
+/// Mac) held, everything inside it folds or opens too.
+fn click_on_folder(ui: &Ui, response: &egui::Response, folder: &mut FsNode) {
+    if !toggles_fold(response) {
+        return;
+    }
+    if !ui.input(|input| input.modifiers.alt) {
+        folder.toggle_expanded(repaint_when_done(ui));
+        return;
+    }
+    let fold = if folder.expanded { FoldAll::Collapse } else { FoldAll::Expand };
+    fold_all(folder, fold);
+}
+
+/// A fold of a folder and everything inside it, asked for from its menu
+/// or with an Alt-click.
+#[derive(Clone, Copy, Debug)]
+enum FoldAll {
+    Expand,
+    Collapse,
+}
+
+/// Fold or open `folder` and everything inside it.
+fn fold_all(folder: &mut FsNode, fold: FoldAll) {
+    match fold {
+        FoldAll::Expand => folder.expand_all(),
+        FoldAll::Collapse => folder.collapse_all(),
+    }
+}
+
+/// "Expand all" and "Collapse all" at the top of a folder's menu.
+fn fold_all_items(ui: &mut Ui, fold: &mut Option<FoldAll>) {
+    let items = [
+        (FoldAll::Expand, "Expand all", "Open this folder and every folder inside it (or Alt/Option-click it)"),
+        (FoldAll::Collapse, "Collapse all", "Fold this folder and every folder inside it (or Alt/Option-click it)"),
+    ];
+    for (choice, label, tip) in items {
+        if ui.button(label).on_hover_text(tip).clicked() {
+            *fold = Some(choice);
+            ui.close();
+        }
+    }
+    ui.separator();
+}
+
 /// True when a click on a folder row should fold or unfold it. egui reports
 /// both clicks of a double click as clicks, so the second one is skipped:
 /// otherwise a double click opens the folder and closes it again at once.
@@ -756,9 +827,17 @@ fn link_marker(node: &FsNode) -> &'static str {
     if node.is_symlink { " ↗" } else { "" }
 }
 
-/// Right-click menu of a root: the copy actions, then "Remove from explorer".
-fn root_menu(response: &egui::Response, path: &Path, context: &TreeContext, action: &mut Option<ExplorerAction>) {
+/// Right-click menu of a root: "Expand all" and "Collapse all", "New", the
+/// copy actions, then "Remove from explorer".
+fn root_menu(
+    response: &egui::Response,
+    path: &Path,
+    context: &TreeContext,
+    fold: &mut Option<FoldAll>,
+    action: &mut Option<ExplorerAction>,
+) {
     response.context_menu(|ui| {
+        fold_all_items(ui, fold);
         if new_menu(ui, path, context, action) {
             ui.separator();
         }
@@ -850,10 +929,17 @@ fn rename_delete_items(ui: &mut Ui, path: &Path, action: &mut Option<ExplorerAct
     }
 }
 
-/// Right-click menu of a folder: "New", the three copy actions, then
-/// "Rename…" and "Delete…".
-fn folder_menu(response: &egui::Response, path: &Path, context: &TreeContext, action: &mut Option<ExplorerAction>) {
+/// Right-click menu of a folder: "Expand all" and "Collapse all", "New",
+/// the three copy actions, then "Rename…" and "Delete…".
+fn folder_menu(
+    response: &egui::Response,
+    path: &Path,
+    context: &TreeContext,
+    fold: &mut Option<FoldAll>,
+    action: &mut Option<ExplorerAction>,
+) {
     response.context_menu(|ui| {
+        fold_all_items(ui, fold);
         if new_menu(ui, path, context, action) {
             ui.separator();
         }

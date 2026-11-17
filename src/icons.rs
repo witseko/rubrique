@@ -95,6 +95,12 @@ pub enum Icon {
     /// Edit the preview in place (the middle of the Read | Edit | Source
     /// switch): a slanted pencil whose tip is the accent.
     Pencil,
+    /// Fold every folder (the Files header): two chevrons pointing in at a
+    /// line; the line is the accent.
+    CollapseAll,
+    /// Open the folders again (the Files header): the same line with the
+    /// chevrons pointing away from it.
+    ExpandAll,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -219,6 +225,8 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::TabList => paint_tab_list(painter, center, line, detail),
         Icon::Branch => paint_branch(painter, center, line, detail),
         Icon::Pencil => paint_pencil(painter, center, line, detail),
+        Icon::CollapseAll => paint_fold_all(painter, center, line, detail, true),
+        Icon::ExpandAll => paint_fold_all(painter, center, line, detail, false),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -508,6 +516,17 @@ fn paint_highlighter(painter: &Painter, center: Pos2, line: Stroke, detail: Stro
     let chisel = [collar + half_width, nib + across * 0.7, nib - across * 0.7, collar - half_width];
     stroke_path(painter, &chisel, false, line);
     stroke_path(painter, &[at(-6.5, 6.5), at(1.5, 6.5)], false, detail);
+}
+
+/// A line across the middle in the accent, with a chevron above and one
+/// below it: pointing in at the line when `inward` (fold), away from it
+/// otherwise (open).
+fn paint_fold_all(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke, inward: bool) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let (outer, inner) = if inward { (-6.5, -3.0) } else { (-3.0, -6.5) };
+    stroke_path(painter, &[at(-4.0, outer), at(0.0, inner), at(4.0, outer)], false, line);
+    stroke_path(painter, &[at(-4.0, -outer), at(0.0, -inner), at(4.0, -outer)], false, line);
+    stroke_path(painter, &[at(-6.5, 0.0), at(6.5, 0.0)], false, detail);
 }
 
 /// A pencil slanted up to the right: the body as an outline, the tip at
