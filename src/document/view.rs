@@ -19,7 +19,7 @@ use crate::markdown::blocks::{Block, SourceBlock};
 use crate::markdown::render::page_text;
 use crate::markdown::render::{
     CodeAction, render_read_only_block, render_top_block, render_top_table, set_image_folder, take_cell_click,
-    take_code_action, take_play_request, top_gap,
+    take_code_action, take_open_request, take_play_request, top_gap,
 };
 use crate::markdown::table_edit::{TableAction, TableCell};
 use crate::voice::view::{MemoAction, take_memo_action};
@@ -320,6 +320,8 @@ pub enum PreviewEvent {
     Code { index: usize, action: CodeAction },
     /// Play on a video in the preview.
     PlayVideo(PathBuf),
+    /// A link to a Markdown file: open it in a tab.
+    OpenFile(PathBuf),
     /// A button on a voice memo.
     Memo(MemoAction),
     /// Revert, Remove or Restore on an unsaved change: back to the saved block.
@@ -495,6 +497,9 @@ pub fn show_read_only_preview(ui: &mut Ui, path: &Path, blocks: &[SourceBlock]) 
                 if let Some(path) = take_play_request(ui.ctx()) {
                     event = Some(PreviewEvent::PlayVideo(path));
                 }
+                if let Some(path) = take_open_request(ui.ctx()) {
+                    event = Some(PreviewEvent::OpenFile(path));
+                }
             }
         });
     });
@@ -658,8 +663,12 @@ fn reading_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<Prev
 }
 
 /// What a button inside block `index` asked for this frame, if one was
-/// clicked: a code block action, a memo action, or playing a video.
+/// clicked: a code block action, a memo action, playing a video, or a
+/// link to a Markdown file.
 fn block_buttons(ui: &Ui, index: usize) -> Option<PreviewEvent> {
+    if let Some(path) = take_open_request(ui.ctx()) {
+        return Some(PreviewEvent::OpenFile(path));
+    }
     if let Some(action) = take_code_action(ui.ctx()) {
         return Some(PreviewEvent::Code { index, action });
     }

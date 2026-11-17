@@ -8,6 +8,23 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Open Knowledge Format bundles.** A Markdown file's YAML front matter
+  shows as a card at the top of the preview instead of a stray heading:
+  the title and description, then each field as a labeled row in plain
+  words, with tags as chips, dates spelled out and links that open. For an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+  concept the card also shows its type, a draft or deprecated status, its
+  trust tier and how fresh it is, who wrote and verified it, and its
+  sources as links.
+- **Links between Markdown files open in a tab.** In the preview, a click
+  on a link to a local `.md` file opens it. A link that starts with `/`
+  opens from the root of the bundle, as OKF writes links between concepts.
+- **Footnotes in the preview.** A footnote reference such as `[^source]`
+  shows its label in superscript, and the footnote line itself starts on
+  its own line without the colon.
+
 ### Fixed
 
 - **Inline code sits on the line.** `Code` in the Markdown preview now

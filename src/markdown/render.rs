@@ -9,7 +9,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use eframe::egui::cache::{ComputerMut, FrameCache};
 
 use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
+use super::front_matter_view::{CardSizes, render_front_matter};
 use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url, parse_inlines};
+use super::local_links::{bundle_root, link_target};
 use super::table_edit::TableCell;
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::media::{MAX_IMAGE_BYTES, MediaKind, image_uri, is_image_path, media_kind_of_url};
@@ -293,6 +295,16 @@ fn render_aligned_block(ui: &mut Ui, look: &Look, block: &Block, depth: usize, a
         Block::Table(table) => render_table(ui, look, table, None),
         Block::ThematicBreak => {
             ui.add(egui::Separator::default().spacing(RULE_SPACING));
+        }
+        Block::FrontMatter(front) => {
+            let sizes = CardSizes {
+                body: look.body_size,
+                row: look.body_size * 0.875,
+                small: look.body_size * 0.8125,
+                title: look.heading_sizes[1],
+                label_width: look.body_size * 7.5,
+            };
+            render_front_matter(ui, &sizes, front);
         }
         Block::Aligned { align, blocks } => {
             for (index, block) in blocks.iter().enumerate() {
@@ -1013,10 +1025,17 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
         Some(url) if is_openable_url(url) => {
             note_tip(ui.hyperlink_to(rich, url).on_hover_text(url));
         }
-        // Local or unknown targets are shown, not opened.
+        Some(url) if let Some(path) = local_markdown_link(ui.ctx(), url, false) => {
+            let response = note_tip(ui.link(rich).on_hover_text(path.display().to_string()));
+            if response.clicked() {
+                request_open(ui.ctx(), path);
+            }
+        }
+        // Other local or unknown targets are shown, not opened.
         Some(url) => {
             note_tip(
-                ui.label(rich.underline()).on_hover_text(format!("{url} (not opened: only web and mail links open)")),
+                ui.label(rich.underline())
+                    .on_hover_text(format!("{url} (not opened: only web, mail and Markdown file links open)")),
             );
         }
         None if style.code => {
@@ -1127,6 +1146,65 @@ fn local_media_path(ctx: &egui::Context, url: &str) -> Option<PathBuf> {
     }
     let folder = ctx.data(|data| data.get_temp::<PathBuf>(image_folder_id()))?;
     Some(folder.join(path))
+}
+
+/// Seconds a bundle root found by [`cached_bundle_root`] is trusted before
+/// the folders are looked at again.
+const BUNDLE_ROOT_CHECK_SECONDS: f64 = 2.0;
+
+/// The Markdown file a link in the open file points at (see
+/// [`link_target`]), or `None` when the link is not one the preview opens.
+/// With `bundle_fallback`, a relative path missing next to the file is
+/// tried from the bundle root, as OKF `sources` paths are often written.
+pub(super) fn local_markdown_link(ctx: &egui::Context, url: &str, bundle_fallback: bool) -> Option<PathBuf> {
+    let folder = ctx.data(|data| data.get_temp::<PathBuf>(image_folder_id()))?;
+    let root = if url.starts_with('/') || bundle_fallback { cached_bundle_root(ctx, &folder) } else { None };
+    let target = link_target(url, &folder, root.as_deref())?;
+    if bundle_fallback
+        && !url.starts_with('/')
+        && !target.is_file()
+        && let Some(in_root) = link_target(&format!("/{url}"), &folder, root.as_deref())
+        && in_root.is_file()
+    {
+        return Some(in_root);
+    }
+    Some(target)
+}
+
+/// Ask the app to open the Markdown file at `path` in a tab (see
+/// [`take_open_request`]).
+pub(super) fn request_open(ctx: &egui::Context, path: PathBuf) {
+    ctx.data_mut(|data| data.insert_temp(open_request_id(), path));
+}
+
+/// [`bundle_root`] for `folder`, remembered for [`BUNDLE_ROOT_CHECK_SECONDS`]
+/// so the preview does not read `index.md` files every frame.
+fn cached_bundle_root(ctx: &egui::Context, folder: &Path) -> Option<PathBuf> {
+    let id = egui::Id::unique(("rubrique-bundle-root", folder));
+    let now = ctx.input(|input| input.time);
+    let known = ctx.data(|data| data.get_temp::<(Option<PathBuf>, f64)>(id));
+    if let Some((root, checked)) = known
+        && now - checked < BUNDLE_ROOT_CHECK_SECONDS
+    {
+        return root;
+    }
+    let root = bundle_root(folder);
+    ctx.data_mut(|data| data.insert_temp(id, (root.clone(), now)));
+    root
+}
+
+/// The Markdown file a link in the preview asked to open this frame, if
+/// any (taken once).
+pub fn take_open_request(ctx: &egui::Context) -> Option<PathBuf> {
+    ctx.data_mut(|data| {
+        let path = data.get_temp::<PathBuf>(open_request_id());
+        data.remove::<PathBuf>(open_request_id());
+        path
+    })
+}
+
+fn open_request_id() -> egui::Id {
+    egui::Id::unique("rubrique-open-linked-file")
 }
 
 /// Seconds a verdict of [`image_refusal`] is trusted before the file is
