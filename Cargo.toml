@@ -6,9 +6,24 @@ description = "A fast editor, agentic on demand."
 license = "MIT"
 homepage = "https://rubrique.dev"
 repository = "https://github.com/witseko/rubrique"
-publish = false
+readme = "README.md"
+keywords = ["editor", "markdown", "ai", "agents", "egui"]
+categories = ["text-editors", "gui"]
 # Minimum supported Rust (MSRV), matching the README.
 rust-version = "1.95"
+# Files in the crates.io package: the sources, what they embed (window icons
+# and the built-in themes), and the docs crates.io shows. Packaging, CI,
+# screenshots and agent notes stay on GitHub.
+include = [
+    "/Cargo.toml",
+    "/src",
+    "/assets/icon/rubrique-256.png",
+    "/assets/icon/linux/rubrique-256.png",
+    "/themes",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [dependencies]
 # GUI toolkit. Default features trimmed to the OpenGL

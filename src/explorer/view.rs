@@ -41,6 +41,8 @@ pub enum ExplorerAction {
     AddFolder,
     /// Show the "Open path" dialog, to open a file or folder by its path.
     OpenPath,
+    /// Show the "Clone repository" dialog, to clone a git repository and add it.
+    CloneRepository,
     /// Ask for a folder on another computer to add as a root.
     AddRemoteFolder,
     /// Create a new scratch file and open it: encrypted or plain, or
@@ -337,7 +339,7 @@ fn files_header(
             {
                 *action = Some(ExplorerAction::AddRemoteFolder);
             }
-            let folder_tip = "Add a folder to the explorer (right click to type a path)";
+            let folder_tip = "Add a folder to the explorer (right click to type a path or clone a repository)";
             let folder = small_icon_button(ui, Icon::FolderPlus, HEADER_BUTTON_SIZE, "Add folder", folder_tip);
             if folder.clicked() {
                 *action = Some(ExplorerAction::AddFolder);
@@ -345,6 +347,9 @@ fn files_header(
             folder.context_menu(|ui| {
                 if ui.button("Open path... (Cmd+O)").clicked() {
                     *action = Some(ExplorerAction::OpenPath);
+                }
+                if ui.button("Clone repository...").clicked() {
+                    *action = Some(ExplorerAction::CloneRepository);
                 }
             });
         },
@@ -429,6 +434,9 @@ fn show_no_folders(ui: &mut Ui, action: &mut Option<ExplorerAction>) {
     ui.weak("No folder open yet.");
     if ui.button("Add folder...").clicked() {
         *action = Some(ExplorerAction::AddFolder);
+    }
+    if ui.button("Clone repository...").clicked() {
+        *action = Some(ExplorerAction::CloneRepository);
     }
 }
 

@@ -10,6 +10,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Clone repository.** File > Clone repository (also in the explorer's
+  Add folder right-click menu) clones a git repository from an https
+  address or an SSH one like `git@github.com:owner/repo.git`. Choose the
+  folder to clone into and, if you like, another folder name; the clone
+  opens as a new explorer folder, its README (if it has one) opens in a
+  tab, and git's reason shows if the clone fails.
+- **Install with Cargo**: `cargo install rubrique` builds the editor from
+  crates.io. Every stable release is published there automatically.
 - **reStructuredText preview.** `.rst` files open in a read-only preview,
   like HTML files, with a Read | Source switch: section titles, inline
   markup and roles, links and footnotes, bullet, numbered, field and
@@ -17,6 +25,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   blocks, and admonitions such as `.. note::` and `.. warning::` as
   quotes under their name. Images and figures show, comments and
   targets stay hidden, and Open in browser works for them too.
+
+### Fixed
+
+- **Inline code at the start of a line sits on the line.** `Code` that
+  begins a paragraph, a list item or a line after a break now shares the
+  baseline of the text after it instead of riding a few pixels higher.
 
 ## [1.3.0] - 2026-11-17
 

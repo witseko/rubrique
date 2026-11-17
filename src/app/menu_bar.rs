@@ -27,6 +27,7 @@ pub(super) enum MenuCommand {
     ImportFromSublime,
     AddFolder,
     OpenPath,
+    CloneRepository,
     Save,
     Ask,
     TogglePreview,
@@ -92,6 +93,7 @@ impl RubriqueApp {
             MenuEntry::Separator,
             item("Add folder...", MenuCommand::AddFolder, None),
             item("Open path...", MenuCommand::OpenPath, Some(&OPEN_PATH)),
+            item("Clone repository...", MenuCommand::CloneRepository, None),
             MenuEntry::Separator,
             item("Save", MenuCommand::Save, Some(&SAVE)),
             item("Ask AI...", MenuCommand::Ask, Some(&ASK)),
@@ -174,6 +176,7 @@ impl RubriqueApp {
             MenuCommand::ImportFromSublime => self.import_from_sublime(),
             MenuCommand::AddFolder => self.choose_folder_to_add(),
             MenuCommand::OpenPath => self.start_open_path(),
+            MenuCommand::CloneRepository => self.start_clone_repo(),
             MenuCommand::Save => {
                 self.save();
             }

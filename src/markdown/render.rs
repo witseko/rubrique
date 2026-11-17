@@ -1051,6 +1051,14 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
 /// the text around it. egui centers every label in its row, which puts the
 /// smaller monospace font a little higher than the body text.
 fn code_label(ui: &mut Ui, rich: RichText, style: &TextStyle) -> egui::Response {
+    // egui centers a label in the row as tall as it is so far. A code span
+    // that starts a line (a paragraph, a list item, after a line break) comes
+    // before any body text has made the row a full line tall, so it would be
+    // centered in a short row and sit well above the text that follows.
+    // Superscript and subscript are placed in a child of their own.
+    if style.html.script.is_none() && ui.cursor().height() < style.line_height {
+        ui.set_row_height(style.line_height);
+    }
     let drop = code_baseline_drop(ui, style);
     let (galley_pos, galley, response) = egui::Label::new(rich).layout_in_ui(ui);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), galley.text()));
@@ -1582,5 +1590,41 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(gap.abs() <= 0.5, "code baseline is {gap} pt above the body text");
+    }
+
+    /// Inline code at the start of a line, before any body text has made
+    /// the row a full line tall, still shares the baseline of the text after it.
+    #[test]
+    fn inline_code_that_starts_a_line_meets_the_body_baseline() {
+        let ctx = egui::Context::default();
+        crate::theme::style::install_fonts(&ctx);
+        let blocks = parse_blocks("`code` text");
+        let mut baselines = Vec::new();
+        // The first pass loads the fonts.
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                for block in &blocks {
+                    super::render_top_block(ui, block);
+                }
+            });
+            output.textures_delta.clear();
+            baselines = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => {
+                        let row = &text.galley.rows[0];
+                        let glyph = row.row.glyphs.iter().find(|glyph| !glyph.chr.is_whitespace())?;
+                        Some((text.galley.text().trim().to_owned(), text.pos.y + row.pos.y + glyph.pos.y))
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
+        let baseline = |word: &str| baselines.iter().find(|(text, _)| text == word).map(|(_, y)| *y);
+        let (Some(code), Some(text)) = (baseline("code"), baseline("text")) else {
+            panic!("both spans are drawn: {baselines:?}");
+        };
+        assert!((text - code).abs() <= 0.5, "code baseline is {} pt above the body text", text - code);
     }
 }
