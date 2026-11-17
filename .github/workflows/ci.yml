@@ -89,6 +89,11 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Test
         run: cargo test --locked
+      # Builds the crates.io package as the release would upload it, so a
+      # file missing from `include` in Cargo.toml fails here, not at release.
+      - name: Check the crates.io package
+        if: runner.os == 'Linux'
+        run: cargo publish --dry-run --locked
 
   msrv:
     name: Oldest supported Rust (1.95)

@@ -18,6 +18,7 @@ Download from [Releases](https://github.com/witseko/rubrique/releases).
 | macOS | Open the `.dmg`, drag Rubrique to Applications |
 | Debian, Ubuntu | `sudo apt install ./rubrique_X.Y.Z-1_amd64.deb` |
 | Other Linux | Unpack the `.tar.gz`, run `./install.sh` |
+| From source | `cargo install rubrique` (Rust 1.95+; on Linux the libraries under Build) |
 
 The macOS app is signed and notarized by Apple, so it opens without a warning.
 
@@ -170,7 +171,8 @@ Before a pull request: `cargo test`, `cargo clippy --all-targets -- -D warnings`
 
 Releases: a `release X.Y.Z` commit on `main` (changelog section, version in
 `Cargo.toml` and `Cargo.lock`) pushed together with the `rubrique-vX.Y.Z`
-tag; the Release workflow builds the packages. Steps in
+tag; the Release workflow builds the packages and publishes the crate to
+crates.io. Steps in
 [`AGENTS.md`](AGENTS.md), notes in [`CHANGELOG.md`](CHANGELOG.md).
 
 ## License

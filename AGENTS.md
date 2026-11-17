@@ -53,7 +53,8 @@ Group fixes from the same day into one patch release where you can.
 
 The `Release` workflow (`.github/workflows/release.yml`) builds the macOS
 and Linux packages and publishes the GitHub release with the changelog
-section for that version. It runs on the tag push, and also on any push
+section for that version, then publishes a stable version to crates.io
+(Trusted Publishing, no token; release candidates are not published there). It runs on the tag push, and also on any push
 to `main` whose `Cargo.toml` version has no tag yet. If Actions did not
 run (for example the account's spending limit was reached), start it by
 hand from the Actions tab (`workflow_dispatch`) once that is fixed.
