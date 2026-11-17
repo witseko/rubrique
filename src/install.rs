@@ -1,7 +1,7 @@
 //! Install a missing tool with one click: the recipes for the programs
-//! Rubrique runs (whisper.cpp, Ollama, Claude Code, Codex, Grok, tmux, a
-//! Chromium browser for the HTML preview) and the files they need (the
-//! whisper model, an Ollama model).
+//! Rubrique runs (whisper.cpp, Ollama, Claude Code, Codex, Gemini CLI, Grok,
+//! tmux, a Chromium browser for the HTML preview) and the files they need
+//! (the whisper model, an Ollama model).
 //!
 //! A recipe has a one-click command only when it is a single, well-known
 //! package-manager command (`brew`, `npm`, `ollama`, or `curl` for a file)
@@ -27,6 +27,7 @@ const OLLAMA_PAGE: &str = "https://ollama.com/download";
 const OLLAMA_SCRIPT: &str = "curl -fsSL https://ollama.com/install.sh | sh";
 const CLAUDE_PAGE: &str = "https://docs.anthropic.com/en/docs/claude-code/setup";
 const CODEX_PAGE: &str = "https://github.com/openai/codex#quickstart";
+const GEMINI_PAGE: &str = "https://github.com/google-gemini/gemini-cli#-installation";
 const GROK_PAGE: &str = "https://github.com/superagent-ai/grok-cli";
 const TMUX_PAGE: &str = "https://github.com/tmux/tmux/wiki/Installing";
 const CHROME_FOR_TESTING_PAGE: &str = "https://googlechromelabs.github.io/chrome-for-testing/";
@@ -131,6 +132,7 @@ pub fn recipe_for_command(command: &str, platform: Platform, find: &dyn Fn(&str)
         "ollama" => ollama_recipe(platform, find),
         "claude" => npm_recipe("Claude Code", "@anthropic-ai/claude-code", CLAUDE_PAGE, find),
         "codex" => npm_recipe("Codex", "@openai/codex", CODEX_PAGE, find),
+        "gemini" => npm_recipe("Gemini CLI", "@google/gemini-cli", GEMINI_PAGE, find),
         "grok" => Recipe { page: Some(GROK_PAGE), ..Recipe::named("Grok CLI") },
         _ => return None,
     };
@@ -390,6 +392,9 @@ mod tests {
         assert_eq!(codex.run, None);
         assert_eq!(codex.copy.as_deref(), Some("npm install -g @openai/codex"));
         assert_eq!(codex.page, Some(CODEX_PAGE));
+        let gemini = recipe(crate::ai::AiTool::Gemini.default_command(), Platform::Mac, &[]);
+        assert_eq!(gemini.copy.as_deref(), Some("npm install -g @google/gemini-cli"));
+        assert_eq!(gemini.page, Some(GEMINI_PAGE));
     }
 
     #[test]

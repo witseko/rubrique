@@ -352,7 +352,7 @@ pub struct RubriqueApp {
     repaint: Context,
     /// Where each AI tool's program was found, in [`AiTool::ALL`] order.
     /// Checked when Settings or Ask opens and when a command changes.
-    ai_found: [Option<PathBuf>; 4],
+    ai_found: [Option<PathBuf>; 5],
     /// The "Rename" dialog, while it is open.
     renaming: Option<Renaming>,
     /// The file being renamed in its explorer row (after a double click).
@@ -483,7 +483,7 @@ impl RubriqueApp {
             naming: naming::NamingState::default(),
             rule_writer: text_highlight::RuleWriterState::default(),
             repaint: ctx.clone(),
-            ai_found: [None, None, None, None],
+            ai_found: [None, None, None, None, None],
             renaming: None,
             tree_rename: None,
             tab_rename: None,

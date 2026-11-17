@@ -45,7 +45,7 @@ pub fn skills_section(ui: &mut Ui, info: SkillsInfo<'_>) -> Option<SettingsActio
     ui.label(
         RichText::new(
             "Reusable instructions for Ask (Cmd+K), one folder per skill with a SKILL.md file. \
-             The same format works in Claude Code, Codex and Grok.",
+             The same format works in Claude Code, Codex, Gemini CLI and Grok.",
         )
         .weak(),
     );

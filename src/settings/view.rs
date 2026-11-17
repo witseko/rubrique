@@ -146,7 +146,7 @@ pub struct TerminalsInfo<'a> {
 pub struct AiInfo<'a> {
     pub settings: &'a mut AiSettings,
     /// Where each tool's program was found, in [`AiTool::ALL`] order.
-    pub found: &'a [Option<PathBuf>; 4],
+    pub found: &'a [Option<PathBuf>; 5],
     /// Skills found in the skills folders.
     pub skills: &'a [Skill],
     /// Every skill source's folder, in reading order, switched on or not.
@@ -156,7 +156,7 @@ pub struct AiInfo<'a> {
     /// Rubrique's agents folder (the chosen one or the default).
     pub agents_folder: Option<&'a Path>,
     /// How to install each missing tool, in [`AiTool::ALL`] order.
-    pub recipes: &'a [Option<Recipe>; 4],
+    pub recipes: &'a [Option<Recipe>; 5],
     /// How to download the local model, when Ollama is there but the model is not.
     pub local_model: Option<&'a Recipe>,
     pub install: &'a InstallStatus,
@@ -618,12 +618,12 @@ const MISSING_DOT_RADIUS: f32 = 3.5;
 /// Space inside one tool row.
 const ROW_MARGIN: egui::Margin = egui::Margin { left: 12, right: 10, top: 8, bottom: 8 };
 /// What the Ask picker offers, in the order of the tools list.
-const ASK_CHOICES: [Option<AiTool>; 4] =
-    [Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Grok), Some(AiTool::Local)];
+const ASK_CHOICES: [Option<AiTool>; 5] =
+    [Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Gemini), Some(AiTool::Grok), Some(AiTool::Local)];
 /// What the summaries picker offers: the local model first (text stays on
 /// this computer), then the others, then Off.
-const SUMMARY_CHOICES: [Option<AiTool>; 5] =
-    [Some(AiTool::Local), Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Grok), None];
+const SUMMARY_CHOICES: [Option<AiTool>; 6] =
+    [Some(AiTool::Local), Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Gemini), Some(AiTool::Grok), None];
 
 /// The AI section: which tool answers Ask and which writes summaries, then
 /// every tool with its status, install help and (folded) command, then safety.
@@ -668,7 +668,7 @@ fn section_title(ui: &mut Ui, title: &str, hint: &str) {
 
 /// The two choices that matter most, side by side: the tool behind Ask and
 /// the tool behind summaries.
-fn role_pickers(ui: &mut Ui, settings: &mut AiSettings, found: &[Option<PathBuf>; 4]) {
+fn role_pickers(ui: &mut Ui, settings: &mut AiSettings, found: &[Option<PathBuf>; 5]) {
     let is_found = |tool: AiTool| found[tool_index(tool)].is_some();
     ui.columns(2, |columns| {
         let ui = &mut columns[0];
@@ -1101,6 +1101,9 @@ fn agents_section(
         }
     });
     if ui.checkbox(&mut settings.use_claude_agents, "Also use Claude's agents (~/.claude/agents)").changed() {
+        action = Some(SettingsAction::ReloadAgents);
+    }
+    if ui.checkbox(&mut settings.use_gemini_agents, "Also use Gemini CLI's agents (~/.gemini/agents)").changed() {
         action = Some(SettingsAction::ReloadAgents);
     }
     ui.add_space(6.0);

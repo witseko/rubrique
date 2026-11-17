@@ -34,19 +34,21 @@ pub enum AiTool {
     #[default]
     Claude,
     Codex,
+    Gemini,
     Grok,
     /// A small model on this machine (Ollama or llama.cpp).
     Local,
 }
 
 impl AiTool {
-    pub const ALL: [AiTool; 4] = [AiTool::Claude, AiTool::Codex, AiTool::Grok, AiTool::Local];
+    pub const ALL: [AiTool; 5] = [AiTool::Claude, AiTool::Codex, AiTool::Gemini, AiTool::Grok, AiTool::Local];
 
     /// Name shown in Settings.
     pub fn name(self) -> &'static str {
         match self {
             AiTool::Claude => "Claude",
             AiTool::Codex => "Codex",
+            AiTool::Gemini => "Gemini",
             AiTool::Grok => "Grok",
             AiTool::Local => "Local model",
         }
@@ -57,6 +59,7 @@ impl AiTool {
         match self {
             AiTool::Claude => "claude",
             AiTool::Codex => "codex",
+            AiTool::Gemini => "gemini",
             AiTool::Grok => "grok",
             AiTool::Local => "local",
         }
@@ -77,6 +80,11 @@ impl AiTool {
             }
             // Read-only sandbox; notes folders are often not git repositories.
             AiTool::Codex => "codex exec --sandbox read-only --skip-git-repo-check --color never {prompt}",
+            // Plan mode is Gemini's read-only mode. Gemini has no system prompt
+            // option, so the rules lead {prompt}. No --skip-trust: in a folder
+            // the user has not trusted in Gemini, its settings and MCP servers
+            // must not load, so Gemini stops with an error instead.
+            AiTool::Gemini => "gemini --approval-mode plan --output-format text --prompt {prompt}",
             AiTool::Grok => "grok --prompt {prompt}",
             AiTool::Local => "ollama run qwen2.5:1.5b {prompt}",
         }
@@ -86,6 +94,7 @@ impl AiTool {
     pub fn full_name(self) -> &'static str {
         match self {
             AiTool::Claude => "Claude Code",
+            AiTool::Gemini => "Gemini CLI",
             tool => tool.name(),
         }
     }
@@ -99,7 +108,7 @@ pub struct AiSettings {
     /// Tool for summaries and file titles; `None` turns them off.
     pub summary_tool: Option<AiTool>,
     /// Command templates, one per tool in [`AiTool::ALL`] order.
-    commands: [String; 4],
+    commands: [String; 5],
     /// Folders where the user allowed AI runs ("Don't ask again").
     pub allowed_folders: Vec<PathBuf>,
     /// Folder with Rubrique's skills; `None` means the default one.
@@ -110,6 +119,8 @@ pub struct AiSettings {
     pub agents_folder: Option<PathBuf>,
     /// Also offer Claude Code's agents from `~/.claude/agents`.
     pub use_claude_agents: bool,
+    /// Also offer Gemini CLI's agents from `~/.gemini/agents`.
+    pub use_gemini_agents: bool,
 }
 
 impl Default for AiSettings {
@@ -123,6 +134,7 @@ impl Default for AiSettings {
             skill_sources_off: Vec::new(),
             agents_folder: None,
             use_claude_agents: true,
+            use_gemini_agents: true,
         }
     }
 }
@@ -160,6 +172,7 @@ impl AiSettings {
             _ if let Some(source) = skill_source_key(key) => self.set_skill_source(source, value != "false"),
             "agents_folder" => self.agents_folder = (!value.is_empty()).then(|| PathBuf::from(value)),
             "ai_use_claude_agents" => self.use_claude_agents = value != "false",
+            "ai_use_gemini_agents" => self.use_gemini_agents = value != "false",
             "ai_allowed_folder" => {
                 if !value.is_empty() {
                     self.allowed_folders.push(PathBuf::from(value));
@@ -196,6 +209,9 @@ impl AiSettings {
         }
         if !self.use_claude_agents {
             lines.push_str("ai_use_claude_agents=false\n");
+        }
+        if !self.use_gemini_agents {
+            lines.push_str("ai_use_gemini_agents=false\n");
         }
         for folder in &self.allowed_folders {
             let _ = writeln!(lines, "ai_allowed_folder={}", folder.display());
@@ -258,12 +274,16 @@ impl AiSettings {
     }
 
     /// Folders to read agents from, Rubrique's own first, each with the tool
-    /// its agents use when they name none (Claude Code's agents run on Claude).
+    /// its agents use when they name none (Claude Code's agents run on Claude,
+    /// Gemini CLI's on Gemini).
     pub fn agent_folders(&self, default_folder: Option<PathBuf>) -> Vec<(PathBuf, Option<AiTool>)> {
         let mut folders: Vec<_> =
             self.agents_folder.clone().or(default_folder).into_iter().map(|folder| (folder, None)).collect();
         if self.use_claude_agents {
             folders.extend(agents::claude_agents_folder().map(|folder| (folder, Some(AiTool::Claude))));
+        }
+        if self.use_gemini_agents {
+            folders.extend(agents::gemini_agents_folder().map(|folder| (folder, Some(AiTool::Gemini))));
         }
         folders
     }
@@ -598,6 +618,67 @@ mod tests {
     }
 
     #[test]
+    fn gemini_runs_in_plan_mode_with_the_rules_in_the_prompt() {
+        let command = AiTool::Gemini.default_command();
+        assert!(command.starts_with("gemini "));
+        assert!(command.contains("--approval-mode plan"));
+        assert!(!command.contains("--skip-trust"));
+        let prompt = Prompt { system: "Rules.".to_string(), user: "shorter".to_string() };
+        let (program, args) = command_args(command, &prompt).unwrap_or_default();
+        assert_eq!(program, "gemini");
+        assert_eq!(args.last().map(String::as_str), Some("Rules.\n\nshorter"));
+        assert_eq!(AiTool::Gemini.full_name(), "Gemini CLI");
+    }
+
+    #[test]
+    fn keeps_gemini_settings() {
+        let mut settings =
+            AiSettings { default_tool: AiTool::Gemini, use_gemini_agents: false, ..AiSettings::default() };
+        settings.summary_tool = Some(AiTool::Gemini);
+        settings.set_command(AiTool::Gemini, "gemini -m flash --approval-mode plan --prompt {prompt}");
+        settings.set_skill_source(SkillSource::Gemini, false);
+        let text = settings.to_lines();
+        assert!(text.contains("ai_command_gemini=gemini -m flash --approval-mode plan --prompt {prompt}\n"));
+        assert!(text.contains("ai_use_gemini_skills=false\n"));
+        assert!(text.contains("ai_use_gemini_agents=false\n"));
+        let mut read = AiSettings::default();
+        for line in text.lines() {
+            let (key, value) = line.split_once('=').unwrap_or_default();
+            assert!(read.parse_line(key, value), "{key}");
+        }
+        assert_eq!(read, settings);
+    }
+
+    #[test]
+    fn an_old_settings_file_without_gemini_still_loads() {
+        let old = "ai_tool=grok\nai_summary_tool=local\nai_command_grok=grok -p {prompt}\n\
+                   ai_use_grok_skills=false\nai_use_claude_agents=false\n";
+        let mut read = AiSettings::default();
+        for line in old.lines() {
+            let (key, value) = line.split_once('=').unwrap_or_default();
+            assert!(read.parse_line(key, value), "{key}");
+        }
+        assert_eq!(read.default_tool, AiTool::Grok);
+        assert_eq!(read.command(AiTool::Grok), "grok -p {prompt}");
+        assert_eq!(read.command(AiTool::Gemini), AiTool::Gemini.default_command());
+        assert!(read.uses_skill_source(SkillSource::Gemini));
+        assert!(read.use_gemini_agents);
+        assert!(!read.use_claude_agents);
+    }
+
+    #[test]
+    fn gemini_agents_run_on_gemini() {
+        let settings = AiSettings { use_claude_agents: false, ..AiSettings::default() };
+        let folders = settings.agent_folders(Some(PathBuf::from("/agents")));
+        assert_eq!(folders.first(), Some(&(PathBuf::from("/agents"), None)));
+        if let Some(gemini) = agents::gemini_agents_folder() {
+            assert_eq!(folders.get(1), Some(&(gemini, Some(AiTool::Gemini))));
+        }
+        let off = AiSettings { use_gemini_agents: false, ..settings };
+        assert_eq!(off.agent_folders(Some(PathBuf::from("/agents"))), [(PathBuf::from("/agents"), None)]);
+    }
+
+    #[test]
     fn summaries_can_be_off() {
         let mut settings = AiSettings::default();
         assert!(settings.parse_line("ai_summary_tool", "off"));
@@ -690,9 +771,10 @@ mod tests {
     fn remembers_allowed_folders() {
         let mut settings = AiSettings {
             skills_folder: Some(PathBuf::from("/s")),
-            skill_sources_off: vec![SkillSource::Agents, SkillSource::Claude, SkillSource::Grok],
+            skill_sources_off: vec![SkillSource::Agents, SkillSource::Claude, SkillSource::Grok, SkillSource::Gemini],
             agents_folder: Some(PathBuf::from("/agents")),
             use_claude_agents: false,
+            use_gemini_agents: false,
             ..AiSettings::default()
         };
         assert_eq!(settings.agent_folders(None), [(PathBuf::from("/agents"), None)]);
