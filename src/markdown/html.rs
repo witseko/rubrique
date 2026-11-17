@@ -119,6 +119,14 @@ fn write_block(out: &mut String, block: &Block) {
         Block::List(list) => write_list(out, list),
         Block::Table(table) => write_table(out, table),
         Block::ThematicBreak => out.push_str("<hr>\n"),
+        // As GitHub shows front matter: a table of its fields.
+        Block::FrontMatter(front) => {
+            out.push_str("<table>\n<tbody>\n");
+            for (key, value) in &front.fields {
+                let _ = writeln!(out, "<tr><th>{}</th><td><code>{}</code></td></tr>", escape(key), escape(value));
+            }
+            out.push_str("</tbody>\n</table>\n");
+        }
         Block::Aligned { align, blocks } => {
             let _ = writeln!(out, "<div style=\"text-align: {}\">", align_name(*align));
             write_blocks(out, blocks);

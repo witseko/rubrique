@@ -1984,6 +1984,7 @@ impl RubriqueApp {
             PreviewEvent::Code { index, action } => self.code_block_action(ctx, index, action),
             PreviewEvent::Memo(action) => self.memo_action(ctx, action),
             PreviewEvent::PlayVideo(path) => self.play_video(&path),
+            PreviewEvent::OpenFile(path) => self.open_in_tab(path),
             PreviewEvent::RevertChange(change) => self.revert_change(&change),
         }
     }
