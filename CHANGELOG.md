@@ -14,7 +14,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   Add folder right-click menu) clones a git repository from an https
   address or an SSH one like `git@github.com:owner/repo.git`. Choose the
   folder to clone into and, if you like, another folder name; the clone
-  opens as a new explorer folder, and git's reason shows if it fails.
+  opens as a new explorer folder, its README (if it has one) opens in a
+  tab, and git's reason shows if the clone fails.
 
 ## [1.3.0] - 2026-11-17
 

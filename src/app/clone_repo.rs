@@ -98,8 +98,8 @@ impl RubriqueApp {
         }
     }
 
-    /// When the clone is done: add its folder to the explorer and close the
-    /// dialog, or show why it failed and keep the dialog for another try.
+    /// When the clone is done: add its folder to the explorer, open its
+    /// README when it has one, and close the dialog, or show why it failed and keep the dialog for another try.
     fn finish_clone(&mut self) {
         let Some(dialog) = &mut self.clone_repo else {
             return;
@@ -113,7 +113,11 @@ impl RubriqueApp {
         match result {
             Ok(message) => {
                 self.clone_repo = None;
+                let readme = find_readme(&destination);
                 self.add_folder(destination);
+                if let Some(readme) = readme {
+                    self.open_in_tab(readme);
+                }
                 self.show_status(message);
             }
             Err(reason) => dialog.error = Some(format!("Git: {reason}")),
@@ -209,6 +213,22 @@ fn clone_destination(dialog: &CloneDialog) -> Result<PathBuf, String> {
     Ok(destination)
 }
 
+/// The README in the top of `folder`, if any: `README.md` (any case)
+/// first, then another `README` or `README.<extension>` file.
+fn find_readme(folder: &Path) -> Option<PathBuf> {
+    let mut readmes: Vec<(String, PathBuf)> = std::fs::read_dir(folder)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            (name == "readme" || name.starts_with("readme.")).then(|| (name, entry.path()))
+        })
+        .collect();
+    readmes.sort_by(|(a, _), (b, _)| (a != "readme.md", a).cmp(&(b != "readme.md", b)));
+    readmes.into_iter().next().map(|(_, path)| path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +262,18 @@ mod tests {
         assert!(clone_destination(&dialog("https://github.com/owner/repo", Some(temp.path()), "a/b")).is_err());
         let missing = temp.path().join("missing");
         assert!(clone_destination(&dialog("https://github.com/owner/repo", Some(&missing), "repo")).is_err());
+    }
+
+    #[test]
+    fn finds_the_readme_preferring_markdown() {
+        let temp = TempFolder::new();
+        assert_eq!(find_readme(temp.path()), None);
+        temp.write("notes.md", "");
+        temp.make_folder("readme");
+        assert_eq!(find_readme(temp.path()), None);
+        let plain = temp.write("README.rst", "");
+        assert_eq!(find_readme(temp.path()), Some(plain));
+        let markdown = temp.write("Readme.md", "");
+        assert_eq!(find_readme(temp.path()), Some(markdown));
     }
 }
