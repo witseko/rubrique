@@ -16,6 +16,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   folder to clone into and, if you like, another folder name; the clone
   opens as a new explorer folder, its README (if it has one) opens in a
   tab, and git's reason shows if the clone fails.
+- **Install with Cargo**: `cargo install rubrique` builds the editor from
+  crates.io. Every stable release is published there automatically.
 
 ## [1.3.0] - 2026-11-17
 
