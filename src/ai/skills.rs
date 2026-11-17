@@ -15,7 +15,7 @@
 //! text for the selection.
 //!
 //! Skills come from several [`SkillSource`]s: Rubrique's own folder and the
-//! folders other agents read (`~/.agents/skills`, Claude Code, Grok).
+//! folders other agents read (`~/.agents/skills`, Claude Code, Grok, Gemini).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -37,10 +37,12 @@ pub enum SkillSource {
     Claude,
     /// Grok's `~/.grok/skills`.
     Grok,
+    /// Gemini CLI's `~/.gemini/skills`.
+    Gemini,
 }
 
 impl SkillSource {
-    pub const ALL: [SkillSource; 4] = [Self::Rubrique, Self::Agents, Self::Claude, Self::Grok];
+    pub const ALL: [SkillSource; 5] = [Self::Rubrique, Self::Agents, Self::Claude, Self::Grok, Self::Gemini];
 
     /// Key used in the settings file.
     pub fn id(self) -> &'static str {
@@ -49,6 +51,7 @@ impl SkillSource {
             Self::Agents => "agents",
             Self::Claude => "claude",
             Self::Grok => "grok",
+            Self::Gemini => "gemini",
         }
     }
 
@@ -59,6 +62,7 @@ impl SkillSource {
             Self::Agents => "Agents",
             Self::Claude => "Claude Code",
             Self::Grok => "Grok",
+            Self::Gemini => "Gemini CLI",
         }
     }
 
@@ -70,6 +74,7 @@ impl SkillSource {
             Self::Agents => ".agents/skills",
             Self::Claude => ".claude/skills",
             Self::Grok => ".grok/skills",
+            Self::Gemini => ".gemini/skills",
         };
         std::env::var_os("HOME").map(|home| Path::new(&home).join(relative))
     }
@@ -290,6 +295,22 @@ mod tests {
         // An unclosed front matter block is just text.
         let open = parse_skill("---\nname: x\nbody", "f", PathBuf::new()).unwrap_or_else(|| panic!("parsed"));
         assert_eq!(open.name, "f");
+    }
+
+    #[test]
+    fn gemini_skills_come_from_its_home_folder() {
+        assert_eq!((SkillSource::Gemini.id(), SkillSource::Gemini.name()), ("gemini", "Gemini CLI"));
+        if let Some(folder) = SkillSource::Gemini.home_folder() {
+            assert!(folder.ends_with(".gemini/skills"));
+        }
+        let root = std::env::temp_dir().join(format!("rubrique-gemini-skills-{}", std::process::id()));
+        fs::create_dir_all(root.join("tidy")).unwrap_or_default();
+        fs::write(root.join("tidy").join(SKILL_FILE), "---\nname: tidy\n---\nUse lists.").unwrap_or_default();
+        let skills = load_skills(&[(SkillSource::Gemini, root.clone())]);
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].source, SkillSource::Gemini);
+        assert_eq!(skills[0].instructions, "Use lists.");
+        fs::remove_dir_all(&root).unwrap_or_default();
     }
 
     #[test]

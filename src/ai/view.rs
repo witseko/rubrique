@@ -79,7 +79,7 @@ impl AskBar {
     }
 
     /// Use `agent` for this request, and its tool when it has one that is installed.
-    fn pick_agent(&mut self, agent: &Agent, installed: [bool; 4]) {
+    fn pick_agent(&mut self, agent: &Agent, installed: [bool; 5]) {
         if let Some(tool) = agent.tool
             && AiTool::ALL.into_iter().zip(installed).any(|(each, found)| each == tool && found)
         {
@@ -114,14 +114,14 @@ impl AskBar {
     }
 
     /// Use the suggested `agent` and take its `@` word out of the request.
-    fn pick_suggested(&mut self, agent: &Agent, mention: &TypedMention, installed: [bool; 4]) {
+    fn pick_suggested(&mut self, agent: &Agent, mention: &TypedMention, installed: [bool; 5]) {
         self.pick_agent(agent, installed);
         self.request = mention_list::remove_mention(&self.request, mention.range.clone());
     }
 
     /// Turn a finished `@ai-name ` at the start of the field into the
     /// agent chip. An unknown `@ai-` name leaves the text and sets an error.
-    fn take_mention(&mut self, agents: &[Agent], installed: [bool; 4]) {
+    fn take_mention(&mut self, agents: &[Agent], installed: [bool; 5]) {
         self.error = None;
         if self.agent.is_some() || self.typing_mention().is_some() {
             return;
@@ -183,7 +183,7 @@ pub enum AskEvent {
 #[derive(Debug)]
 pub struct AskBarInfo<'a> {
     /// Which tools are installed, in [`AiTool::ALL`] order.
-    pub installed: [bool; 4],
+    pub installed: [bool; 5],
     pub skills: &'a [Skill],
     pub agents: &'a [Agent],
     /// What Run would send now (see [`AskBar::shown`]).
@@ -592,7 +592,7 @@ fn boxed(ui: &mut Ui, contents: impl FnOnce(&mut Ui)) {
 }
 
 /// "Compare with": none, or a second tool (not the first one).
-fn compare_picker(ui: &mut Ui, bar: &mut AskBar, installed: [bool; 4]) {
+fn compare_picker(ui: &mut Ui, bar: &mut AskBar, installed: [bool; 5]) {
     if bar.compare == Some(bar.tool) {
         bar.compare = None;
     }
@@ -619,7 +619,7 @@ fn compare_picker(ui: &mut Ui, bar: &mut AskBar, installed: [bool; 4]) {
 }
 
 /// A small drop-down of the tools; ones that were not found are disabled.
-fn tool_picker(ui: &mut Ui, tool: &mut AiTool, installed: [bool; 4]) {
+fn tool_picker(ui: &mut Ui, tool: &mut AiTool, installed: [bool; 5]) {
     egui::ComboBox::from_id_salt("ask-tool").selected_text(tool.name()).width(TOOL_PICKER_WIDTH).show_ui(ui, |ui| {
         for (choice, found) in AiTool::ALL.into_iter().zip(installed) {
             ui.add_enabled_ui(found, |ui| ui.selectable_value(tool, choice, choice.name()))

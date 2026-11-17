@@ -24,6 +24,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Footnotes in the preview.** A footnote reference such as `[^source]`
   shows its label in superscript, and the footnote line itself starts on
   its own line without the colon.
+- **Gemini CLI as an agent.** Settings → AI lists Google's `gemini` next
+  to Claude Code, Codex and Grok, with a one-click npm install. It runs
+  in plan mode, the closest Gemini has to read-only. Skills from
+  `~/.gemini/skills` and agents from `~/.gemini/agents` show up too, each
+  with its own switch.
+  Gemini only runs in folders you trusted in Gemini.
 
 ### Fixed
 
