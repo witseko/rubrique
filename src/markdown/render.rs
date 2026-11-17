@@ -1038,10 +1038,45 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
                     .on_hover_text(format!("{url} (not opened: only web, mail and Markdown file links open)")),
             );
         }
+        None if style.code => {
+            note_tip(code_label(ui, rich, style));
+        }
         None => {
             note_tip(ui.label(rich));
         }
     }
+}
+
+/// A selectable label for inline code, moved down so its baseline meets
+/// the text around it. egui centers every label in its row, which puts the
+/// smaller monospace font a little higher than the body text.
+fn code_label(ui: &mut Ui, rich: RichText, style: &TextStyle) -> egui::Response {
+    let drop = code_baseline_drop(ui, style);
+    let (galley_pos, galley, response) = egui::Label::new(rich).layout_in_ui(ui);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), galley.text()));
+    let color = ui.visuals().text_color();
+    egui::text_selection::LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        galley_pos + vec2(0.0, drop),
+        galley,
+        color,
+        Stroke::NONE,
+    );
+    response
+}
+
+/// How far a code span's baseline sits above the body text's when both are
+/// centered in a row, rounded to whole pixels so the text stays sharp.
+fn code_baseline_drop(ui: &Ui, style: &TextStyle) -> f32 {
+    let centered_baseline = |font_id: egui::FontId| {
+        let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap("x".to_owned(), font_id, Color32::PLACEHOLDER));
+        galley.rows[0].row.glyphs.first().map_or(0.0, |glyph| glyph.font_ascent - glyph.font_height / 2.0)
+    };
+    let drop = centered_baseline(egui::FontId::proportional(style.size))
+        - centered_baseline(egui::FontId::monospace(style.size * INLINE_CODE_SCALE));
+    let pixels_per_point = ui.pixels_per_point();
+    (drop * pixels_per_point).round() / pixels_per_point
 }
 
 /// The font, size and emphasis of one span, as drawn and as measured for tables.
@@ -1411,8 +1446,9 @@ mod tests {
     use eframe::egui;
 
     use super::{
-        Color32, IMAGE_MISSING, MAX_IMAGE_BYTES, MIN_TEXT_CONTRAST, TABLE_COLUMN_MIN_WIDTH, cached_blocks,
-        contrast_ratio, fit_column_widths, image_refusal, parse_blocks, readable_color, split_long_words,
+        Align, Color32, IMAGE_MISSING, INLINE_CODE_SCALE, MAX_IMAGE_BYTES, MIN_TEXT_CONTRAST, TABLE_COLUMN_MIN_WIDTH,
+        TextStyle, cached_blocks, code_baseline_drop, contrast_ratio, fit_column_widths, image_refusal, page_look,
+        parse_blocks, readable_color, split_long_words,
     };
     use crate::test_support::TempFolder;
 
@@ -1519,5 +1555,32 @@ mod tests {
     #[test]
     fn empty_text_is_one_empty_piece() {
         assert_eq!(split_long_words("", 10.0, 100.0), vec![String::new()]);
+    }
+
+    /// Inline code drawn in a row of body text shares its baseline.
+    #[test]
+    fn inline_code_meets_the_body_baseline() {
+        use eframe::egui::text::{LayoutJob, TextFormat};
+        let ctx = egui::Context::default();
+        crate::theme::style::install_fonts(&ctx);
+        let look = page_look();
+        let style = TextStyle::body(&look);
+        let mut gap = f32::NAN;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            // Lay both out the way a label in a wrapped row does: in a row
+            // as tall as a body line, centered.
+            let baseline = |font_id: egui::FontId, line_height: Option<f32>| {
+                let mut job = LayoutJob { first_row_min_height: style.line_height, ..LayoutJob::default() };
+                let format = TextFormat { font_id, line_height, valign: Align::Center, ..TextFormat::default() };
+                job.append("x", 0.0, format);
+                let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+                galley.rows[0].row.glyphs[0].pos.y
+            };
+            let body = baseline(egui::FontId::proportional(style.size), Some(style.line_height));
+            let code = baseline(egui::FontId::monospace(style.size * INLINE_CODE_SCALE), None);
+            gap = body - (code + code_baseline_drop(ui, &style));
+        });
+        output.textures_delta.clear();
+        assert!(gap.abs() <= 0.5, "code baseline is {gap} pt above the body text");
     }
 }

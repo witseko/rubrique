@@ -25,6 +25,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   shows its label in superscript, and the footnote line itself starts on
   its own line without the colon.
 
+### Fixed
+
+- **Inline code sits on the line.** `Code` in the Markdown preview now
+  shares the baseline of the text around it instead of riding a little
+  higher.
+
 ## [1.2.0] - 2026-11-16
 
 ### Added
