@@ -10,6 +10,17 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **File tree selection.** Shift-click to select a range, or Cmd-click on
+  Mac and Ctrl-click on Linux to add or remove individual files. Press
+  Cmd+A on Mac or Ctrl+A on Linux to select all visible files in the focused
+  tree. Use Shift+Up or Shift+Down to extend or shrink a range and Esc to
+  clear it. Press Delete or use the right-click menu to delete the
+  selection with one confirmation.
+- **Move files to a folder.** Right-click a local file or a selection in the
+  file tree and choose Move to Folder… to pick or create a destination in
+  the system dialog. Open tabs follow their files and keep unsaved edits.
+  Encrypted scratches stay encrypted and follow scratch password changes.
+  If a saved draft needs the scratch password, enter it to continue the move.
 - **Open folder in the file manager.** Right-click a local folder in the file
   tree to open it in Finder on macOS or the default file manager on Linux.
 

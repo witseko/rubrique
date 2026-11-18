@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::Read as _;
+use std::io::{self, Read as _};
 use std::path::Path;
 
 use argon2::password_hash::{PasswordHasher, PasswordVerifier};
@@ -33,8 +33,21 @@ pub fn is_encrypted(bytes: &[u8]) -> bool {
 
 /// The file on disk is encrypted (reads only its first bytes).
 pub fn file_is_encrypted(path: &Path) -> bool {
+    read_encryption_marker(path).unwrap_or(false)
+}
+
+/// Check the file header, distinguishing a plain file from a read error.
+///
+/// # Errors
+///
+/// Fails when the file cannot be opened or its header cannot be read.
+pub fn read_encryption_marker(path: &Path) -> io::Result<bool> {
     let mut head = [0; MAGIC.len()];
-    File::open(path).and_then(|mut file| file.read_exact(&mut head)).is_ok() && head == MAGIC
+    match File::open(path)?.read_exact(&mut head) {
+        Ok(()) => Ok(head == MAGIC),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// Why encrypted bytes could not be opened.
@@ -212,14 +225,16 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     bytes
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+/// Encode bytes as lowercase hexadecimal.
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::with_capacity(bytes.len() * 2), |mut text, byte| {
         let _ = write!(text, "{byte:02x}");
         text
     })
 }
 
-fn from_hex(text: &str) -> Option<Vec<u8>> {
+/// Decode hexadecimal bytes, rejecting invalid input.
+pub(crate) fn from_hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
     }

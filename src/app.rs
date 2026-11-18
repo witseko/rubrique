@@ -20,6 +20,7 @@ mod html_snapshot;
 mod images;
 mod install;
 mod menu_bar;
+mod move_files;
 mod naming;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -27,6 +28,7 @@ mod new_entry;
 mod open_path;
 mod privacy;
 mod remote;
+mod scratch_paths;
 mod side_panel;
 mod structure;
 mod sublime_import;
@@ -58,6 +60,7 @@ use crate::document::view::{
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
 use crate::explorer::reorder::move_item;
+use crate::explorer::selection::FileSelection;
 use crate::explorer::tree::{FsNode, is_markdown_path};
 use crate::explorer::view::{
     ExplorerAction, ExplorerEdits, InlineRename, NewEntry, Revealed, SessionEdit, TreeContext, show_explorer,
@@ -385,8 +388,10 @@ pub struct RubriqueApp {
     revealed: Option<PathBuf>,
     /// Scroll the tree to `revealed` on the next frame.
     scroll_to_revealed: bool,
-    /// The file the "Delete" dialog asks about, while it is open.
-    deleting: Option<PathBuf>,
+    /// The files or folder the "Delete" dialog asks about, while it is open.
+    deleting: Option<Vec<PathBuf>>,
+    /// The range selected in the file tree.
+    file_selection: FileSelection,
     /// The "Open path" dialog, while it is open.
     open_path: Option<open_path::OpenPathDialog>,
     /// The "Clone repository" dialog, while it is open.
@@ -502,6 +507,7 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            file_selection: FileSelection::default(),
             open_path: None,
             clone_repo: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
@@ -1622,12 +1628,22 @@ impl RubriqueApp {
         if self.remote_save_running(path) {
             return Err("Cannot rename while it is being saved; try again in a moment".to_string());
         }
-        crate::vfs::rename(path, &target).map_err(|error| format!("Cannot rename: {error}"))?;
-        let uri = image_uri(path);
+        scratch_paths::follow_relocation(&mut self.settings, path, &target, false, Settings::save, || {
+            crate::vfs::rename(path, &target)
+        })
+        .map_err(|error| format!("Cannot rename: {error}"))?;
+        self.follow_relocated_path(path, &target);
+        self.roots.iter_mut().for_each(FsNode::refresh);
+        self.show_status(format!("Renamed to {}", name_text(&target)));
+        Ok(())
+    }
+
+    /// Update tabs, cached images and the last file after a path moves on disk.
+    fn follow_relocated_path(&mut self, path: &Path, target: &Path) {
         // A renamed folder moves every open file inside it too.
         let moved = |old: &Path| -> PathBuf {
             match old.strip_prefix(path) {
-                Ok(rest) if rest.as_os_str().is_empty() => target.clone(),
+                Ok(rest) if rest.as_os_str().is_empty() => target.to_path_buf(),
                 Ok(rest) => target.join(rest),
                 Err(_) => old.to_path_buf(),
             }
@@ -1638,13 +1654,10 @@ impl RubriqueApp {
                 tab.set_path(&new);
             }
         }
-        self.repaint.forget_image(&uri);
+        self.repaint.forget_image(&image_uri(path));
         if let Some(last) = self.settings.last_file.as_deref().filter(|last| last.starts_with(path)) {
             self.settings.last_file = Some(moved(last));
         }
-        self.roots.iter_mut().for_each(FsNode::refresh);
-        self.show_status(format!("Renamed to {}", name_text(&target)));
-        Ok(())
     }
 
     /// Rename the file whose tree row was just submitted; on failure the
@@ -1820,6 +1833,7 @@ impl RubriqueApp {
                 new_entry: &mut self.new_entry,
                 session: &mut self.session_edit,
             },
+            &mut self.file_selection,
         );
         self.scroll_to_revealed = false;
         self.finish_tree_rename();
@@ -1877,7 +1891,8 @@ impl RubriqueApp {
                 self.clear_name_fields();
                 self.tree_rename = Some(InlineRename::new(path));
             }
-            Some(ExplorerAction::Delete(path)) => self.request_delete(path),
+            Some(ExplorerAction::MoveFiles(paths)) => self.choose_move_folder(&paths),
+            Some(ExplorerAction::Delete(paths)) => self.request_delete(paths),
             None => {}
         }
     }

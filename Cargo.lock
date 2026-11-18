@@ -2755,6 +2755,7 @@ dependencies = [
  "objc2-local-authentication",
  "regex",
  "rfd",
+ "rustix 1.1.6",
  "security-framework",
  "serde_json",
  "trash",
