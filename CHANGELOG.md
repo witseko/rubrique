@@ -24,6 +24,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Open folder in the file manager.** Right-click a local folder in the file
   tree to open it in Finder on macOS or the default file manager on Linux.
 
+### Fixed
+
+- **File tree keyboard focus.** Shift+Up and Shift+Down keep focus on the
+  end of the selection as the file tree scrolls.
+
 ## [1.4.1] - 2026-11-18
 
 ### Changed
