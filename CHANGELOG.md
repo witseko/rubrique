@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Open folder in the file manager.** Right-click a local folder in the file
+  tree to open it in Finder on macOS or the default file manager on Linux.
+
 ## [1.4.1] - 2026-11-18
 
 ### Changed

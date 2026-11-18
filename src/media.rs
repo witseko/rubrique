@@ -1,9 +1,9 @@
-//! Image and video files: which files they are, and how to name their size.
-//!
-//! Pure apart from [`open_with_system`], which starts the system's "open"
-//! program.
+//! Image and video file details and helpers for opening paths with the system.
 
 use std::path::Path;
+use std::process::{Command, Stdio};
+
+const SYSTEM_OPENER: &str = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
 
 /// Image formats Rubrique decodes and shows (the `image` crate features in
 /// `Cargo.toml`). SVG is left out: it opens as XML text.
@@ -80,20 +80,69 @@ pub fn size_text(bytes: u64) -> String {
 /// Open `path` with the program the system uses for its type (the video
 /// player for a video). Returns an error message for the status bar.
 pub fn open_with_system(path: &Path) -> Result<(), String> {
-    let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    std::process::Command::new(program)
-        .arg(path)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    start_opener(Command::new(SYSTEM_OPENER).arg(path))
+}
+
+/// Open a local folder in Finder or the default Linux file manager.
+pub fn open_in_file_manager(path: &Path) -> Result<(), String> {
+    start_opener(&mut file_manager_command(path)?)
+}
+
+/// Build the opener command after checking that the target is a folder.
+fn file_manager_command(path: &Path) -> Result<Command, String> {
+    let path = std::path::absolute(path).map_err(|error| format!("Cannot resolve folder path: {error}"))?;
+    if !path.is_dir() {
+        return Err(format!("Cannot open folder: {}", path.display()));
+    }
+    let mut command = Command::new(SYSTEM_OPENER);
+    // Finder should open the directory even when macOS treats it as an app bundle.
+    if cfg!(target_os = "macos") {
+        command.args(["-b", "com.apple.finder"]);
+    }
+    command.arg(path);
+    Ok(command)
+}
+
+/// Start the system opener and report a failure to launch it.
+fn start_opener(command: &mut Command) -> Result<(), String> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(drop)
-        .map_err(|error| format!("Cannot start {program}: {error}"))
+        .map_err(|error| format!("Cannot start {SYSTEM_OPENER}: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::TempFolder;
+
+    #[test]
+    fn file_manager_passes_the_folder_path_as_one_argument() {
+        let folder = TempFolder::new();
+        let target = folder.path().join("- My notes.app");
+        std::fs::create_dir(&target).unwrap();
+
+        let command = file_manager_command(&target).unwrap();
+        assert_eq!(command.get_program(), SYSTEM_OPENER);
+        let args: Vec<_> = command.get_args().collect();
+        let target = target.as_os_str();
+        if cfg!(target_os = "macos") {
+            assert_eq!(args, ["-b".as_ref(), "com.apple.finder".as_ref(), target]);
+        } else {
+            assert_eq!(args, [target]);
+        }
+    }
+
+    #[test]
+    fn file_manager_rejects_files_and_missing_folders() {
+        let folder = TempFolder::new();
+        let file = folder.write("notes.md", "notes");
+        assert!(open_in_file_manager(&file).is_err());
+        assert!(open_in_file_manager(&folder.path().join("missing")).is_err());
+    }
 
     #[test]
     fn kinds_come_from_the_extension_in_any_case() {

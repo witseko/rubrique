@@ -1832,6 +1832,11 @@ impl RubriqueApp {
         match action {
             // Opens a tab, or switches to the file's tab when it is open.
             Some(ExplorerAction::OpenFile(path)) => self.open_in_tab(path),
+            Some(ExplorerAction::OpenInFileManager(path)) => {
+                if let Err(error) = crate::media::open_in_file_manager(&path) {
+                    self.show_status(error);
+                }
+            }
             Some(ExplorerAction::Copy(text)) => self.copy_to_clipboard(ui.ctx(), text),
             Some(ExplorerAction::Refresh) => {
                 self.roots.iter_mut().for_each(FsNode::refresh);
