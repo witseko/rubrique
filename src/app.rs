@@ -999,7 +999,6 @@ impl RubriqueApp {
             *preview = None;
         }
         self.handle_undo_keys(ctx);
-        self.prepare_find(ctx);
     }
 
     /// Cmd+Z and Shift+Cmd+Z (or Cmd+Y) when no text box takes the keys, as
@@ -1901,7 +1900,6 @@ impl RubriqueApp {
             self.recording_bar(ui);
         }
         let showing_preview = self.showing_preview();
-        let showing_html_preview = self.showing_html_preview();
         let mentions = self.mentions(ui.ctx());
         self.refresh_block_changes();
         let mut notice_choice = None;
@@ -1909,13 +1907,12 @@ impl RubriqueApp {
         let mut merge_action = None;
         let mut preview_event = None;
         let mut media_event = None;
-        if let OpenFile::Locked { path } = &self.open_file {
-            let path = path.clone();
-            self.locked_tab(ui, &path);
-            return;
-        }
         match &mut self.open_file {
-            OpenFile::Locked { .. } => {}
+            OpenFile::Locked { path } => {
+                let path = path.clone();
+                self.locked_tab(ui, &path);
+                return;
+            }
             OpenFile::Terminal { terminal } => show_terminal(ui, terminal),
             OpenFile::Nothing => {
                 ui.centered_and_justified(|ui| ui.label(RichText::new("Pick a file in the explorer").weak()));
@@ -1945,22 +1942,24 @@ impl RubriqueApp {
                     let blocks = preview.get_or_insert_with(|| parse_source_blocks(&document.text));
                     let folder = document.path.parent().unwrap_or(Path::new("/"));
                     set_memo_states(ui.ctx(), self.voice.memo_states(folder, blocks));
-                    let output = show_preview(
-                        ui,
-                        &document.path,
-                        blocks,
-                        self.settings.layout.preview_mode == PreviewMode::Edit,
-                        self.block_edit.as_mut(),
-                        &mentions,
-                        &self.block_changes.list,
-                    );
+                    let output = find::draw_preview(ui, &mut self.find, |ui| {
+                        show_preview(
+                            ui,
+                            &document.path,
+                            blocks,
+                            self.settings.layout.preview_mode == PreviewMode::Edit,
+                            self.block_edit.as_mut(),
+                            &mentions,
+                            &self.block_changes.list,
+                        )
+                    });
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
-                } else if showing_html_preview {
+                } else if !*source && has_preview(&document.path) {
                     let use_browser = self.settings.html_browser_preview;
-                    preview_event = self.html_snapshots.show_preview(ui, document, preview, use_browser);
-                } else if !*source && is_rst_path(&document.path) {
-                    preview_event = show_rst_preview(ui, document, preview);
+                    let snapshots = &mut self.html_snapshots;
+                    preview_event =
+                        show_read_only_file_preview(ui, document, preview, snapshots, use_browser, &mut self.find);
                 } else {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
@@ -2765,10 +2764,24 @@ fn has_preview(path: &Path) -> bool {
     is_markdown_path(path) || is_html_path(path) || is_rst_path(path)
 }
 
-/// The read-only preview of a reStructuredText file, parsed once per change.
-fn show_rst_preview(ui: &mut Ui, document: &Document, preview: &mut Option<Vec<SourceBlock>>) -> Option<PreviewEvent> {
-    let blocks = preview.get_or_insert_with(|| rst_source_blocks(&document.text));
-    show_read_only_preview(ui, &document.path, blocks)
+/// Draw an HTML or reStructuredText file in read mode.
+fn show_read_only_file_preview(
+    ui: &mut Ui,
+    document: &Document,
+    preview: &mut Option<Vec<SourceBlock>>,
+    html_snapshots: &mut html_snapshot::HtmlSnapshots,
+    use_browser: bool,
+    find: &mut Option<find::FindBar>,
+) -> Option<PreviewEvent> {
+    find::draw_preview(ui, find, |ui| {
+        if is_html_path(&document.path) {
+            // Chromium supplies an image. Find needs the built-in renderer's text.
+            let use_browser = use_browser && !crate::markdown::preview_find::active(ui);
+            return html_snapshots.show_preview(ui, document, preview, use_browser);
+        }
+        let blocks = preview.get_or_insert_with(|| rst_source_blocks(&document.text));
+        show_read_only_preview(ui, &document.path, blocks)
+    })
 }
 
 /// A hairline between two groups of buttons in the status bar.
@@ -3153,6 +3166,7 @@ impl eframe::App for RubriqueApp {
                 .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
                 .show(ui, |ui| self.helm_panel(ui));
         }
+        self.prepare_find(&ctx);
         egui::CentralPanel::default().frame(page_frame).show(ui, |ui| self.document_area(ui));
         self.handle_dropped_files(&ctx);
         self.open_system_documents(&ctx);

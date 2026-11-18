@@ -164,12 +164,17 @@ pub fn match_fill(visuals: &egui::Visuals) -> Color32 {
     visuals.warn_fg_color.gamma_multiply(MATCH_TINT)
 }
 
+/// The accent tint behind the current find match.
+pub fn current_match_fill(visuals: &egui::Visuals) -> Color32 {
+    visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT)
+}
+
 /// Tint the find matches behind the text, the current one in the accent,
 /// and scroll to the current one when asked.
 fn paint_matches(ui: &Ui, output: &TextEditOutput, text: &str, find: FindHighlight<'_>) {
     let visuals = ui.visuals();
     let tint = match_fill(visuals);
-    let current_tint = visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT);
+    let current_tint = current_match_fill(visuals);
     let clip = ui.clip_rect();
     // Byte to character conversion, walking forward through the sorted matches.
     let mut walked = (0_usize, 0_usize);

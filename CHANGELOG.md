@@ -8,6 +8,17 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Find in preview.** Cmd+F searches and highlights the rendered text of
+  Markdown, HTML and reStructuredText files while keeping the preview open.
+  HTML uses the built-in text preview while a Find query is active.
+
+### Fixed
+
+- **Preview highlights.** Find matches and selected text fit the height of the
+  text and leave the space between lines clear.
+
 ## [1.4.0] - 2026-11-17
 
 ### Added

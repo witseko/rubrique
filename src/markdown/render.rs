@@ -12,6 +12,8 @@ use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
 use super::front_matter_view::{CardSizes, render_front_matter};
 use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url, parse_inlines};
 use super::local_links::{bundle_root, link_target};
+use super::preview_find::{self, Match};
+use super::preview_highlights;
 use super::table_edit::TableCell;
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::media::{MAX_IMAGE_BYTES, MediaKind, image_uri, is_image_path, media_kind_of_url};
@@ -201,13 +203,13 @@ fn render_blocks_at(ui: &mut Ui, look: &Look, blocks: &[Block], depth: usize, ga
 
 /// Draw one top-level block (for the clickable preview).
 pub fn render_top_block(ui: &mut Ui, block: &Block) {
-    render_block(ui, &page_look(), block, 0);
+    preview_highlights::fit(ui, |ui| render_block(ui, &page_look(), block, 0));
 }
 
 /// Draw one top-level block of a page that is not edited in place (the
 /// HTML preview). Code blocks still offer Copy (see `take_code_action`).
 pub fn render_read_only_block(ui: &mut Ui, block: &Block) {
-    render_block(ui, &read_only_page_look(), block, 0);
+    preview_highlights::fit(ui, |ui| render_block(ui, &read_only_page_look(), block, 0));
 }
 
 /// Space above a top-level block that follows another one.
@@ -431,10 +433,12 @@ fn render_code(ui: &mut Ui, look: &Look, info: &str, code: &str) {
             Some(syntax) => {
                 let style =
                     HighlightStyle::from_ui(ui).with_size(CODE_SIZE * page_zoom(), CODE_LINE_HEIGHT * page_zoom());
-                ui.label(highlighted(ui.ctx(), code, &style, Some(syntax)));
+                let job = highlighted(ui.ctx(), code, &style, Some(syntax));
+                preview_find::label(ui, job);
             }
             None => {
-                ui.label(
+                preview_find::label(
+                    ui,
                     RichText::new(code)
                         .monospace()
                         .size(CODE_SIZE * page_zoom())
@@ -475,7 +479,7 @@ fn code_header(ui: &mut Ui, header: egui::Rect, info: &str, code: &str, hovered:
         }
     }
     if !info.is_empty() {
-        ui.label(RichText::new(info).size(CODE_LABEL_SIZE).weak());
+        preview_find::label(ui, RichText::new(info).size(CODE_LABEL_SIZE).weak());
     }
     if let Some(action) = action {
         ui.ctx().data_mut(|data| data.insert_temp(code_action_id(), action));
@@ -526,7 +530,7 @@ pub type CellEditor<'a> = &'a mut dyn FnMut(&mut Ui);
 /// Draw a top-level table with `editing` replaced by what `editor` draws
 /// (the preview's text box for the cell's Markdown).
 pub fn render_top_table(ui: &mut Ui, table: &Table, editing: TableCell, editor: CellEditor<'_>) {
-    render_table(ui, &page_look(), table, Some((editing, editor)));
+    preview_highlights::fit(ui, |ui| render_table(ui, &page_look(), table, Some((editing, editor))));
 }
 
 /// The table cell clicked this frame in the preview, if any (taken once).
@@ -882,27 +886,64 @@ fn render_inlines(ui: &mut Ui, inlines: &[Inline], style: &TextStyle) {
         // Spans touch; the line height alone sets the space between lines.
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
         let wrap_width = ui.max_rect().width();
-        for span in spans {
-            match span {
+        for group in spans.chunk_by(|left, right| matches!((left, right), (Span::Text(..), Span::Text(..)))) {
+            match &group[0] {
                 Span::LineBreak => ui.end_row(),
-                Span::Text(text, style) => {
-                    for (part, color) in rule_parts(ui.ctx(), &highlight, &text, &style) {
-                        // A match gets the rule's color; the rest keeps the style it came with.
-                        let part_style = match color {
-                            Some(color) => {
-                                TextStyle { html: HtmlStyle { color: Some(color), ..style.html }, ..style.clone() }
-                            }
-                            None => style.clone(),
-                        };
-                        for piece in split_long_words(&part, style.size, wrap_width) {
-                            render_span(ui, piece, &part_style);
-                        }
-                    }
+                Span::Text(..) => draw_inline_group(ui, &highlight, group, wrap_width),
+                Span::Image { alt, url, size, link } => {
+                    render_image(ui, alt, url, *size, link.as_deref());
                 }
-                Span::Image { alt, url, size, link } => render_image(ui, &alt, &url, size, link.as_deref()),
             }
         }
     });
+}
+
+/// Draw consecutive text spans, sharing offsets across their style changes.
+fn draw_inline_group(ui: &mut Ui, highlight: &HighlightStyle, spans: &[Span], wrap_width: f32) {
+    let matches = inline_matches(ui, spans);
+    let mut offset = 0;
+    for span in spans {
+        if let Span::Text(text, style) = span {
+            draw_text_run(ui, highlight, text, style, wrap_width, (offset, &matches));
+            offset += text.len();
+        }
+    }
+}
+
+/// Search consecutive inline text as one run even where its style changes.
+fn inline_matches(ui: &Ui, spans: &[Span]) -> Vec<Match> {
+    if !preview_find::active(ui) {
+        return Vec::new();
+    }
+    let mut shown = String::new();
+    for span in spans {
+        if let Span::Text(text, _) = span {
+            shown.push_str(text);
+        }
+    }
+    preview_find::scan(ui, &shown)
+}
+
+/// Draw text in pieces for wrapping or highlight rules, keeping its search offsets.
+fn draw_text_run(
+    ui: &mut Ui,
+    highlight: &HighlightStyle,
+    text: &str,
+    style: &TextStyle,
+    wrap_width: f32,
+    (mut offset, matches): (usize, &[Match]),
+) {
+    for (part, color) in rule_parts(ui.ctx(), highlight, text, style) {
+        let part_style = match color {
+            Some(color) => TextStyle { html: HtmlStyle { color: Some(color), ..style.html }, ..style.clone() },
+            None => style.clone(),
+        };
+        for piece in split_long_words(&part, style.size, wrap_width) {
+            let end = offset + piece.len();
+            render_span(ui, piece, &part_style, offset, matches);
+            offset = end;
+        }
+    }
 }
 
 /// Cut a run of plain text at the pieces the text highlight rules match
@@ -983,7 +1024,7 @@ fn split_long_words(text: &str, font_size: f32, wrap_width: f32) -> Vec<String> 
 }
 
 /// One styled run of text; links become clickable.
-fn render_span(ui: &mut Ui, text: String, style: &TextStyle) {
+fn render_span(ui: &mut Ui, text: String, style: &TextStyle, offset: usize, matches: &[Match]) {
     let mut rich = span_rich_text(text, style);
     if let Some(color) = style.html.color {
         rich = rich.color(readable_color(color32(color), page_fill(ui.visuals()), ui.visuals().text_color()));
@@ -994,7 +1035,7 @@ fn render_span(ui: &mut Ui, text: String, style: &TextStyle) {
         rich = rich.background_color(color32(background).gamma_multiply(HTML_BACKGROUND_TINT));
     }
     let Some(script) = style.html.script else {
-        span_widget(ui, rich, style);
+        span_widget(ui, rich, style, offset, matches);
         return;
     };
     // egui centers every label in its row, so superscript and subscript
@@ -1011,22 +1052,40 @@ fn render_span(ui: &mut Ui, text: String, style: &TextStyle) {
         Script::Subscript => row.center().y + normal_height / 2.0 - size.y + lift,
     };
     let rect = egui::Rect::from_min_size(pos2(row.left(), top), size);
-    span_widget(&mut ui.new_child(egui::UiBuilder::new().max_rect(rect)), rich, style);
+    span_widget(&mut ui.new_child(egui::UiBuilder::new().max_rect(rect)), rich, style, offset, matches);
 }
 
 /// The widget for one run of text: a link, a local link shown but not
 /// opened, or a label; with the note on hover when it has one.
-fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
+fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle, offset: usize, matches: &[Match]) {
     let note_tip = |response: egui::Response| match &style.note {
         Some(note) => response.on_hover_text(format!("Note: {note}")),
         None => response,
     };
+    let local_path = style
+        .link
+        .as_deref()
+        .filter(|url| !is_openable_url(url))
+        .and_then(|url| local_markdown_link(ui.ctx(), url, false));
+    let rich = if style.link.as_ref().is_some_and(|url| !is_openable_url(url)) && local_path.is_none() {
+        rich.underline()
+    } else {
+        rich
+    };
+    let (text, scroll) = preview_find::tint(ui, rich.into(), offset, matches);
     match &style.link {
         Some(url) if is_openable_url(url) => {
-            note_tip(ui.hyperlink_to(rich, url).on_hover_text(url));
+            let response = ui.hyperlink_to(text, url).on_hover_text(url);
+            if scroll.is_some() {
+                response.scroll_to_me(Some(Align::Center));
+            }
+            note_tip(response);
         }
-        Some(url) if let Some(path) = local_markdown_link(ui.ctx(), url, false) => {
-            let response = note_tip(ui.link(rich).on_hover_text(path.display().to_string()));
+        Some(_) if let Some(path) = local_path => {
+            let response = note_tip(ui.link(text).on_hover_text(path.display().to_string()));
+            if scroll.is_some() {
+                response.scroll_to_me(Some(Align::Center));
+            }
             if response.clicked() {
                 request_open(ui.ctx(), path);
             }
@@ -1034,15 +1093,15 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
         // Other local or unknown targets are shown, not opened.
         Some(url) => {
             note_tip(
-                ui.label(rich.underline())
+                preview_find::draw_label(ui, text, scroll)
                     .on_hover_text(format!("{url} (not opened: only web, mail and Markdown file links open)")),
             );
         }
         None if style.code => {
-            note_tip(code_label(ui, rich, style));
+            note_tip(code_label(ui, text, style, scroll));
         }
         None => {
-            note_tip(ui.label(rich));
+            note_tip(preview_find::draw_label(ui, text, scroll));
         }
     }
 }
@@ -1050,7 +1109,7 @@ fn span_widget(ui: &mut Ui, rich: RichText, style: &TextStyle) {
 /// A selectable label for inline code, moved down so its baseline meets
 /// the text around it. egui centers every label in its row, which puts the
 /// smaller monospace font a little higher than the body text.
-fn code_label(ui: &mut Ui, rich: RichText, style: &TextStyle) -> egui::Response {
+fn code_label(ui: &mut Ui, text: egui::WidgetText, style: &TextStyle, scroll: Option<usize>) -> egui::Response {
     // egui centers a label in the row as tall as it is so far. A code span
     // that starts a line (a paragraph, a list item, after a line break) comes
     // before any body text has made the row a full line tall, so it would be
@@ -1060,7 +1119,10 @@ fn code_label(ui: &mut Ui, rich: RichText, style: &TextStyle) -> egui::Response 
         ui.set_row_height(style.line_height);
     }
     let drop = code_baseline_drop(ui, style);
-    let (galley_pos, galley, response) = egui::Label::new(rich).layout_in_ui(ui);
+    let (galley_pos, galley, response) = egui::Label::new(text).layout_in_ui(ui);
+    if let Some(index) = scroll {
+        preview_find::scroll_to_match(ui, &galley, galley_pos + vec2(0.0, drop), index);
+    }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), galley.text()));
     let color = ui.visuals().text_color();
     egui::text_selection::LabelSelectionState::label_text_selection(
@@ -1330,7 +1392,7 @@ fn image_fallback(ui: &mut Ui, alt: &str, why: &str) {
     let name = if alt.is_empty() { "image" } else { alt };
     let page = page_look();
     let text = RichText::new(format!("[{name}]")).size(page.body_size).line_height(Some(page.body_line_height)).weak();
-    ui.label(text).on_hover_text(why);
+    preview_find::label(ui, text).on_hover_text(why);
 }
 
 /// A video in the preview: its name and a Play button that opens it in the
@@ -1348,7 +1410,7 @@ fn video_card(ui: &mut Ui, alt: &str, path: &Path) {
             crate::icons::icon_label(ui, crate::icons::Icon::Play);
             let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
             let title = if alt.is_empty() { name } else { format!("{alt} ({name})") };
-            ui.label(RichText::new(title).size(page_look().body_size));
+            preview_find::label(ui, RichText::new(title).size(page_look().body_size));
             if ui.button("Play").on_hover_text("Open in your video player").clicked() {
                 ui.ctx().data_mut(|data| data.insert_temp(play_request_id(), path.to_path_buf()));
             }
