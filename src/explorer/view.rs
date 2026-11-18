@@ -31,6 +31,8 @@ use new_file::{NamePart, new_entry_row};
 pub enum ExplorerAction {
     /// The user clicked a file.
     OpenFile(PathBuf),
+    /// Open a local folder in the system file manager.
+    OpenInFileManager(PathBuf),
     /// Put this text on the clipboard.
     Copy(String),
     /// Re-read the folders from disk.
@@ -827,8 +829,7 @@ fn link_marker(node: &FsNode) -> &'static str {
     if node.is_symlink { " ↗" } else { "" }
 }
 
-/// Right-click menu of a root: "Expand all" and "Collapse all", "New", the
-/// copy actions, then "Remove from explorer".
+/// Right-click menu of a root folder, including "Remove from explorer".
 fn root_menu(
     response: &egui::Response,
     path: &Path,
@@ -841,6 +842,7 @@ fn root_menu(
         if new_menu(ui, path, context, action) {
             ui.separator();
         }
+        open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
         let remove = ui
@@ -929,8 +931,7 @@ fn rename_delete_items(ui: &mut Ui, path: &Path, action: &mut Option<ExplorerAct
     }
 }
 
-/// Right-click menu of a folder: "Expand all" and "Collapse all", "New",
-/// the three copy actions, then "Rename…" and "Delete…".
+/// Right-click menu of a nested folder, including "Rename…" and "Delete…".
 fn folder_menu(
     response: &egui::Response,
     path: &Path,
@@ -943,10 +944,23 @@ fn folder_menu(
         if new_menu(ui, path, context, action) {
             ui.separator();
         }
+        open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
         rename_delete_items(ui, path, action);
     });
+}
+
+/// Offer to open a local folder in the system file manager.
+fn open_in_file_manager_item(ui: &mut Ui, path: &Path, action: &mut Option<ExplorerAction>) {
+    if crate::remote::is_mirror(path) {
+        return;
+    }
+    let label = if cfg!(target_os = "macos") { "Open in Finder" } else { "Open in File Manager" };
+    if ui.button(label).clicked() {
+        *action = Some(ExplorerAction::OpenInFileManager(path.to_path_buf()));
+        ui.close();
+    }
 }
 
 /// The "New" submenu of a local folder: File, Folder, and Terminal when
