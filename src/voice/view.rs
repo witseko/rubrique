@@ -100,7 +100,7 @@ pub fn memo_row(ui: &mut Ui, link: &MemoLink) {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
                     let label = if link.label.is_empty() { "Voice memo" } else { link.label.as_str() };
-                    ui.label(RichText::new(label).size(LABEL_SIZE).strong());
+                    crate::markdown::preview_find::label(ui, RichText::new(label).size(LABEL_SIZE).strong());
                     ui.label(RichText::new(time_text(&link.url, &state)).size(SMALL_SIZE).weak());
                 });
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {

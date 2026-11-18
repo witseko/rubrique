@@ -24,6 +24,7 @@ use crate::find::{
     FileHit, HitKind, Query, SearchOptions, SearchResults, char_index, find_all, replace_all, search_files,
     search_remote_files,
 };
+use crate::markdown::preview_find::PreviewFind;
 use crate::remote::task::{Task, spawn_with_repaint};
 use crate::theme::style::page_fill;
 
@@ -79,11 +80,13 @@ pub(super) struct FindBar {
     focus: FocusRequest,
     /// Matches in the open file, in order.
     matches: Vec<Range<usize>>,
-    /// Index into `matches` of the one being looked at.
+    /// Index of the current match in the displayed text.
     current: Option<usize>,
-    /// The query, options, file and text revision `matches` were computed for.
-    computed_for: Option<(String, SearchOptions, PathBuf, u64)>,
-    /// Scroll the editor to the current match this frame.
+    /// The query, options, file, text revision and mode used for this search.
+    computed_for: Option<FindKey>,
+    /// The rendered match count while looking at the preview.
+    preview_count: Option<usize>,
+    /// Scroll to the current match this frame.
     scroll: bool,
     /// After opening a file from the results: make this match the current one.
     pending: Option<Range<usize>>,
@@ -101,6 +104,16 @@ pub(super) struct FindBar {
     remote_results: Option<(String, SearchOptions, Result<SearchResults, String>)>,
     /// A remote search running in the background, and its query.
     remote_search: Option<(String, SearchOptions, Task<std::io::Result<SearchResults>>)>,
+}
+
+/// Identifies the text and settings used by the find bar.
+#[derive(Debug, PartialEq, Eq)]
+struct FindKey {
+    query: String,
+    options: SearchOptions,
+    path: PathBuf,
+    revision: u64,
+    preview: bool,
 }
 
 /// A search of the local folders running in the background, and its query.
@@ -132,6 +145,11 @@ enum FocusRequest {
 }
 
 impl FindBar {
+    /// Number of matches in the current view.
+    fn count(&self) -> usize {
+        self.preview_count.unwrap_or(self.matches.len())
+    }
+
     /// True when `results` (or another cached search) is for the current query.
     fn is_current(&self, query: &str, options: SearchOptions) -> bool {
         *query == self.query && options == self.options
@@ -141,12 +159,11 @@ impl FindBar {
 impl RubriqueApp {
     /// Open the bar (or put the pointer back in its field), with the replace
     /// row when `replace` is set. A one-line selection in the editor becomes
-    /// the query. Find works on the source, so a Markdown or HTML preview
-    /// switches to it.
+    /// the query. Replace opens the source editor for the file.
     pub(super) fn open_find(&mut self, ctx: &Context, replace: bool) {
         self.finish_block_edit();
         let selected = if self.showing_any_preview() { None } else { self.selected_line(ctx) };
-        if self.showing_any_preview() {
+        if replace && self.showing_any_preview() {
             self.toggle_preview();
         }
         let bar = self.find.get_or_insert_with(FindBar::default);
@@ -171,8 +188,12 @@ impl RubriqueApp {
     }
 
     pub(super) fn close_find(&mut self, ctx: &Context) {
-        if self.find.take().is_some() && matches!(self.open_file, OpenFile::Text { .. }) {
-            focus_editor(ctx);
+        if self.find.take().is_some() {
+            if self.showing_any_preview() {
+                ctx.memory_mut(|memory| memory.surrender_focus(query_field_id()));
+            } else if matches!(self.open_file, OpenFile::Text { .. }) {
+                focus_editor(ctx);
+            }
         }
     }
 
@@ -188,27 +209,50 @@ impl RubriqueApp {
         }
     }
 
-    /// Bring the open file's matches up to date with its text and the query.
-    /// Runs before the editor is drawn, so the highlight is current.
+    /// Update source matches or prepare the search that runs as preview draws.
     pub(super) fn prepare_find(&mut self, ctx: &Context) {
+        let preview = self.showing_any_preview();
         let Some(bar) = &mut self.find else {
             return;
         };
         let OpenFile::Text { document, .. } = &self.open_file else {
             bar.matches.clear();
+            bar.preview_count = None;
             bar.current = None;
             bar.computed_for = None;
             return;
         };
-        let key = (bar.query.clone(), bar.options, document.path.clone(), document.revision());
-        if bar.computed_for.as_ref() != Some(&key) {
-            bar.matches = find_all(&document.text, &bar.query, bar.options);
-            bar.computed_for = Some(key);
-            bar.current = current_after_change(bar);
-            if bar.current.is_some() {
-                bar.scroll = true;
-                self.select_current_match(ctx);
-            }
+        let key = FindKey {
+            query: bar.query.clone(),
+            options: bar.options,
+            path: document.path.clone(),
+            revision: document.revision(),
+            preview,
+        };
+        if bar.computed_for.as_ref() == Some(&key) {
+            return;
+        }
+        let reset_current = bar.computed_for.as_ref().is_none_or(|previous| {
+            previous.preview != preview
+                || (preview
+                    && (previous.path != key.path || previous.query != key.query || previous.options != key.options))
+        });
+        bar.computed_for = Some(key);
+        if reset_current {
+            bar.current = None;
+        }
+        if preview {
+            bar.matches.clear();
+            bar.preview_count = Some(0);
+            bar.scroll = !bar.query.is_empty();
+            return;
+        }
+        bar.preview_count = None;
+        bar.matches = find_all(&document.text, &bar.query, bar.options);
+        bar.current = current_after_change(bar);
+        if bar.current.is_some() {
+            bar.scroll = true;
+            self.select_current_match(ctx);
         }
     }
 
@@ -216,14 +260,15 @@ impl RubriqueApp {
         let Some(bar) = &mut self.find else {
             return;
         };
-        if bar.matches.is_empty() {
+        let count = bar.count();
+        if count == 0 || bar.all_files {
             return;
         }
-        let count = bar.matches.len();
         let current = bar.current.unwrap_or(0);
         bar.current = Some((current + count).wrapping_add_signed(step) % count);
         bar.scroll = true;
         self.select_current_match(ctx);
+        ctx.request_repaint();
     }
 
     /// Select the current match in the editor, so closing the bar leaves the
@@ -241,6 +286,9 @@ impl RubriqueApp {
     /// Replace the current match (one undo step) and move on to the match
     /// that followed it.
     fn replace_current(&mut self, ctx: &Context) {
+        if self.showing_any_preview() {
+            return;
+        }
         let (Some(bar), OpenFile::Text { document, preview, .. }) = (&mut self.find, &mut self.open_file) else {
             return;
         };
@@ -257,6 +305,9 @@ impl RubriqueApp {
 
     /// Replace every match in one undo step.
     fn replace_all_matches(&mut self, ctx: &Context) {
+        if self.showing_any_preview() {
+            return;
+        }
         let (Some(bar), OpenFile::Text { document, preview, .. }) = (&mut self.find, &mut self.open_file) else {
             return;
         };
@@ -301,6 +352,7 @@ impl RubriqueApp {
         let metrics =
             bar_metrics(TextStyle::Monospace.resolve(&style).size, TextStyle::Body.resolve(&style).size, page.size());
         let at = pos2(page.right() - metrics.width - FIND_MARGIN, page.top() + FIND_MARGIN);
+        let preview = self.showing_any_preview();
         let mut event = None;
         egui::Area::new(Id::unique("find-bar")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
             scale_style(ui, &metrics);
@@ -316,8 +368,10 @@ impl RubriqueApp {
                     return;
                 };
                 event = find_row(ui, bar, &metrics);
-                options_row(ui, bar, &metrics);
-                if bar.replacing && !bar.all_files && event.is_none() {
+                if options_row(ui, bar, &metrics, preview) {
+                    event = Some(FindEvent::ShowReplace);
+                }
+                if bar.replacing && !preview && !bar.all_files && event.is_none() {
                     event = replace_row(ui, bar, &metrics);
                 }
                 if bar.all_files {
@@ -331,6 +385,12 @@ impl RubriqueApp {
         match event {
             Some(FindEvent::Next) => self.step_match(ctx, 1),
             Some(FindEvent::Previous) => self.step_match(ctx, -1),
+            Some(FindEvent::ShowReplace) => {
+                self.open_find(ctx, true);
+                if let Some(bar) = &mut self.find {
+                    bar.focus = FocusRequest::Replacement;
+                }
+            }
             Some(FindEvent::Replace) => self.replace_current(ctx),
             Some(FindEvent::ReplaceAll) => self.replace_all_matches(ctx),
             Some(FindEvent::Close) => self.close_find(ctx),
@@ -338,6 +398,24 @@ impl RubriqueApp {
             None => {}
         }
     }
+}
+
+/// Search the text widgets that are drawn by this preview.
+pub(super) fn draw_preview<T>(ui: &mut Ui, find: &mut Option<FindBar>, draw: impl FnOnce(&mut Ui) -> T) -> T {
+    let Some(bar) = find.as_mut().filter(|bar| !bar.all_files && !bar.query.is_empty()) else {
+        return draw(ui);
+    };
+    let search = PreviewFind::new(&bar.query, bar.options, bar.current.unwrap_or(0), bar.scroll);
+    let (output, count) = search.draw(ui, draw);
+    bar.preview_count = Some(count);
+    let current = (count != 0).then(|| bar.current.unwrap_or(0).min(count - 1));
+    if current != bar.current && count != 0 {
+        ui.ctx().request_repaint();
+    }
+    let retry_scroll = bar.scroll && ui.ctx().will_discard();
+    bar.scroll = count != 0 && (retry_scroll || bar.current.is_some_and(|previous| previous >= count));
+    bar.current = current;
+    output
 }
 
 /// Which match to look at after the matches were computed again: the one
@@ -375,6 +453,7 @@ pub(super) fn highlight(find: &mut Option<FindBar>) -> Option<FindHighlight<'_>>
 enum FindEvent {
     Next,
     Previous,
+    ShowReplace,
     Replace,
     ReplaceAll,
     Close,
@@ -513,7 +592,7 @@ fn find_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) -> Option<Find
         let count_color = if count == NO_MATCHES { visuals.error_fg_color } else { visuals.text_color() };
         ui.add_sized([count_width, metrics.row], egui::Label::new(RichText::new(count).color(count_color)));
         option_toggles(ui, &mut bar.options, metrics);
-        if let Some(step) = step_buttons(ui, !bar.all_files && !bar.matches.is_empty(), metrics) {
+        if let Some(step) = step_buttons(ui, !bar.all_files && bar.count() != 0, metrics) {
             event = Some(step);
         }
     });
@@ -525,7 +604,7 @@ const NO_MATCHES: &str = "No matches";
 
 /// "3 of 12", the total while no match is current, or "No matches".
 fn count_text(bar: &FindBar) -> String {
-    match (bar.current, bar.matches.len()) {
+    match (bar.current, bar.count()) {
         (_, 0) if bar.query.is_empty() => String::new(),
         (_, 0) => NO_MATCHES.to_string(),
         (Some(current), total) => format!("{} of {total}", current + 1),
@@ -610,8 +689,8 @@ fn select_all(ctx: &Context, id: Id, text: &str) {
     state.store(ctx, id);
 }
 
-/// The All files switch and the Replace switch.
-fn options_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) {
+/// Draw the search switches and report a request to open Replace from preview.
+fn options_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics, preview: bool) -> bool {
     ui.horizontal(|ui| {
         if ui
             .checkbox(&mut bar.all_files, "All files")
@@ -623,14 +702,19 @@ fn options_row(ui: &mut Ui, bar: &mut FindBar, metrics: &BarMetrics) {
         let hover = if bar.all_files { "Replace works in the open file" } else { "Cmd+Alt+F (Ctrl+H on Linux)" };
         let replace = ui
             .add_enabled_ui(!bar.all_files, |ui| {
-                option_toggle(ui, bar.replacing, "Replace", vec2(metrics.row, metrics.row))
+                option_toggle(ui, bar.replacing && !preview, "Replace", vec2(metrics.row, metrics.row))
             })
             .inner;
         if replace.on_hover_text(hover).on_disabled_hover_text(hover).clicked() {
+            if preview {
+                return true;
+            }
             bar.replacing = !bar.replacing;
             bar.focus = if bar.replacing { FocusRequest::Replacement } else { FocusRequest::Query };
         }
-    });
+        false
+    })
+    .inner
 }
 
 /// The replacement field, Replace and Replace all.
@@ -1014,6 +1098,85 @@ mod tests {
         assert_eq!(count_text(&bar), "3");
         bar.current = Some(1);
         assert_eq!(count_text(&bar), "2 of 3");
+    }
+
+    /// List the parts of visible text that have the given search tint.
+    fn tinted_text(output: &egui::FullOutput, color: Color32) -> Vec<&str> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(&text.galley.job),
+                _ => None,
+            })
+            .flat_map(|job| {
+                job.sections
+                    .iter()
+                    .filter(move |section| section.format.background == color)
+                    .map(|section| &job.text[section.byte_range.start.0..section.byte_range.end.0])
+            })
+            .collect()
+    }
+
+    /// Press a shortcut and draw the document using the regular app handlers.
+    fn find_frame(app: &mut RubriqueApp, ctx: &Context, shortcut: Option<egui::KeyboardShortcut>) -> egui::FullOutput {
+        let mut input = egui::RawInput::default();
+        if let Some(shortcut) = shortcut {
+            input.events.push(egui::Event::Key {
+                key: shortcut.logical_key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: shortcut.modifiers,
+            });
+        }
+        let mut output = ctx.run_ui(input, |ui| {
+            app.handle_shortcuts(ctx);
+            app.prepare_find(ctx);
+            app.document_area(ui);
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    #[test]
+    fn find_highlights_rendered_phrases_and_navigates_without_leaving_preview() {
+        let temp = crate::test_support::TempFolder::new();
+        for (name, source) in [
+            ("example.md", "Try **café** [menu](https://example.com/hidden).\n\nCAFÉ menu\n"),
+            ("example.rst", "Try **café** menu.\n\nCAFÉ menu\n\n.. hidden\n"),
+            (
+                "example.html",
+                "<p title=\"hidden\">Try <b>caf&#233;</b> <a href=\"#hidden\">menu</a>.</p><p>CAFÉ menu</p>",
+            ),
+        ] {
+            let ctx = Context::default();
+            let path = temp.write(name, source);
+            let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![], Some(path));
+            assert!(app.showing_any_preview());
+            find_frame(&mut app, &ctx, Some(crate::app::FIND));
+            assert!(app.showing_any_preview());
+            app.find.as_mut().unwrap().query = "café menu".into();
+
+            let output = find_frame(&mut app, &ctx, None);
+            assert_eq!(count_text(app.find.as_ref().unwrap()), "1 of 2", "{name}");
+            let current_tint = crate::document::view::current_match_fill(&ctx.global_style().visuals);
+            assert_eq!(tinted_text(&output, current_tint).concat(), "café menu");
+
+            let output = find_frame(&mut app, &ctx, Some(crate::app::FIND_NEXT));
+            assert_eq!(count_text(app.find.as_ref().unwrap()), "2 of 2");
+            assert_eq!(tinted_text(&output, current_tint).concat(), "CAFÉ menu");
+            assert!(app.showing_any_preview());
+
+            app.find.as_mut().unwrap().query = "hidden".into();
+            find_frame(&mut app, &ctx, None);
+            assert_eq!(count_text(app.find.as_ref().unwrap()), NO_MATCHES);
+
+            find_frame(&mut app, &ctx, Some(crate::app::FIND_REPLACE));
+            assert!(!app.showing_any_preview());
+            assert!(app.find.as_ref().unwrap().replacing);
+            assert!(app.find.as_ref().unwrap().count() > 0);
+        }
     }
 
     #[test]
