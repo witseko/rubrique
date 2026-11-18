@@ -1123,7 +1123,7 @@ mod tests {
                     }
                     files.update(ui);
                     action = action.take().or_else(|| files.keyboard_delete(ui).map(ExplorerAction::Delete));
-                    ui.add(egui::TextEdit::singleline(&mut self.editor).id(egui::Id::unique("test-editor")));
+                    ui.add(egui::TextEdit::multiline(&mut self.editor).id(egui::Id::unique("test-editor")));
                 });
                 if self.dialog_open {
                     let dialog = egui::Modal::new(egui::Id::unique("test-dialog")).show(ui.ctx(), |ui| {
@@ -1176,6 +1176,68 @@ mod tests {
         tree.hide_middle = true;
         assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths))
             if paths == [PathBuf::from("one.md"), PathBuf::from("three.md")]));
+    }
+
+    #[test]
+    fn shift_arrows_extend_and_shrink_a_range_across_visible_files() {
+        let mut tree = FileTree { hide_middle: true, ..FileTree::default() };
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        for _ in 0..3 {
+            assert!(tree.press(Key::ArrowDown, Modifiers::SHIFT).is_none());
+        }
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["one.md", "three.md", "four.md"].map(PathBuf::from));
+
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["one.md", "three.md"].map(PathBuf::from));
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths))
+            if paths == ["one.md", "three.md"].map(PathBuf::from)));
+    }
+
+    #[test]
+    fn shift_arrows_move_the_shift_click_endpoint_across_its_anchor() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(1, Modifiers::NONE);
+        tree.click(0, Modifiers::SHIFT);
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["two.md", "three.md"].map(PathBuf::from));
+    }
+
+    #[test]
+    fn shift_down_from_a_focused_folder_starts_with_the_next_file() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click_at(tree.folder_position, Modifiers::NONE);
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        assert!(tree.press(Key::ArrowDown, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+        assert!(tree.open_file.is_none());
+    }
+
+    #[test]
+    fn shift_arrows_in_the_editor_select_text() {
+        let mut tree = FileTree { editor: "first line\nsecond line".into(), ..FileTree::default() };
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        let editor_id = egui::Id::unique("test-editor");
+        tree.ctx.memory_mut(|memory| memory.request_focus(editor_id));
+        tree.press(Key::ArrowUp, Modifiers::SHIFT);
+        let editor = egui::TextEdit::load_state(&tree.ctx, editor_id).unwrap();
+        let range = editor.cursor.char_range().unwrap().as_sorted_char_range();
+        assert_ne!(range.start, range.end);
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
     }
 
     #[test]

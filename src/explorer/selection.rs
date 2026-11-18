@@ -231,12 +231,12 @@ impl<'a> FileRows<'a> {
             return false;
         };
         let id = self.visible[end].0;
-        self.focused = Some((id, end));
-        ui.memory_mut(|memory| memory.request_focus(id));
         if let Some(row) = ui.ctx().read_response(id) {
             let strip = row.rect.with_min_x(ui.clip_rect().left()).with_max_x(ui.clip_rect().left() + 1.0);
             ui.scroll_to_rect(strip, None);
         }
+        self.focused = Some((id, end));
+        ui.memory_mut(|memory| memory.request_focus(id));
         true
     }
 
