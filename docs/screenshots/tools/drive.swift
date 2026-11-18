@@ -4,7 +4,7 @@
 // somewhere else on the screen. Posting events needs Accessibility access
 // for the terminal that runs this.
 //
-//   swift drive.swift window OWNER TITLE-PART   prints "id x y width height"
+//   swift drive.swift window PID TITLE-PART   prints "id x y width height"
 //   swift drive.swift activate PID              brings the app to the front
 //   swift drive.swift move ID X Y               moves the pointer
 //   swift drive.swift click ID X Y              clicks there
@@ -20,16 +20,16 @@ struct Window {
 }
 
 /// On-screen windows, front to back.
-func windows() -> [(owner: String, title: String, window: Window)] {
+func windows() -> [(pid: Int, title: String, window: Window)] {
     let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
     let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as! [[String: Any]]
     return list.compactMap { info in
         guard let id = info[kCGWindowNumber as String] as? Int,
               let bounds = info[kCGWindowBounds as String] as? [String: Any],
               let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
-        let owner = info[kCGWindowOwnerName as String] as? String ?? ""
+        guard let pid = info[kCGWindowOwnerPID as String] as? Int else { return nil }
         let title = info[kCGWindowName as String] as? String ?? ""
-        return (owner, title, Window(id: CGWindowID(id), frame: frame))
+        return (pid, title, Window(id: CGWindowID(id), frame: frame))
     }
 }
 
@@ -122,9 +122,15 @@ let letterCodes: [Character: CGKeyCode] = [
 
 let args = CommandLine.arguments.dropFirst()
 switch args.first ?? "" {
+case "permissions" where args.count == 2:
+    guard CGPreflightScreenCaptureAccess() else { fail("Allow Screen Recording for this terminal, then run again.") }
+    if args.last == "input", !AXIsProcessTrusted() {
+        fail("Allow Accessibility for this terminal, then run again.")
+    }
 case "window" where args.count == 3:
-    let owner = args[args.startIndex + 1], part = args[args.startIndex + 2]
-    if let found = windows().first(where: { $0.owner == owner && $0.title.contains(part) }) {
+    guard let pid = Int(args[args.startIndex + 1]) else { fail("invalid process ID") }
+    let part = args[args.startIndex + 2]
+    if let found = windows().first(where: { $0.pid == pid && $0.title.contains(part) }) {
         let f = found.window.frame
         print("\(found.window.id) \(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height))")
     }
