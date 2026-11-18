@@ -8,9 +8,10 @@ use eframe::egui::{self, Align, Color32, FontSelection, RichText, Ui, Visuals};
 
 use super::reorder::{ListDrag, draggable};
 use super::section::{SECTION_HEADER_HEIGHT, paint_fold_arrow, section_header};
+use super::selection::FileRows;
 use super::view::{
-    ExplorerAction, HEADER_BUTTON_SIZE, ICON_GAP, InlineRename, NOTE_MARK_SIZE, SessionEdit, TreeContext,
-    file_menu_with_exit, is_revealed, rename_row, scroll_if_revealed, tree_row,
+    ExplorerAction, HEADER_BUTTON_SIZE, ICON_GAP, InlineRename, NOTE_MARK_SIZE, SessionEdit, TreeContext, file_click,
+    file_menu, is_revealed, rename_row, scroll_if_revealed, tree_row,
 };
 use crate::explorer::tree::FsNode;
 use crate::icons::{Icon, paint_icon, small_icon_button};
@@ -271,22 +272,19 @@ pub(super) fn show_terminal_file(
     ui: &mut Ui,
     file: &FsNode,
     context: &TreeContext,
+    files: &mut FileRows,
     action: &mut Option<ExplorerAction>,
 ) {
     let session = session_name_for_file(&file.path);
     let row = context.terminals.and_then(|rows| rows.iter().find(|row| row.info.name == session));
     let is_open = context.open_file == Some(file.path.as_path()) || is_revealed(context, &file.path);
     let label = terminal_label(ui, &file.name, row);
-    let response = tree_row(ui, is_open, label).on_hover_text(terminal_tip(row));
+    let response = tree_row(ui, files.highlights(&file.path, is_open), label).on_hover_text(terminal_tip(row));
     scroll_if_revealed(ui, context, &file.path, &response);
     paint_terminal_icon(ui, &response);
     paint_status_dot(ui, &response, &file.name, row.map(|row| &row.status));
-    if response.double_clicked() {
-        *action = Some(ExplorerAction::RenameInTree(file.path.clone()));
-    } else if response.clicked() {
-        *action = Some(ExplorerAction::OpenFile(file.path.clone()));
-    }
-    file_menu_with_exit(&response, &file.path, context, Some((&session, row.is_some())), action);
+    file_click(&response, &file.path, files, action);
+    file_menu(&response, &file.path, context, Some((&session, row.is_some())), files, action);
 }
 
 /// The name, room for the status dot, then the status and opening time in

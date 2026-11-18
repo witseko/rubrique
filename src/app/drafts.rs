@@ -86,6 +86,63 @@ impl DraftState {
     pub(super) fn release(&mut self, path: &Path) {
         self.written.remove(&draft::key(path));
     }
+
+    /// Find a sealed draft for this file, including edits kept when its tab closed.
+    pub(super) fn sealed_draft_path(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        for store in self.store.iter().chain(&self.closed) {
+            if let Some(draft) = store.sealed_path(path)? {
+                return Ok(Some(draft));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Keep drafts at the old path until the file has moved successfully.
+    pub(super) fn relocate_file(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        vault: Option<&Vault>,
+        move_file: impl FnOnce() -> io::Result<()>,
+    ) -> io::Result<()> {
+        let mut staged = Vec::new();
+        let result = (|| {
+            for store in self.store.iter().chain(&self.closed) {
+                if stage_draft(store, source, target, vault)? {
+                    staged.push(store);
+                }
+            }
+            move_file()
+        })();
+        let obsolete = if result.is_ok() { source } else { target };
+        for store in staged {
+            if let Err(error) = store.remove(obsolete) {
+                eprintln!("rubrique: could not remove a draft after moving a file: {error}");
+            }
+        }
+        if result.is_ok()
+            && let Some(revision) = self.written.remove(&draft::key(source))
+        {
+            self.written.insert(draft::key(target), revision);
+        }
+        result
+    }
+}
+
+/// Copy a draft to the new path while keeping its encryption and base text.
+fn stage_draft(store: &DraftStore, source: &Path, target: &Path, vault: Option<&Vault>) -> io::Result<bool> {
+    if store.exists(target)? {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, "unsaved edits exist for the destination file"));
+    }
+    if !store.exists(source)? {
+        return Ok(false);
+    }
+    let Some(mut draft) = store.read(source, vault) else {
+        return Err(io::Error::other("could not read unsaved edits; unlock the scratch if it is encrypted"));
+    };
+    draft.path = draft::key(target);
+    store.write(&draft, vault)?;
+    Ok(true)
 }
 
 /// How one draft came back at start.
@@ -236,12 +293,11 @@ impl RubriqueApp {
 
     /// Seal the drafts kept with `old` again with `new` (a new password).
     pub(super) fn reseal_drafts(&mut self, old: &Vault, new: &Arc<Vault>) {
-        let Some(store) = &self.drafts.store else {
-            return;
-        };
-        for found in store.all(Some(old)).into_iter().filter(|found| found.sealed) {
-            if let Err(error) = store.write(&found, Some(new)) {
-                eprintln!("rubrique: could not seal the draft of {} again: {error}", found.path.display());
+        for store in self.drafts.store.iter().chain(&self.drafts.closed) {
+            for found in store.all(Some(old)).into_iter().filter(|found| found.sealed) {
+                if let Err(error) = store.write(&found, Some(new)) {
+                    eprintln!("rubrique: could not seal the draft of {} again: {error}", found.path.display());
+                }
             }
         }
     }

@@ -346,6 +346,7 @@ mod tests {
                 pin_hash: Some(crate::crypto::pin_hash("1234")),
                 lock_after_minutes: 15,
                 touch_id: true,
+                moved_scratches: vec![],
             },
             remote: crate::remote::RemoteSettings { enabled: true, ssh_program: "/opt/ssh".to_string() },
             layout: layout::LayoutSettings {

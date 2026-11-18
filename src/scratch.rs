@@ -239,16 +239,23 @@ pub fn decrypt_scratch(path: &Path, vault: &Vault) -> io::Result<()> {
     write_atomically(path, &plain)
 }
 
-/// Seal every scratch encrypted with `old` again with `new` (a new
-/// password); returns the paths that changed. Files sealed with another
-/// key are left as they are.
+/// Seal scratches in `folder` and at remembered destinations with `new`.
+/// Returns the paths that changed. Files with another key stay as they are.
 ///
 /// # Errors
 ///
 /// The first read or write error.
-pub fn reencrypt_scratches(folder: &Path, old: &Vault, new: &Vault) -> io::Result<Vec<PathBuf>> {
+pub fn reencrypt_scratches(folder: &Path, moved: &[PathBuf], old: &Vault, new: &Vault) -> io::Result<Vec<PathBuf>> {
+    let mut paths = scratch_files(folder);
+    for path in moved {
+        if tracked_file_is_present(path)? {
+            paths.push(path.clone());
+        }
+    }
+    paths.sort_unstable();
+    paths.dedup();
     let mut changed = Vec::new();
-    for path in scratch_files(folder) {
+    for path in paths {
         let bytes = fs::read(&path)?;
         if let Ok(plain) = old.decrypt(&bytes) {
             write_atomically(&path, &new.encrypt(&plain))?;
@@ -256,6 +263,22 @@ pub fn reencrypt_scratches(folder: &Path, old: &Vault, new: &Vault) -> io::Resul
         }
     }
     Ok(changed)
+}
+
+/// A remembered file can be missing or replaced. Only use its original local path.
+fn tracked_file_is_present(path: &Path) -> io::Result<bool> {
+    if crate::remote::is_mirror(path) {
+        return Ok(false);
+    }
+    let resolved = match fs::canonicalize(path) {
+        Ok(resolved) => resolved,
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if resolved != path || !fs::symlink_metadata(path)?.is_file() {
+        return Ok(false);
+    }
+    crypto::read_encryption_marker(path)
 }
 
 /// The typed file or folder name, trimmed, when it is a valid single name
@@ -364,7 +387,7 @@ mod tests {
         assert_eq!(fs::read(temp.path().join("image.png")).unwrap(), b"not a scratch");
         assert!(encrypt_scratches(temp.path(), &old).unwrap().is_empty(), "already done");
 
-        assert_eq!(reencrypt_scratches(temp.path(), &old, &new).unwrap().len(), 2);
+        assert_eq!(reencrypt_scratches(temp.path(), &[], &old, &new).unwrap().len(), 2);
         assert_eq!(new.decrypt(&fs::read(&plain).unwrap()).unwrap(), b"words");
         assert!(old.decrypt(&fs::read(&plain).unwrap()).is_err());
     }

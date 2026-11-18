@@ -196,6 +196,25 @@ impl DraftStore {
         read_draft_file(&self.file_for(path), vault)
     }
 
+    /// Check for a draft, including one that is sealed and currently locked.
+    pub fn exists(&self, path: &Path) -> io::Result<bool> {
+        self.file_for(path).try_exists()
+    }
+
+    /// Find the sealed draft for a document without needing its password.
+    ///
+    /// # Errors
+    ///
+    /// Fails when an existing draft's header cannot be read.
+    pub fn sealed_path(&self, path: &Path) -> io::Result<Option<PathBuf>> {
+        let file = self.file_for(path);
+        match crypto::read_encryption_marker(&file) {
+            Ok(sealed) => Ok(sealed.then_some(file)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Move the draft of `path` into `other`, replacing one kept there.
     ///
     /// # Errors
