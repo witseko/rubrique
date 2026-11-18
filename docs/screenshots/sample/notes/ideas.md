@@ -1,3 +1,4 @@
-# Ideas
+# Field ideas
 
-Ideas for Rubrique after 0.3: tabs, a word count goal and AI notes.
+- Revisit the rock shelf after the next spring tide.
+- Photograph the same pool from the marker each week.

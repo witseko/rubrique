@@ -2,96 +2,123 @@
 
 A fast editor, agentic on demand. [rubrique.dev](https://rubrique.dev)
 
-Write Markdown (or plain text, JSON, SQL, XML) in a small native editor.
-Press `Cmd/Ctrl+K` to hand the text to an agent, then accept or reject the
-change. Uses the agents already on your computer: Claude Code, Codex, Gemini
-CLI, Grok or a local model. No API keys. macOS and Linux.
+Write in a small native editor for macOS and Linux. When you want help
+with a passage, press `Cmd/Ctrl+K`. Ask one agent for an edit, or compare
+two agents' suggestions side by side and choose what to keep.
 
-<img src="docs/screenshots/ai.png" alt="Rubrique comparing Claude and Codex answers in the merge screen, with the Ask bar and a hover summary from a local model" width="880">
+<img src="docs/screenshots/ai.png" alt="Claude Code and Codex suggest edits to a survey handoff. The Compare screen shows both versions and the result." width="880">
 
 ## Install
 
-Download from [Releases](https://github.com/witseko/rubrique/releases).
+Download a package from the [latest release](https://github.com/witseko/rubrique/releases/latest).
 
-| System | How |
+| Install on | How |
 | --- | --- |
-| macOS | Open the `.dmg`, drag Rubrique to Applications |
-| Debian, Ubuntu | `sudo apt install ./rubrique_X.Y.Z-1_amd64.deb` |
-| Other Linux | Unpack the `.tar.gz`, run `./install.sh` |
-| From source | `cargo install rubrique` (Rust 1.95+; on Linux the libraries under Build) |
+| macOS (Apple Silicon or Intel) | Open the signed and notarized `.dmg` and drag Rubrique to Applications |
+| Debian or Ubuntu (amd64) | `sudo apt install ./rubrique_X.Y.Z-1_amd64.deb` |
+| Other Linux (x86_64) | Unpack the `.tar.gz` and run `./install.sh` |
 
-The macOS app is signed and notarized by Apple, so it opens without a warning.
+Replace `X.Y.Z` with the version you downloaded. To build from crates.io,
+run `cargo install rubrique` with Rust 1.95 or later. On Linux, install
+the libraries listed under [Build](#build) first.
 
 ## Features
 
-**Agents**
+### Reading and writing
 
-- **Ask** (`Cmd+K`): a request, or Shorter, Fix grammar, Table, Translate, Explain.
-- **Review**: every change opens in a merge screen. Nothing applies until you accept.
-- **Compare**: one request to two agents, keep the best of each.
-- **Named agents and skills**: type `@ai-` to pick one. Claude Code and Gemini CLI agents work too, and skills from Claude Code, Codex (`~/.agents/skills`), Gemini CLI and Grok. See them all in Settings → Skills.
-- **Notes**: leave a note on a passage, let an agent resolve it.
+- **Markdown.** In Read mode, select text or follow a local Markdown link
+  to another tab. Switch to Edit to change a paragraph or table cell in
+  place, or to add and remove rows and columns. Source opens the Markdown
+  itself. The preview renders footnotes, badges and collapsible sections.
+- **Knowledge bases.** YAML front matter appears as a card above the text.
+  In an Open Knowledge Format bundle, it shows each concept's status,
+  trust tier, freshness and sources. Links that start with `/` open from
+  the bundle root. [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+- **HTML.** The built-in preview shows formatted text and collapsible
+  sections. For CSS layouts, web fonts and images, turn on Settings >
+  Files > HTML preview. Rubrique uses Chrome, Chromium, Edge or Brave,
+  or offers to install headless Chrome. Page scripts stay off.
+- **reStructuredText.** Open a `.rst` file in Read to see headings,
+  tables, footnotes, code blocks, figures and admonitions such as
+  `.. note::`. Switch to Source to edit it.
+- **Find in preview.** Press `Cmd/Ctrl+F` to highlight matches in the
+  rendered text of Markdown, HTML and reStructuredText. HTML uses the
+  built-in preview while you search. Find and replace opens the source.
 
-Agents run only when you ask, read-only by default.
+  <img src="docs/screenshots/editor.png" alt="Find highlights the word 'tide' in the Tidepool survey field guide. Its Markdown preview shows tags and the team that verified the guide." width="880">
 
-**Writing**
-
-- Live preview in three modes, switched at the end of the tab bar: Read
-  (the default: select text and follow links), Edit (click a block to
-  edit it) and Source. In Edit, click a table cell to edit
-  just that cell; buttons under it add or remove rows and columns.
-  HTML in a Markdown file shows as GitHub shows it in a README (centered
-  logos, badges, `<details>`, `<kbd>` and the like). HTML files get a
-  read-only preview too, with their text colors, highlights, alignment and
-  collapsible `<details>` sections. Turn on Settings > Files > HTML
-  preview to draw them with Chrome, Chromium, Edge or Brave instead (or
-  Google's headless Chrome, installed in one click): the full layout,
-  style sheets and web fonts, with scripts off.
-- reStructuredText (`.rst`) files get a read-only preview as well:
-  section titles, lists, simple and grid tables, links and footnotes,
-  code blocks, admonitions such as `.. note::`, images and figures.
-- YAML front matter shows as a card at the top of the preview, and a
-  click on a link to another `.md` file opens it in a tab. Folders in the
-  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
-  read as a knowledge base: each concept shows its type, status, trust
-  tier and staleness, and links that start with `/` open from the root of
-  the bundle.
-- Unsaved changes are marked until you save: a bar beside each edited or
-  new block (hover it to compare with the saved text and revert), a dashed
-  line where a block was deleted, and the full list in the Changes panel.
-- Side panel (the button at the right of the tabs): Structure, the file's headings (`Cmd+Shift+O`), its Notes, Tasks, or unsaved Changes.
-- Voice memos (`Cmd+Shift+R`), transcribed locally with whisper.cpp.
-- Drop images and audio onto the page.
-- Scratch files (`Cmd+N`), each one encrypted or not, switched at any time:
-  the lock button in the status bar or right-click in the explorer, and
-  `Cmd+Shift+N` for a new encrypted one. Touch ID opens them on a Mac.
-  Optional app PIN.
+- A bar marks each new or edited block until you save. Hover over it to
+  compare with the saved text or revert a change. A dashed line marks a
+  deletion. Open the side panel to see all changes, notes, tasks or
+  headings. Click a heading to jump to its section.
+- Record a voice memo (`Cmd+Shift+R`) and transcribe it locally with
+  whisper.cpp, or drop images and audio onto the page. Attachments work
+  in local, unencrypted Markdown and HTML files.
+- Press `Cmd+N` for a scratch file or `Cmd+Shift+N` for an encrypted
+  one. The lock button in the status bar lets you change a scratch's
+  encryption later. The signed macOS release can unlock scratches with
+  Touch ID. An optional PIN locks the app.
 - Coming from Sublime Text? File → Import from Sublime Text turns its
   unsaved tabs into plain text scratch files.
 - Format JSON, SQL, XML (`Cmd+Shift+F`). Render and lint Helm charts.
 
-**Files**
+### Files and Git
 
-- Several folders in one explorer. Right-click a folder → New file, folder or terminal. Double-click a file, folder or tab to rename it, right-click to delete.
+- Keep several folders in one explorer. Right-click a folder to create a
+  file, folder or terminal. Double-click a file, folder or tab to rename
+  it, or right-click to delete it.
+- Use the Files header to collapse the tree or restore the folders you had open.
+  Right-click a folder to expand or collapse everything inside it.
+- Choose File > Clone repository, paste an HTTPS or SSH address and pick
+  where to save it. Rubrique adds the folder to the explorer and opens
+  its README if it has one.
+- Click the branch in the status bar to switch or create branches, pull
+  fast-forward updates, stash or restore changes, or commit all changes
+  including new files.
 - Tabs keep unsaved changes, cursor and undo. Close one with "Keep for
   later" and its edits come back when you open the file again.
-- Safe saves: your file is never reformatted; outside changes open a merge.
-- Find in a file or across all folders (`Cmd+F`), match case or whole
-  words, and replace one match or all of them (`Cmd+Alt+F`).
-- Remote folders over SSH (off by default, Settings → Files).
-- Terminals: tmux sessions as tabs, listed under the files with their agent's
-  status (working, needs you, idle) and the agent sessions they ran, ready to
-  resume. A `.tmux` file opens a terminal in its folder.
-- Hand a step of any document to a terminal's agent: `@tmux-qa: check this`, then Send.
-- Tabs grouped and colored by explorer folder; drag tabs and groups to reorder them.
-  Or list them in the explorer (Settings > Appearance > Tabs), behind a Files | Tabs switch.
+- Rubrique saves the text you typed. If another program changes a file
+  while you have unsaved edits, you can review both versions.
+- Find in a file or search all explorer folders in the background
+  (`Cmd+F`). Match case or whole words. In the open file, replace one
+  match or all of them (`Cmd+Alt+F` on macOS, `Ctrl+H` on Linux).
+- Enable remote folders under Settings > Files to work over SSH.
+  Folder listings and saves run in the background.
+- Open tmux sessions as tabs. The explorer shows whether an agent is
+  working, idle or waiting for you, and lists Claude Code and Codex
+  sessions you can resume. A `.tmux` file opens a terminal in its folder.
+- To hand a task to a terminal's agent, write a line such as
+  `@tmux-qa: check this` in your document, then select Send.
+- Tabs take their group and color from their explorer folder. Drag tabs
+  or groups to reorder them. To list tabs vertically, choose Settings >
+  Appearance > Tabs > In the explorer and switch between Files and Tabs.
 
-<img src="docs/screenshots/themes.png" alt="One Rubrique window shown in five themes: Light, Indigo, Sepia, Midnight and High contrast" width="880">
+### Agents
+
+Use Claude Code, Codex, Gemini CLI, Grok or a local model through the
+tools on your computer. Rubrique needs no API key. The first time you ask
+for an edit in a folder, Rubrique shows the command and asks you to run it.
+
+- **Ask** (`Cmd+K`) about the selected passage or the whole file. Write
+  a request or choose Shorter, Fix grammar, Table, Translate or Explain.
+- **Review** suggested edits in the merge screen. Accept or reject each
+  change. **Compare** sends the same request to two agents so you can keep
+  parts of either answer.
+- **Named agents and skills.** Type `@ai-` to pick an agent. Settings >
+  Agents includes agents from Claude Code and Gemini CLI. Settings >
+  Skills lists skills from Claude Code, Codex (`~/.agents/skills`),
+  Gemini CLI and Grok.
+- **Notes.** Leave a note on a passage, then ask an agent to resolve it.
+
+### Appearance
+
+<img src="docs/screenshots/themes.png" alt="The Tidepool survey field guide in Rubrique's Light, Indigo, Sepia, Midnight and High contrast themes" width="880">
 
 Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Code in Python,
 JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, JSON, XML and YAML is colored with the
-theme's colors or VS Code's (Settings → Appearance → Code colors). Plain text files color IP addresses, UUIDs,
-hashes, numbers and whatever else your own regular expressions match (Settings → Highlights). Text size, line numbers and other options are in
+theme's colors or VS Code's (Settings → Appearance → Code colors). Highlight IP addresses, UUIDs,
+hashes, numbers and your own patterns in plain text and Markdown (Settings → Highlights).
+Toggle those highlights with `Cmd+Shift+H`. Text size, line numbers and other options are in
 Settings → Accessibility.
 
 ## Shortcuts
@@ -108,7 +135,7 @@ Settings → Accessibility.
 | Cmd+Shift+M | Add a note |
 
 <details>
-<summary>All shortcuts</summary>
+<summary>More shortcuts</summary>
 
 | Shortcut | Action |
 | --- | --- |
@@ -125,6 +152,8 @@ Settings → Accessibility.
 | Cmd+Shift+B | Open in browser |
 | Cmd+Shift+F | Format JSON, SQL or XML |
 | Cmd+Shift+C | Copy the open file's path |
+| Cmd+Shift+O | Open the heading list |
+| Cmd+Shift+H | Toggle text highlights |
 | Cmd+G / Cmd+Shift+G | Next / previous match |
 | Cmd+Alt+F (Ctrl+H on Linux) | Find and replace |
 | Alt+Up / Alt+Down | Move lines |
@@ -149,10 +178,13 @@ installed; Settings → Terminals offers the install command.
 | Program | Used for |
 | --- | --- |
 | `claude`, `codex`, `gemini`, `grok` | Ask, Compare, Notes |
-| `ollama` | Local summaries, file names |
+| `ollama` (or configure `llama-cli`) | Local requests, summaries and file names |
 | `whisper-cli` | Transcribing memos |
 | `helm` | Helm charts |
 | `tmux` | Terminals |
+
+Gemini CLI runs in plan mode. Trust the working folder in Gemini before
+using it in Rubrique.
 
 whisper.cpp also needs its model:
 
@@ -163,7 +195,8 @@ curl -L --create-dirs -o ~/.local/share/whisper/ggml-small.bin \
 
 ## Build
 
-Rust 1.95+. On Linux, also the X11, Wayland, OpenGL and ALSA dev libraries.
+Use Rust 1.95 or later. On Debian or Ubuntu, install the Linux build
+libraries with `sudo apt install libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev`.
 
 ```sh
 cargo run --release -- ~/notes
