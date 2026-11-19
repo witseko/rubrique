@@ -163,7 +163,7 @@ impl RubriqueApp {
     pub(super) fn open_find(&mut self, ctx: &Context, replace: bool) {
         self.finish_block_edit();
         let selected = if self.showing_any_preview() { None } else { self.selected_line(ctx) };
-        if replace && self.showing_any_preview() {
+        if self.showing_delimited_preview() || (replace && self.showing_any_preview()) {
             self.toggle_preview();
         }
         let bar = self.find.get_or_insert_with(FindBar::default);
@@ -1072,6 +1072,25 @@ mod tests {
     use super::*;
 
     const PAGE: Vec2 = vec2(1200.0, 800.0);
+
+    #[test]
+    fn csv_opens_in_read_mode_and_find_switches_to_editable_source() {
+        let temp = crate::test_support::TempFolder::new();
+        let path = temp.write("sales.CSV", "Month,Sales\nMay,12\n");
+        let ctx = Context::default();
+        let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![], Some(path.clone()));
+
+        assert!(app.showing_delimited_preview());
+        app.open_find(&ctx, false);
+        assert!(!app.showing_delimited_preview());
+        let OpenFile::Text { document, .. } = &mut app.open_file else {
+            panic!("expected editable CSV source");
+        };
+        document.text.push_str("June,15\n");
+        document.on_text_changed();
+        document.save().unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "Month,Sales\nMay,12\nJune,15\n");
+    }
 
     #[test]
     fn bar_grows_with_the_editor_font_and_fits_the_page() {

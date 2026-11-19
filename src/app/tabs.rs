@@ -17,9 +17,7 @@ use crate::explorer::paths::absolute_path_text;
 use crate::explorer::tree::is_markdown_path;
 use crate::explorer::view::{InlineRename, rename_field};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button};
-use crate::markdown::html::is_html_path;
 use crate::media::image_uri;
-use crate::rst::is_rst_path;
 use crate::theme::style::page_fill;
 
 /// Height of the tab strip.
@@ -313,7 +311,7 @@ impl RubriqueApp {
     }
 
     /// The Read | Edit | Source switch of a Markdown file (Read | Source
-    /// for HTML and reStructuredText, which are not edited in place) at the right end of the tab
+    /// for text formats with a read-only preview) at the right end of the tab
     /// strip, and for Markdown the side panel toggle after it. Returns the
     /// part of `strip` left for the tabs.
     fn preview_controls(&mut self, ui: &mut Ui, strip: egui::Rect) -> egui::Rect {
@@ -321,7 +319,9 @@ impl RubriqueApp {
         let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
         let modes: &[PageMode] = if is_markdown {
             &[PageMode::Read, PageMode::Edit, PageMode::Source]
-        } else if self.open_file.path().is_some_and(|path| is_html_path(path) || is_rst_path(path)) {
+        } else if matches!(self.open_file, OpenFile::Text { .. })
+            && self.open_file.path().is_some_and(super::has_preview)
+        {
             &[PageMode::Read, PageMode::Source]
         } else {
             &[]
