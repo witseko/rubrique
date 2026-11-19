@@ -14,6 +14,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   DOC and DOCX, and switch between sheets in XLS, XLSX and ODS workbooks.
   View CSV and TSV as tables, or switch to Source to edit them. Legacy
   DOC previews on Linux use `antiword`.
+- **PowerPoint and rich text previews.** Browse the text of each PPTX
+  slide and read the text of ODT and RTF documents in a tab.
 
 ## [1.5.1] - 2026-11-19
 

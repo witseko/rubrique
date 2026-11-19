@@ -91,7 +91,7 @@
         </dict>
         <dict>
             <key>CFBundleTypeName</key>
-            <string>PDF, Word and spreadsheet documents</string>
+            <string>PDF and Office documents</string>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
             <key>LSHandlerRank</key>
@@ -104,6 +104,9 @@
                 <string>com.microsoft.excel.xls</string>
                 <string>org.openxmlformats.spreadsheetml.sheet</string>
                 <string>org.oasis-open.opendocument.spreadsheet</string>
+                <string>org.openxmlformats.presentationml.presentation</string>
+                <string>org.oasis-open.opendocument.text</string>
+                <string>public.rtf</string>
             </array>
         </dict>
     </array>
