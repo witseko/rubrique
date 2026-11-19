@@ -899,23 +899,26 @@ pub(super) fn file_menu(
     action: &mut Option<ExplorerAction>,
 ) {
     response.context_menu(|ui| {
-        if let Some((session, running)) = exit {
-            let exit_item = ui
-                .add_enabled(running, egui::Button::new("Exit terminal"))
-                .on_hover_text("End the session and everything running in it")
-                .on_disabled_hover_text("Not running");
-            if exit_item.clicked() {
-                *action = Some(ExplorerAction::ExitTerminal(session.to_string()));
-                ui.close();
-            }
-            ui.separator();
-        }
-        copy_items(ui, path, context, action);
-        ui.separator();
-        if encryption_item(ui, path, context, action) {
-            ui.separator();
-        }
         let count = files.target_count(path);
+        let single_file = count == 1;
+        ui.add_enabled_ui(single_file, |ui| {
+            if let Some((session, running)) = exit {
+                let exit_item = ui
+                    .add_enabled(running, egui::Button::new("Exit terminal"))
+                    .on_hover_text("End the session and everything running in it")
+                    .on_disabled_hover_text(if single_file { "Not running" } else { "Select a single file" });
+                if exit_item.clicked() {
+                    *action = Some(ExplorerAction::ExitTerminal(session.to_string()));
+                    ui.close();
+                }
+                ui.separator();
+            }
+            copy_items(ui, path, context, action);
+            ui.separator();
+            if encryption_item(ui, path, context, action) {
+                ui.separator();
+            }
+        });
         if exit.is_none() && !crate::remote::is_mirror(path) {
             let label = if count > 1 {
                 format!("Move {count} Selected Files to Folder…")
@@ -928,7 +931,7 @@ pub(super) fn file_menu(
             }
         }
         let delete_label = if count > 1 { format!("Delete {count} selected files…") } else { "Delete…".into() };
-        rename_delete_items(ui, path, &delete_label, action);
+        rename_delete_items(ui, path, single_file, &delete_label, action);
     });
 }
 
@@ -956,8 +959,14 @@ fn encryption_item(ui: &mut Ui, path: &Path, context: &TreeContext, action: &mut
 }
 
 /// "Rename…" (also a double click) and "Delete…" for a file or folder.
-fn rename_delete_items(ui: &mut Ui, path: &Path, delete_label: &str, action: &mut Option<ExplorerAction>) {
-    if ui.button("Rename…").on_hover_text("Or double-click it").clicked() {
+fn rename_delete_items(
+    ui: &mut Ui,
+    path: &Path,
+    can_rename: bool,
+    delete_label: &str,
+    action: &mut Option<ExplorerAction>,
+) {
+    if ui.add_enabled(can_rename, egui::Button::new("Rename…")).on_hover_text("Or double-click it").clicked() {
         *action = Some(ExplorerAction::Rename(path.to_path_buf()));
         ui.close();
     }
@@ -983,7 +992,7 @@ fn folder_menu(
         open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
-        rename_delete_items(ui, path, "Delete…", action);
+        rename_delete_items(ui, path, true, "Delete…", action);
     });
 }
 
@@ -1088,6 +1097,7 @@ mod tests {
         highlighted: Vec<PathBuf>,
         editor: String,
         dialog_open: bool,
+        menu_items: Vec<(String, egui::Pos2)>,
     }
 
     impl FileTree {
@@ -1100,6 +1110,22 @@ mod tests {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let open = self.open_file.as_deref();
                     let mut files = FileRows::new(ui, &mut self.selection, open);
+                    let context = super::TreeContext {
+                        root: Path::new("."),
+                        can_remove_roots: false,
+                        filter: super::ExplorerFilter::default(),
+                        open_file: open,
+                        dirty_files: &[],
+                        note_marks: None,
+                        remote_enabled: false,
+                        terminals: None,
+                        open_terminal: None,
+                        revealed: None,
+                        root_color: None,
+                        agent_history: None,
+                        expanded_terminals: &[],
+                        scratch_folder: None,
+                    };
                     let folder = super::tree_row(ui, false, "Folder");
                     self.folder_position = folder.rect.center();
                     files.record_focus(&folder);
@@ -1120,6 +1146,7 @@ mod tests {
                             .inner;
                         self.positions[index] = row.inner.rect.center();
                         file_click(&row.inner, path, &mut files, &mut action);
+                        super::file_menu(&row.inner, path, &context, None, &files, &mut action);
                     }
                     files.update(ui);
                     action = action.take().or_else(|| files.keyboard_delete(ui).map(ExplorerAction::Delete));
@@ -1133,6 +1160,16 @@ mod tests {
                 }
             });
             output.textures_delta.clear();
+            self.menu_items = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => {
+                        Some((text.galley.text().to_owned(), text.visual_bounding_rect().center()))
+                    }
+                    _ => None,
+                })
+                .collect();
             if let Some(ExplorerAction::OpenFile(path)) = &action {
                 self.open_file = Some(path.clone());
             }
@@ -1146,10 +1183,28 @@ mod tests {
 
         /// Click a position in the test UI.
         fn click_at(&mut self, pos: egui::Pos2, modifiers: Modifiers) -> Option<ExplorerAction> {
+            self.click_button(pos, PointerButton::Primary, modifiers)
+        }
+
+        /// Send a pointer click at a row or menu item.
+        fn click_button(
+            &mut self,
+            pos: egui::Pos2,
+            button: PointerButton,
+            modifiers: Modifiers,
+        ) -> Option<ExplorerAction> {
             self.frame(vec![Event::PointerMoved(pos)]);
-            let button = |pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers };
-            self.frame(vec![button(true)]);
-            self.frame(vec![button(false)])
+            let event = |pressed| Event::PointerButton { pos, button, pressed, modifiers };
+            self.frame(vec![event(true)]);
+            self.frame(vec![event(false)])
+        }
+
+        /// Click a file's context menu item by its displayed label.
+        fn click_menu_item(&mut self, index: usize, label: &str) -> Option<ExplorerAction> {
+            self.click_button(self.positions[index], PointerButton::Secondary, Modifiers::NONE);
+            self.frame(Vec::new());
+            let (_, position) = self.menu_items.iter().find(|(text, _)| text == label).expect("menu item is visible");
+            self.click_at(*position, Modifiers::NONE)
         }
 
         /// Press Delete with no modifiers.
@@ -1160,6 +1215,44 @@ mod tests {
         /// Send a keyboard shortcut to the focused widget.
         fn press(&mut self, key: Key, modifiers: Modifiers) -> Option<ExplorerAction> {
             self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }])
+        }
+    }
+
+    #[test]
+    fn file_menu_disables_single_file_actions_on_a_selection() {
+        for item in ["Copy absolute path", "Copy relative path", "Copy name", "Rename…"] {
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            assert!(tree.click_menu_item(0, item).is_none(), "{item} is enabled on the selection");
+
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            let action = tree.click_menu_item(2, item);
+            match item {
+                "Rename…" => {
+                    assert!(matches!(action, Some(ExplorerAction::Rename(path)) if path == Path::new("three.md")));
+                }
+                _ => assert!(matches!(action, Some(ExplorerAction::Copy(_))), "{item} is disabled on a single target"),
+            }
+        }
+    }
+
+    #[test]
+    fn file_menu_keeps_batch_move_and_delete_enabled() {
+        for item in ["Move 2 Selected Files to Folder…", "Delete 2 selected files…"] {
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            let action = tree.click_menu_item(0, item);
+            match item {
+                "Delete 2 selected files…" => assert!(matches!(action, Some(ExplorerAction::Delete(_)))),
+                _ => assert!(matches!(action, Some(ExplorerAction::MoveFiles(_)))),
+            }
         }
     }
 

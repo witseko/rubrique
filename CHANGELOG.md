@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **File tree selection menu.** Rename, copy, scratch encryption, and terminal
+  exit are disabled when you right-click a selection of multiple files.
+
 ## [1.5.0] - 2026-11-18
 
 ### Added
