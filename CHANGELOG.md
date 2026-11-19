@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-19
+
 ### Fixed
 
 - **File tree selection menu.** Rename, copy, scratch encryption, and terminal
