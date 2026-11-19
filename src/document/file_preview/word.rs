@@ -7,14 +7,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use quick_xml::NsReader;
-use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 
-/// Maximum number of bytes of text shown in a Word preview.
-const MAX_TEXT_BYTES: usize = 1024 * 1024;
-/// Maximum size of the uncompressed DOCX document body.
-const MAX_XML_BYTES: u64 = 16 * 1024 * 1024;
+use super::package::{push_reference, read_part};
+use super::{MAX_TEXT_BYTES, limit_text};
+
 /// Time limit for the legacy Word converter.
 const CONVERSION_TIMEOUT: Duration = Duration::from_secs(10);
 /// The file signature of the compound container used by Word 97 through 2003.
@@ -23,15 +21,7 @@ const COMPOUND_FILE_SIGNATURE: &[u8] = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1";
 /// Extract the main document part without opening links or other archive entries.
 pub(super) fn docx_text(bytes: &[u8]) -> Result<String, String> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
-    let body = archive.by_name("word/document.xml").map_err(|error| error.to_string())?;
-    if body.size() > MAX_XML_BYTES {
-        return Err("The Word document body exceeds the preview limit.".into());
-    }
-    let mut xml = Vec::new();
-    body.take(MAX_XML_BYTES + 1).read_to_end(&mut xml).map_err(|error| error.to_string())?;
-    if xml.len() as u64 > MAX_XML_BYTES {
-        return Err("The Word document body exceeds the preview limit.".into());
-    }
+    let xml = read_part(&mut archive, "word/document.xml")?;
     extract_docx_text(&xml).map_err(|error| error.to_string())
 }
 
@@ -56,13 +46,7 @@ fn extract_docx_text(xml: &[u8]) -> Result<String, quick_xml::Error> {
                 _ => {}
             },
             Event::Text(value) if in_text => text.push_str(&value.xml10_content()),
-            Event::GeneralRef(reference) if in_text => {
-                if let Some(character) = reference.resolve_char_ref()? {
-                    text.push(character);
-                } else if let Some(entity) = resolve_xml_entity(reference.as_ref()) {
-                    text.push_str(entity);
-                }
-            }
+            Event::GeneralRef(reference) if in_text => push_reference(&mut text, &reference)?,
             Event::Eof => return Ok(text),
             _ => {}
         }
@@ -142,15 +126,6 @@ fn read_converter(command: &mut Command, input: Arc<Vec<u8>>) -> io::Result<Vec<
         return Err(io::Error::other("The Word converter could not read this document."));
     }
     Ok(output)
-}
-
-/// Mark truncated output without splitting a Unicode character.
-fn limit_text(mut text: String) -> String {
-    if text.len() > MAX_TEXT_BYTES {
-        text.truncate(text.floor_char_boundary(MAX_TEXT_BYTES));
-        text.push_str("\n\nPreview ended at the text size limit.");
-    }
-    text
 }
 
 #[cfg(test)]

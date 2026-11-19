@@ -1,6 +1,10 @@
-//! Load a read-only PDF, Word document, or workbook outside the UI thread.
+//! Load a read-only document, presentation, or workbook outside the UI thread.
 
+mod odt;
+mod package;
 mod pdf;
+mod pptx;
+mod rtf;
 mod table;
 mod view;
 mod word;
@@ -21,6 +25,8 @@ pub use table::{Delimited, DelimitedPreview};
 
 /// Maximum file size read for a preview, including files fetched over SSH.
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
+/// Maximum number of bytes of text shown in a document or slide.
+const MAX_TEXT_BYTES: usize = 1024 * 1024;
 /// Maximum declared size of all contents in an Office ZIP archive.
 const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
@@ -30,6 +36,9 @@ pub enum Kind {
     Pdf,
     Doc,
     Docx,
+    Odt,
+    Rtf,
+    Pptx,
     Xls,
     Xlsx,
     Ods,
@@ -42,6 +51,9 @@ impl Kind {
             "pdf" => Some(Self::Pdf),
             "doc" => Some(Self::Doc),
             "docx" => Some(Self::Docx),
+            "odt" => Some(Self::Odt),
+            "rtf" => Some(Self::Rtf),
+            "pptx" => Some(Self::Pptx),
             "xls" => Some(Self::Xls),
             "xlsx" => Some(Self::Xlsx),
             "ods" => Some(Self::Ods),
@@ -50,15 +62,16 @@ impl Kind {
     }
 }
 
-/// Rendered data for the current PDF page or workbook sheet, or Word text.
+/// Rendered content of a document, or of the selected page, slide, or sheet.
 #[derive(Debug)]
 enum Content {
     Page { pixels: Option<ColorImage>, page_count: usize },
     Text(String),
+    Slide { text: String, slide_count: usize },
     Sheet { names: Vec<String>, table: Table },
 }
 
-/// A loaded file snapshot and the selected page or sheet.
+/// A loaded file snapshot and its displayed content.
 #[derive(Debug)]
 struct Loaded {
     bytes: Arc<Vec<u8>>,
@@ -106,7 +119,7 @@ impl FilePreview {
         }
     }
 
-    /// Start loading a page or sheet. Reuse the open file snapshot for navigation.
+    /// Load the document or reuse its snapshot to navigate within it.
     fn start(&mut self, ctx: &Context, path: &Path) {
         let (sender, receiver) = mpsc::channel();
         let ctx = ctx.clone();
@@ -176,12 +189,15 @@ fn too_large() -> String {
     format!("This file exceeds the {} preview limit.", crate::media::size_text(MAX_BYTES))
 }
 
-/// Decode the selected page or sheet, or extract the Word text.
+/// Load the content for the selected format and navigation position.
 fn load(kind: Kind, bytes: &Arc<Vec<u8>>, selected: usize) -> Result<Content, String> {
     match kind {
         Kind::Pdf => pdf::page(Arc::clone(bytes), selected),
         Kind::Doc => word::legacy_text(Arc::clone(bytes)).map(Content::Text),
         Kind::Docx => word::docx_text(bytes).map(Content::Text),
+        Kind::Odt => odt::text(bytes).map(Content::Text),
+        Kind::Rtf => rtf::text(bytes).map(Content::Text),
+        Kind::Pptx => pptx::slide(bytes, selected),
         Kind::Xls | Kind::Xlsx | Kind::Ods => workbook(kind, bytes, selected),
     }
 }
@@ -199,7 +215,9 @@ fn workbook(kind: Kind, bytes: &[u8], selected: usize) -> Result<Content, String
             check_archive(bytes)?;
             Ods::new(source).map(Sheets::Ods).map_err(calamine::Error::from)
         }
-        Kind::Pdf | Kind::Doc | Kind::Docx => return Err("Choose a workbook to show its sheets.".into()),
+        Kind::Pdf | Kind::Doc | Kind::Docx | Kind::Odt | Kind::Rtf | Kind::Pptx => {
+            return Err("Choose a workbook to show its sheets.".into());
+        }
     }
     .map_err(|error| error.to_string())?;
 
@@ -224,6 +242,15 @@ fn check_archive(bytes: &[u8]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Mark truncated output without splitting a Unicode character.
+fn limit_text(mut text: String) -> String {
+    if text.len() > MAX_TEXT_BYTES {
+        text.truncate(text.floor_char_boundary(MAX_TEXT_BYTES));
+        text.push_str("\n\nPreview ended at the text size limit.");
+    }
+    text
 }
 
 /// Open the source with the system default app, after resolving it to an absolute path.

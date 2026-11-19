@@ -43,7 +43,9 @@ the libraries listed under [Build](#build) first.
   `.. note::`. Switch to Source to edit it.
 - **PDF and Word.** Open a PDF to browse its pages, or a DOC or DOCX to
   read its text. On Linux, install `antiword` for legacy DOC previews.
-  Use **Open in default app** for editing or the full layout of a Word file.
+- **PowerPoint, OpenDocument Text and Rich Text.** Browse the text from
+  each PPTX slide or read the body text of ODT and RTF documents.
+  Use **Open in default app** to see the full layout or edit the file.
 - **Spreadsheets.** Browse XLS, XLSX and ODS sheets in a read-only grid.
   CSV and TSV open in Read as a grid. Switch to Source to edit or search
   the text. Table previews show up to 1,000 rows and 48 columns.

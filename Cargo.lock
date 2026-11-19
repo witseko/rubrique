@@ -3000,6 +3000,31 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
+name = "rclip-codepage"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03b479f8baadf78efd25b8a252cf6e6926f53f26f25578bb0e4316e9a481abff"
+dependencies = [
+ "rclip-core",
+]
+
+[[package]]
+name = "rclip-core"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6414ce752a0d18ee3d000b6c76fccbc30e90b93c2a8c1e7fdd855ab9b7ea0af6"
+
+[[package]]
+name = "rclip-rtf"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e64929d6244eea54b6ae4276d5724ae8833c269b8156dd63d48b4f13d39a78ed"
+dependencies = [
+ "rclip-codepage",
+ "rclip-core",
+]
+
+[[package]]
 name = "read-fonts"
 version = "0.41.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3141,6 +3166,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "objc2-local-authentication",
  "quick-xml 0.42.0",
+ "rclip-rtf",
  "regex",
  "rfd",
  "rustix 1.1.6",

@@ -1,4 +1,4 @@
-//! Draw a preview and its page, sheet, and system-open controls.
+//! Draw a preview and its page, slide, sheet, and system-open controls.
 
 use std::path::Path;
 use std::time::Duration;
@@ -54,7 +54,10 @@ impl FilePreview {
             };
             ui.add_enabled_ui(self.pending.is_none() && self.error.is_none(), |ui| match &loaded.content {
                 Content::Page { page_count, .. } => {
-                    selected = page_selector(ui, selected, *page_count);
+                    selected = position_selector(ui, "Page", selected, *page_count);
+                }
+                Content::Slide { slide_count, .. } => {
+                    selected = position_selector(ui, "Slide", selected, *slide_count);
                 }
                 Content::Sheet { names, .. } => {
                     egui::ComboBox::from_id_salt(("workbook-sheet", path)).selected_text(&names[selected]).show_ui(
@@ -78,7 +81,7 @@ impl FilePreview {
             return;
         };
         ui.push_id((path, self.selected), |ui| match &mut loaded.content {
-            Content::Text(text) => {
+            Content::Text(text) | Content::Slide { text, .. } => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     if text.trim().is_empty() {
                         ui.weak("No text to display.");
@@ -100,16 +103,18 @@ impl FilePreview {
     }
 }
 
-/// Move one page backward or forward without going outside the document.
-fn page_selector(ui: &mut Ui, mut page: usize, pages: usize) -> usize {
-    if ui.add_enabled(page > 0, egui::Button::new("Previous")).clicked() {
-        page -= 1;
+/// Draw the current page or slide position and return the requested index.
+fn position_selector(ui: &mut Ui, label: &str, current: usize, total: usize) -> usize {
+    let previous = ui.add_enabled(current > 0, egui::Button::new("Previous")).clicked();
+    ui.label(format!("{label} {} of {total}", current + 1));
+    let next = ui.add_enabled(current + 1 < total, egui::Button::new("Next")).clicked();
+    if previous {
+        current - 1
+    } else if next {
+        current + 1
+    } else {
+        current
     }
-    ui.label(format!("Page {} of {pages}", page + 1));
-    if ui.add_enabled(page + 1 < pages, egui::Button::new("Next")).clicked() {
-        page += 1;
-    }
-    page
 }
 
 /// Fit the page to the reader width and let the user scroll down the page.
