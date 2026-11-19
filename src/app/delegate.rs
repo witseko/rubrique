@@ -119,13 +119,14 @@ impl RubriqueApp {
             .collect();
         let mut send = None;
         egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
-            if delegations.is_empty() {
-                let hint = "Hand a step to a terminal: write @tmux-<terminal>: what to do, in that step. \
-                            Send pastes it there with the step as context.";
-                ui.label(RichText::new(hint).weak().size(SMALL_TEXT));
-                return;
-            }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                self.openrig_tasks(ui);
+                ui.separator();
+                if delegations.is_empty() {
+                    let hint = "Hand a step to a terminal: write @tmux-<terminal>: what to do, in that step. \
+                                Send pastes it there with the step as context.";
+                    ui.label(RichText::new(hint).weak().size(SMALL_TEXT));
+                }
                 for (index, delegation) in delegations.iter().enumerate() {
                     let target = targets.iter().find(|target| target.handle == delegation.handle);
                     if task_card(ui, delegation, target, &rows, waiting[index]) {

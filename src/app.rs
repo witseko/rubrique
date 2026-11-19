@@ -26,6 +26,7 @@ mod naming;
 mod native_menu;
 mod new_entry;
 mod open_path;
+mod openrig;
 mod privacy;
 mod remote;
 mod scratch_paths;
@@ -393,6 +394,8 @@ pub struct RubriqueApp {
     folded_groups: Vec<PathBuf>,
     /// `@tmux-` messages waiting for a busy terminal to be idle.
     pending_sends: Vec<delegate::PendingSend>,
+    /// `OpenRig` task composition and status for the Tasks panel.
+    openrig: openrig::OpenRigPanel,
     /// What typing `@` suggests, and when it was gathered (egui time):
     /// gathering reads folders, so it is redone every few seconds only.
     mention_cache: (f64, Vec<Suggestion>),
@@ -512,6 +515,7 @@ impl RubriqueApp {
             session_edit: None,
             new_entry: None,
             pending_sends: Vec::new(),
+            openrig: openrig::OpenRigPanel::default(),
             folded_groups: Vec::new(),
             agent_history: agent_history::load_history(),
             last_agent_check: f64::NEG_INFINITY,

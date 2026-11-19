@@ -240,6 +240,11 @@ pub fn drafts_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("drafts"))
 }
 
+/// Where Rubrique stores links to submitted `OpenRig` tasks.
+pub fn openrig_tasks_folder() -> Option<PathBuf> {
+    config_folder().map(|folder| folder.join("openrig-tasks"))
+}
+
 /// Default folder for agents (`agents` in the config folder).
 pub fn default_agents_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("agents"))
