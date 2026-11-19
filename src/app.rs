@@ -45,6 +45,7 @@ use crate::ai::mention_list::{self, Suggestion};
 use crate::ai::skills::{self, Skill, SourceFolder};
 use crate::ai::{self, AiTool};
 use crate::alert::{self, ButtonKind};
+use crate::document::file_preview::{Delimited, DelimitedPreview, FilePreview, Kind as PreviewKind};
 use crate::document::highlighting::Syntax;
 use crate::document::highlighting::{install_text_rules, takes_text_highlights};
 use crate::document::media_view::{MediaEvent, image_pixels, show_image, show_video};
@@ -181,6 +182,8 @@ enum OpenFile {
         document: Document,
         /// Parsed preview, rebuilt lazily after the text changes.
         preview: Option<Vec<SourceBlock>>,
+        /// Parsed CSV or TSV table for the current text revision.
+        delimited: Option<DelimitedPreview>,
         /// Shown when the file changed or vanished on disk.
         disk_notice: Option<DiskState>,
         /// Cursor and undo history while the tab is hidden.
@@ -199,6 +202,10 @@ enum OpenFile {
         modified: Option<std::time::SystemTime>,
         /// An image at its own size (with scroll bars) instead of fitted to the page.
         actual_size: bool,
+    },
+    Preview {
+        path: PathBuf,
+        preview: Box<FilePreview>,
     },
     Unsupported {
         path: PathBuf,
@@ -220,7 +227,10 @@ impl OpenFile {
         match self {
             OpenFile::Nothing => None,
             OpenFile::Text { document, .. } => Some(&document.path),
-            OpenFile::Media { path, .. } | OpenFile::Unsupported { path, .. } | OpenFile::Locked { path } => Some(path),
+            OpenFile::Media { path, .. }
+            | OpenFile::Preview { path, .. }
+            | OpenFile::Unsupported { path, .. }
+            | OpenFile::Locked { path } => Some(path),
             OpenFile::Terminal { terminal } => terminal.file.as_deref(),
         }
     }
@@ -240,7 +250,10 @@ impl OpenFile {
         match self {
             OpenFile::Nothing => {}
             OpenFile::Text { document, .. } => document.path = target.to_path_buf(),
-            OpenFile::Media { path, .. } | OpenFile::Unsupported { path, .. } | OpenFile::Locked { path } => {
+            OpenFile::Media { path, .. }
+            | OpenFile::Preview { path, .. }
+            | OpenFile::Unsupported { path, .. }
+            | OpenFile::Locked { path } => {
                 *path = target.to_path_buf();
             }
             OpenFile::Terminal { terminal } => terminal.follow_rename(target),
@@ -610,12 +623,22 @@ impl RubriqueApp {
                 }
             };
         }
+        if let Some(kind) = PreviewKind::of_path(&path) {
+            return Some(OpenFile::Preview { path, preview: Box::new(FilePreview::new(kind)) });
+        }
         match Document::open(&path, self.privacy.vault.as_ref()) {
             Ok(Opened::Text(document)) => {
                 if crate::remote::is_mirror(&document.path) {
                     self.fetch_remote_images(&document.path, &document.text);
                 }
-                Some(OpenFile::Text { document, preview: None, disk_notice: None, editor: None, source: false })
+                Some(OpenFile::Text {
+                    document,
+                    preview: None,
+                    delimited: None,
+                    disk_notice: None,
+                    editor: None,
+                    source: false,
+                })
             }
             Ok(Opened::Unsupported(reason)) => Some(OpenFile::Unsupported { path, reason }),
             Ok(Opened::Locked) => Some(OpenFile::Locked { path }),
@@ -734,8 +757,7 @@ impl RubriqueApp {
         ctx.copy_text(text);
     }
 
-    /// Switch a Markdown, HTML or reStructuredText file between editor and
-    /// preview (no-op for other files).
+    /// Switch a supported text file between source and preview.
     fn toggle_preview(&mut self) {
         self.finish_block_edit();
         let has_preview = self.open_file.path().is_some_and(has_preview);
@@ -802,13 +824,26 @@ impl RubriqueApp {
         matches!(self.open_file, OpenFile::Text { source: false, .. }) && self.open_file.path().is_some_and(is_rst_path)
     }
 
-    /// True when the right panel shows any preview instead of the editor.
+    /// True when a CSV or TSV tab shows its grid.
+    fn showing_delimited_preview(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { source: false, .. })
+            && self.open_file.path().and_then(Delimited::of_path).is_some()
+    }
+
+    /// True when the right panel shows any text file preview instead of the editor.
     fn showing_any_preview(&self) -> bool {
-        self.showing_preview() || self.showing_html_preview() || self.showing_rst_preview()
+        self.showing_preview()
+            || self.showing_html_preview()
+            || self.showing_rst_preview()
+            || self.showing_delimited_preview()
     }
 
     /// When the window regains focus, look for changes made by other programs.
     fn check_disk(&mut self) {
+        if let OpenFile::Preview { path, preview } = &mut self.open_file {
+            preview.check_disk(path);
+            return;
+        }
         // Remote files: a new version of an image shows when it is opened
         // again; a text file is checked in the background.
         if let OpenFile::Media { path, .. } = &self.open_file
@@ -875,7 +910,9 @@ impl RubriqueApp {
 
     /// Check for outside changes every few seconds while a file is open.
     fn poll_disk(&mut self, ctx: &Context) {
-        if !matches!(self.open_file, OpenFile::Text { .. } | OpenFile::Media { .. }) || self.merging.is_some() {
+        if !matches!(self.open_file, OpenFile::Text { .. } | OpenFile::Media { .. } | OpenFile::Preview { .. })
+            || self.merging.is_some()
+        {
             return;
         }
         let now = ctx.input(|input| input.time);
@@ -1919,6 +1956,15 @@ impl RubriqueApp {
         if self.merging.is_none() {
             self.recording_bar(ui);
         }
+        self.document_content(ui);
+        self.drop_hint(ui.ctx(), page);
+        if self.showing_preview() && self.block_edit.is_none() && self.note_draft.is_none() && !self.ask.is_open() {
+            self.add_note_button(ui.ctx());
+        }
+    }
+
+    /// Draw the active tab and apply its actions.
+    fn document_content(&mut self, ui: &mut Ui) {
         let showing_preview = self.showing_preview();
         let mentions = self.mentions(ui.ctx());
         self.refresh_block_changes();
@@ -1927,6 +1973,7 @@ impl RubriqueApp {
         let mut merge_action = None;
         let mut preview_event = None;
         let mut media_event = None;
+        let mut preview_status = None;
         match &mut self.open_file {
             OpenFile::Locked { path } => {
                 let path = path.clone();
@@ -1943,8 +1990,9 @@ impl RubriqueApp {
             OpenFile::Media { path, kind: MediaKind::Video, bytes, .. } => {
                 media_event = show_video(ui, path, *bytes);
             }
+            OpenFile::Preview { path, preview } => preview_status = preview.show(ui, path),
             OpenFile::Unsupported { path, reason } => unsupported_notice(ui, path, reason),
-            OpenFile::Text { document, preview, disk_notice, source, .. } => {
+            OpenFile::Text { document, preview, delimited, disk_notice, source, .. } => {
                 if let Some(session) = &mut self.merging {
                     merge_action = show_merge(ui, session, &name_text(&document.path));
                 } else if let Some(state) = disk_notice {
@@ -1975,6 +2023,8 @@ impl RubriqueApp {
                     });
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
+                } else if !*source && let Some(kind) = Delimited::of_path(&document.path) {
+                    DelimitedPreview::show(delimited, ui, kind, document);
                 } else if !*source && has_preview(&document.path) {
                     let use_browser = self.settings.html_browser_preview;
                     let snapshots = &mut self.html_snapshots;
@@ -2011,9 +2061,8 @@ impl RubriqueApp {
         if let Some(event) = media_event {
             self.media_action(ui.ctx(), event);
         }
-        self.drop_hint(ui.ctx(), page);
-        if showing_preview && self.block_edit.is_none() && self.note_draft.is_none() && !self.ask.is_open() {
-            self.add_note_button(ui.ctx());
+        if let Some(status) = preview_status {
+            self.show_status(status);
         }
     }
 
@@ -2779,9 +2828,9 @@ impl RubriqueApp {
 /// file is empty or already ends with one, and a line break after it. Empty
 /// input gives an empty string, so nothing is added.
 /// The hint under the notes: how to add one and what Resolve does.
-/// True for a file with a preview: Markdown, HTML and reStructuredText.
+/// True for a text file with a Read or Edit preview.
 fn has_preview(path: &Path) -> bool {
-    is_markdown_path(path) || is_html_path(path) || is_rst_path(path)
+    is_markdown_path(path) || is_html_path(path) || is_rst_path(path) || Delimited::of_path(path).is_some()
 }
 
 /// Draw an HTML or reStructuredText file in read mode.

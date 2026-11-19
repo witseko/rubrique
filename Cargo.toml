@@ -69,6 +69,12 @@ regex = "1.13.1"
 # "Import from Sublime Text" reads its session file, which is JSON; the
 # Chromium HTML preview talks JSON to the browser too.
 serde_json = "1.0.154"
+# Read-only previews of delimited text, spreadsheets, PDF pages and Word XML.
+csv = "1.4"
+calamine = "0.38"
+hayro = "0.9"
+quick-xml = "0.42"
+zip = { version = "9.7", default-features = false, features = ["deflate"] }
 # The Chromium HTML preview gets the page's picture as base64 text.
 base64 = "0.22"
 

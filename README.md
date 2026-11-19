@@ -41,6 +41,12 @@ the libraries listed under [Build](#build) first.
 - **reStructuredText.** Open a `.rst` file in Read to see headings,
   tables, footnotes, code blocks, figures and admonitions such as
   `.. note::`. Switch to Source to edit it.
+- **PDF and Word.** Open a PDF to browse its pages, or a DOC or DOCX to
+  read its text. On Linux, install `antiword` for legacy DOC previews.
+  Use **Open in default app** for editing or the full layout of a Word file.
+- **Spreadsheets.** Browse XLS, XLSX and ODS sheets in a read-only grid.
+  CSV and TSV open in Read as a grid. Switch to Source to edit or search
+  the text. Table previews show up to 1,000 rows and 48 columns.
 - **Find in preview.** Press `Cmd/Ctrl+F` to highlight matches in the
   rendered text of Markdown, HTML and reStructuredText. HTML uses the
   built-in preview while you search. Find and replace opens the source.

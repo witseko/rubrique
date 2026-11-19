@@ -197,6 +197,7 @@ impl RubriqueApp {
             self.add_tab(OpenFile::Text {
                 document,
                 preview: None,
+                delimited: None,
                 disk_notice: Some(DiskState::Deleted),
                 editor: None,
                 source: false,

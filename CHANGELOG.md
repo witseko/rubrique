@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Document and spreadsheet previews.** Browse PDF pages, read text from
+  DOC and DOCX, and switch between sheets in XLS, XLSX and ODS workbooks.
+  View CSV and TSV as tables, or switch to Source to edit them. Legacy
+  DOC previews on Linux use `antiword`.
+
 ## [1.5.1] - 2026-11-19
 
 ### Fixed
