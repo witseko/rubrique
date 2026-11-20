@@ -1,10 +1,10 @@
 //! Run one AI tool as a separate program and collect what it prints.
 //!
-//! The program gets its arguments directly (no shell) and no input. Two
+//! The program gets its arguments directly (no shell). Two
 //! threads read its output and error streams as they arrive and call `wake`
 //! so the window can redraw; the window checks [`AiRun::poll`] each frame.
 
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -47,21 +47,37 @@ impl AiRun {
         folder: &Path,
         wake: impl Fn() + Send + Clone + 'static,
     ) -> io::Result<AiRun> {
-        let mut child = Command::new(program)
-            .args(args)
-            .current_dir(folder)
-            .stdin(Stdio::null())
+        let mut command = Command::new(program);
+        command.args(args).current_dir(folder);
+        Self::start_command(&mut command, None, None, wake)
+    }
+
+    /// Run a configured command with optional stdin and a capture limit per stream.
+    pub fn start_command(
+        command: &mut Command,
+        input: Option<String>,
+        capture_limit: Option<usize>,
+        wake: impl Fn() + Send + Clone + 'static,
+    ) -> io::Result<AiRun> {
+        let mut child = command
+            .stdin(if input.is_some() { Stdio::piped() } else { Stdio::null() })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
         let output = Arc::new(Mutex::new(Vec::new()));
         let errors = Arc::new(Mutex::new(Vec::new()));
         let open_readers = Arc::new(AtomicUsize::new(0));
+        if let (Some(input), Some(mut stream)) = (input, child.stdin.take()) {
+            thread::spawn(move || {
+                // A child can close its pipe on refusal. Its response is authoritative.
+                let _ = stream.write_all(input.as_bytes());
+            });
+        }
         if let Some(stream) = child.stdout.take() {
-            read_in_background(stream, Arc::clone(&output), Arc::clone(&open_readers), wake.clone());
+            read_in_background(stream, Arc::clone(&output), Arc::clone(&open_readers), capture_limit, wake.clone());
         }
         if let Some(stream) = child.stderr.take() {
-            read_in_background(stream, Arc::clone(&errors), Arc::clone(&open_readers), wake);
+            read_in_background(stream, Arc::clone(&errors), Arc::clone(&open_readers), capture_limit, wake);
         }
         Ok(AiRun { child, output, errors, open_readers, started: Instant::now(), end: None, stopped: false })
     }
@@ -138,6 +154,7 @@ fn read_in_background(
     mut stream: impl Read + Send + 'static,
     buffer: Arc<Mutex<Vec<u8>>>,
     open_readers: Arc<AtomicUsize>,
+    capture_limit: Option<usize>,
     wake: impl Fn() + Send + 'static,
 ) {
     open_readers.fetch_add(1, Ordering::AcqRel);
@@ -147,7 +164,10 @@ fn read_in_background(
             match stream.read(&mut piece) {
                 Ok(0) | Err(_) => break,
                 Ok(count) => {
-                    buffer.lock().unwrap_or_else(PoisonError::into_inner).extend_from_slice(&piece[..count]);
+                    let mut buffer = buffer.lock().unwrap_or_else(PoisonError::into_inner);
+                    let remaining = capture_limit.unwrap_or(usize::MAX).saturating_sub(buffer.len());
+                    buffer.extend_from_slice(&piece[..count.min(remaining)]);
+                    drop(buffer);
                     wake();
                 }
             }

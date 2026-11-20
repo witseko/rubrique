@@ -10,6 +10,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Send to OpenRig.** Select a document step in Markdown and use Tasks to
+  send it to a seat on a local OpenRig team. Reopen the file to check the
+  saved task's status and read its result.
 - **Document and spreadsheet previews.** Browse PDF pages, read text from
   DOC and DOCX, and switch between sheets in XLS, XLSX and ODS workbooks.
   View CSV and TSV as tables, or switch to Source to edit them. Legacy
