@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-11-20
+
 ### Fixed
 
 - **Grok is found when Rubrique starts from Finder.** Settings > AI no
