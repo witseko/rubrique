@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Ask AI with selected text.** Clicking Ask in the status bar opens the
+  prompt for the selected text in the Markdown preview.
+
 ## [1.8.0] - 2026-11-20
 
 ### Added
