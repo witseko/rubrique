@@ -4,6 +4,8 @@
 //! output command; this plugin, registered after egui's own, catches it and
 //! keeps it (with where the pointer was) for the next frame.
 
+use std::ops::Range;
+
 use eframe::egui::{self, Context, Id, OutputCommand, Pos2, Ui};
 
 /// The selected preview text and the pointer position when it was made.
@@ -11,6 +13,8 @@ use eframe::egui::{self, Context, Id, OutputCommand, Pos2, Ui};
 pub struct PreviewSelection {
     pub text: String,
     pub pointer: Pos2,
+    /// The source block when both ends of the drag were inside it.
+    pub source_block: Option<Range<usize>>,
 }
 
 /// Install the plugin once, when the app starts.
@@ -33,8 +37,39 @@ pub fn clear(ctx: &Context) {
     ctx.data_mut(|data| {
         data.remove::<PreviewSelection>(selection_id());
         data.remove::<egui::Rect>(openrig_button_id());
+        data.remove::<Range<usize>>(press_block_id());
+        data.remove::<Range<usize>>(release_block_id());
     });
     ctx.plugin::<egui::text_selection::LabelSelectionState>().lock().clear_selection();
+}
+
+/// Track the source block at each end of a drag in the Markdown preview.
+pub fn track_block(ctx: &Context, hovered: Option<Range<usize>>) {
+    let (pressed, released) = ctx.input(|input| (input.pointer.primary_pressed(), input.pointer.primary_released()));
+    ctx.data_mut(|data| {
+        if pressed {
+            data.remove::<Range<usize>>(press_block_id());
+            if let Some(range) = &hovered {
+                data.insert_temp(press_block_id(), range.clone());
+            }
+        }
+        if released {
+            data.remove::<Range<usize>>(release_block_id());
+            if let Some(range) = hovered
+                && data.get_temp::<Range<usize>>(press_block_id()).as_ref() == Some(&range)
+            {
+                data.insert_temp(release_block_id(), range);
+            }
+        }
+    });
+}
+
+fn press_block_id() -> Id {
+    Id::unique("rubrique-selection-press-block")
+}
+
+fn release_block_id() -> Id {
+    Id::unique("rubrique-selection-release-block")
 }
 
 /// Where the "Add note" button was drawn this frame.
@@ -114,7 +149,10 @@ impl egui::Plugin for SelectionTracker {
             if !dragged {
                 return;
             }
-            ctx.data_mut(|data| data.insert_temp(selection_id(), PreviewSelection { text, pointer }));
+            ctx.data_mut(|data| {
+                let source_block = data.get_temp(release_block_id());
+                data.insert_temp(selection_id(), PreviewSelection { text, pointer, source_block });
+            });
         }
     }
 }

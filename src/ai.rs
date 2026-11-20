@@ -405,10 +405,10 @@ pub fn build_prompt(request: &str, text: &str, kind: AskKind, whole_file: bool) 
 }
 
 /// Request for resolving every note in a file.
-pub const RESOLVE_ALL_REQUEST: &str = "Resolve every note. A note is an HTML comment like \
+pub const RESOLVE_ALL_REQUEST: &str = "Resolve every written note. A written note is an HTML comment like \
 <!-- note on \"quoted text\": what to do -->, placed right after the text it is about. \
 For each note, change the quoted text as the note asks, then remove that comment. \
-Leave a note in place when you cannot resolve it. Change nothing else.";
+Leave a note in place when you cannot resolve it. Preserve voice note comments. Change nothing else.";
 
 /// Request for resolving the note on `quote` that says `text`.
 pub fn resolve_note_request(quote: &str, text: &str) -> String {

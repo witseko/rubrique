@@ -10,6 +10,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **Voice notes on selected text.** Select a passage in a local, unencrypted
+  Markdown file, choose Add note, then Record voice note. Stop to attach the
+  recording and play it from the Notes panel.
 - **Send to OpenRig.** Select a document step in Markdown and use Tasks to
   send it to a seat on a local OpenRig team. Reopen the file to check the
   saved task's status and read its result.

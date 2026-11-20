@@ -62,6 +62,9 @@ the libraries listed under [Build](#build) first.
 - Record a voice memo (`Cmd+Shift+R`) and transcribe it locally with
   whisper.cpp, or drop images and audio onto the page. Attachments work
   in local, unencrypted Markdown and HTML files.
+- To record a voice note on a passage, select text in a Markdown block,
+  choose **Add note** (`Cmd+Shift+M`), then **Record voice note**. Stop the
+  recording, play it from the Notes panel, and save the file to keep it.
 - Press `Cmd+N` for a scratch file or `Cmd+Shift+N` for an encrypted
   one. The lock button in the status bar lets you change a scratch's
   encryption later. The signed macOS release can unlock scratches with

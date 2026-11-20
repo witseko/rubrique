@@ -73,7 +73,7 @@ use crate::icons::{Icon, icon_button};
 use crate::install::view::InstallAction;
 use crate::markdown::blocks::{SourceBlock, parse_blocks, parse_source_blocks};
 use crate::markdown::html::{file_url, html_page, is_html_path, with_base};
-use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, rewrite_note};
+use crate::markdown::notes::{self, Note, NoteContent, find_notes, insert_note, remove_note, rewrite_note};
 use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
@@ -449,6 +449,10 @@ struct NoteDraft {
     quote: String,
     /// Where that text is in the source, when known (selection in Edit mode).
     range: Option<std::ops::Range<usize>>,
+    /// The block that held the preview selection, if it stayed in one block.
+    source_block: Option<std::ops::Range<usize>>,
+    /// The document revision at which the selection was captured.
+    source_revision: u64,
     /// What the note says.
     text: String,
     /// The note being changed, for Edit.
@@ -2338,7 +2342,9 @@ impl RubriqueApp {
             .order(egui::Order::Foreground)
             .fixed_pos(selection.pointer + egui::vec2(10.0, 14.0));
         let shown = area.show(ctx, |ui| {
-            ui.button("+ Add note").on_hover_text("Add a note about the selected text (Cmd+Shift+M)").clicked()
+            ui.button("+ Add note")
+                .on_hover_text("Write or record a note about the selected text (Cmd+Shift+M)")
+                .clicked()
         });
         preview_selection::set_button_rect(ctx, shown.response.rect);
         if shown.inner {
@@ -2356,6 +2362,8 @@ impl RubriqueApp {
             preview_selection::current(ctx).map(|selection| NoteDraft {
                 quote: normalize_space(&selection.text),
                 range: None,
+                source_block: selection.source_block,
+                source_revision: document.revision(),
                 text: String::new(),
                 existing: None,
                 error: None,
@@ -2367,6 +2375,8 @@ impl RubriqueApp {
                 NoteDraft {
                     quote: normalize_space(&shown),
                     range: Some(range),
+                    source_block: None,
+                    source_revision: document.revision(),
                     text: String::new(),
                     existing: None,
                     error: None,
@@ -2408,6 +2418,7 @@ impl RubriqueApp {
             return;
         }
         let mentions = self.mentions(ctx);
+        let can_record = self.open_file.path().is_some_and(is_markdown_path);
         let Some(draft) = &mut self.note_draft else {
             return;
         };
@@ -2439,18 +2450,32 @@ impl RubriqueApp {
             }
             // Enter starts a new line in the note, so Cmd+Enter saves.
             let save_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
-            let ((), (save, cancel)) = alert::button_row(
+            let (record, (save, cancel)) = alert::button_row(
                 ui,
-                |_| (),
+                |ui| {
+                    draft.existing.is_none()
+                        && can_record
+                        && icon_text_button(ui, Icon::Mic, "Record voice note", "Record from your microphone", false)
+                            .clicked()
+                },
                 |ui| {
                     let save = alert::button(ui, "Save note", ButtonKind::Primary, true).on_hover_text("Cmd+Enter");
                     let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false);
                     (save.clicked() || save_keys, cancel.clicked())
                 },
             );
-            (save || alert::enter_for_default(ui), cancel)
+            (save || alert::enter_for_default(ui), cancel, record)
         });
-        let (save, cancel) = modal.inner;
+        let (save, cancel, record) = modal.inner;
+        if record && let Some(mut draft) = self.note_draft.take() {
+            if let Err(error) = self.record_voice_note(&draft) {
+                draft.error = Some(error);
+                self.note_draft = Some(draft);
+            } else {
+                preview_selection::clear(ctx);
+            }
+            return;
+        }
         if cancel || modal.should_close() {
             self.note_draft = None;
             return;
@@ -2474,10 +2499,15 @@ impl RubriqueApp {
         let OpenFile::Text { document, .. } = &self.open_file else {
             return;
         };
+        let source_revision = document.revision();
         let notes = find_notes(&document.text);
+        let has_text_notes = notes.iter().any(|note| matches!(note.content, NoteContent::Text(_)));
+        let voice_folder =
+            document.path.parent().filter(|_| !document.is_encrypted() && !crate::remote::is_mirror(&document.path));
         let mut edit = None;
         let mut delete = None;
         let mut resolve = None;
+        let mut playback = None;
         let mut stop = false;
         let busy = self.ai_busy();
         let all_state = self.resolving_state(&ask::Resolving::All);
@@ -2485,15 +2515,14 @@ impl RubriqueApp {
             notes.iter().map(|note| self.resolving_state(&ask::Resolving::One(note.quote.clone()))).collect();
         egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             if notes.is_empty() {
-                let hint = "No notes in this file. Select text in the preview, then Add note (Cmd+Shift+M).";
-                ui.label(RichText::new(hint).weak().size(11.5));
+                notes_help(ui, self.settings.ai.default_tool.name());
                 return;
             }
             ui.horizontal(|ui| {
                 let count = if notes.len() == 1 { "1 note".to_string() } else { format!("{} notes", notes.len()) };
                 ui.label(RichText::new(count).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
+                    ui.add_enabled_ui(has_text_notes && !busy, |ui| {
                         let tip = "Ask AI to resolve every note; the answer opens in merge";
                         if icon_text_button(ui, Icon::Sparkle, "Resolve all", tip, false).clicked() {
                             resolve = Some(ask::Resolving::All);
@@ -2512,50 +2541,48 @@ impl RubriqueApp {
                                 .weak()
                                 .size(11.5),
                         );
-                        ui.label(&note.text);
-                        ui.horizontal(|ui| {
-                            if let Some((tool, seconds)) = note_states[index].or(all_state) {
-                                ui.add(egui::Spinner::new().size(11.0));
-                                let working = format!("{} is working · {}", tool.name(), ai::format_elapsed(seconds));
-                                ui.label(RichText::new(working).weak().size(11.5));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if icon_text_button(ui, Icon::Stop, "Stop", "Stop the tool", false).clicked() {
-                                        stop = true;
-                                    }
-                                });
-                                return;
+                        match &note.content {
+                            NoteContent::Text(text) => {
+                                ui.label(text);
                             }
-                            ui.add_enabled_ui(!busy, |ui| {
-                                let tip = "Ask AI to do what the note says; the answer opens in merge";
-                                if icon_text_button(ui, Icon::Sparkle, "Resolve", tip, false).clicked() {
-                                    resolve = Some(ask::Resolving::One(note.quote.clone()));
+                            NoteContent::Voice(url) => {
+                                if let Some(action) = self.voice.voice_note_playback(ui, voice_folder, url) {
+                                    playback = Some(action);
                                 }
-                            });
-                            if ui.small_button("Edit").clicked() {
-                                edit = Some(index);
                             }
-                            if ui.small_button("Delete").clicked() {
-                                delete = Some(index);
-                            }
-                        });
+                        }
+                        match note_controls(ui, &note.content, note_states[index].or(all_state), busy) {
+                            Some(NoteControl::Resolve) => resolve = Some(ask::Resolving::One(note.quote.clone())),
+                            Some(NoteControl::Stop) => stop = true,
+                            Some(NoteControl::Edit) => edit = Some(index),
+                            Some(NoteControl::Delete) => delete = Some(index),
+                            None => {}
+                        }
                     });
                     ui.add_space(8.0);
                 }
                 notes_help(ui, self.settings.ai.default_tool.name());
             });
         });
+        if let Some(action) = playback {
+            self.memo_action(ui.ctx(), action);
+        }
         if stop {
             self.stop_ai();
         }
         if let Some(which) = resolve {
             self.resolve_notes(ui.ctx(), which);
         }
-        if let Some(index) = edit {
+        if let Some(index) = edit
+            && let NoteContent::Text(text) = &notes[index].content
+        {
             let note = notes[index].clone();
             self.note_draft = Some(NoteDraft {
                 quote: note.quote.clone(),
                 range: None,
-                text: note.text.clone(),
+                source_block: None,
+                source_revision,
+                text: text.clone(),
                 existing: Some(note),
                 error: None,
             });
@@ -2869,6 +2896,53 @@ fn notes_help(ui: &mut Ui, tool: &str) {
          Resolve sends the file and the note to {tool}; the answer opens in merge."
     );
     ui.label(RichText::new(text).weak().size(11.5));
+}
+
+/// A button on a note card.
+enum NoteControl {
+    Resolve,
+    Stop,
+    Edit,
+    Delete,
+}
+
+/// Show the controls for a written note or a voice note.
+fn note_controls(
+    ui: &mut Ui,
+    content: &NoteContent,
+    resolving: Option<(AiTool, u64)>,
+    busy: bool,
+) -> Option<NoteControl> {
+    if matches!(content, NoteContent::Voice(_)) {
+        return ui
+            .small_button("Remove note")
+            .on_hover_text("Keep the recording file")
+            .clicked()
+            .then_some(NoteControl::Delete);
+    }
+    ui.horizontal(|ui| {
+        if let Some((tool, seconds)) = resolving {
+            ui.add(egui::Spinner::new().size(11.0));
+            let working = format!("{} is working · {}", tool.name(), ai::format_elapsed(seconds));
+            ui.label(RichText::new(working).weak().size(11.5));
+            return ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    icon_text_button(ui, Icon::Stop, "Stop", "Stop the tool", false).clicked()
+                })
+                .inner
+                .then_some(NoteControl::Stop);
+        }
+        let resolve = ui.add_enabled_ui(!busy, |ui| {
+            let tip = "Ask AI to do what the note says; the answer opens in merge";
+            icon_text_button(ui, Icon::Sparkle, "Resolve", tip, false).clicked()
+        });
+        let edit = ui.small_button("Edit").clicked();
+        let delete = ui.small_button("Delete").clicked();
+        [(resolve.inner, NoteControl::Resolve), (edit, NoteControl::Edit), (delete, NoteControl::Delete)]
+            .into_iter()
+            .find_map(|(clicked, control)| clicked.then_some(control))
+    })
+    .inner
 }
 
 /// The Markdown of an edited block without the blank lines Enter leaves

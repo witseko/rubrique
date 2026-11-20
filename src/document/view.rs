@@ -475,6 +475,10 @@ pub fn show_preview(
         }
         None => data.remove::<usize>(preview_top_id(path)),
     });
+    super::preview_selection::track_block(
+        ui.ctx(),
+        hovered.and_then(|index| blocks.get(index)).map(|block| block.range.clone()),
+    );
     PreviewOutput { event, hovered }
 }
 
@@ -1177,6 +1181,45 @@ mod preview_tests {
 
     fn cell(row: usize, column: usize) -> TableCell {
         TableCell { row, column }
+    }
+
+    #[test]
+    fn dragging_preview_text_remembers_its_source_block() {
+        let ctx = Context::default();
+        super::super::preview_selection::install(&ctx);
+        let blocks = parse_source_blocks("First passage.\n\nSecond passage.");
+        let frame = |events| {
+            let mut output = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+                ui.style_mut().interaction.selectable_labels = true;
+                egui::CentralPanel::default().show(ui, |ui| {
+                    show_preview(ui, Path::new("test.md"), &blocks, true, None, &[], &[]);
+                });
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let output = frame(vec![]);
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Second passage." => Some(text),
+            _ => None,
+        });
+        let text = text.expect("the second paragraph is visible");
+        let row = &text.galley.rows[0];
+        let point = |index| text.pos + row.pos.to_vec2() + egui::vec2(row.x_offset(index), row.size.y / 2.0);
+        let from = point(0.into());
+        let to = point(6.into());
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(vec![Event::PointerMoved(from), button(from, true)]);
+        frame(vec![Event::PointerMoved(to)]);
+        frame(vec![button(to, false)]);
+        let selection = super::super::preview_selection::current(&ctx).expect("the drag selected preview text");
+        assert_eq!(selection.text, "Second");
+        assert_eq!(selection.source_block, Some(blocks[1].range.clone()));
     }
 
     fn cells_clicked(events: &[PreviewEvent]) -> BTreeSet<(usize, usize)> {
