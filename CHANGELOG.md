@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grok is found when Rubrique starts from Finder.** Settings > AI no
+  longer says "Not found" for a Grok CLI installed with its own installer
+  (in `~/.grok/bin`).
+
+## [1.6.0] - 2026-11-20
+
 ### Added
 
 - **Voice notes on selected text.** Select a passage in a local, unencrypted
@@ -22,12 +30,6 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   DOC previews on Linux use `antiword`.
 - **PowerPoint and rich text previews.** Browse the text of each PPTX
   slide and read the text of ODT and RTF documents in a tab.
-
-### Fixed
-
-- **Grok is found when Rubrique starts from Finder.** Settings > AI no
-  longer says "Not found" for a Grok CLI installed with its own installer
-  (in `~/.grok/bin`).
 
 ## [1.5.1] - 2026-11-19
 
