@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::ai::AiSettings;
 use crate::document::text_file::write_atomically;
+use crate::remote::mirror::is_valid_host;
 use crate::remote::settings_text;
 use crate::settings::accessibility::AccessibilitySettings;
 use crate::settings::explorer_filter::ExplorerFilter;
@@ -66,6 +67,8 @@ pub struct Settings {
     /// The order the user dragged the Terminals list into, by session name.
     /// Sessions not in it (new ones) show above, newest first.
     pub terminal_order: Vec<String>,
+    /// SSH host names of the remote `OpenRig` rigs added in Send to `OpenRig`, in order.
+    pub openrig_rigs: Vec<String>,
     /// Whether to check for new versions, and when it last did.
     pub updates: UpdateSettings,
 }
@@ -136,6 +139,9 @@ impl Settings {
                 "last_file" => settings.last_file = from_settings_text(value),
                 "tab" => settings.open_tabs.extend(from_settings_text(value)),
                 "terminal_order" if !value.is_empty() => settings.terminal_order.push(value.to_string()),
+                "openrig_rig" if is_valid_host(value) && !settings.openrig_rigs.iter().any(|host| host == value) => {
+                    settings.openrig_rigs.push(value.to_string());
+                }
                 "note_marks" => settings.note_marks = value == "true",
                 "html_browser_preview" => settings.html_browser_preview = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
@@ -176,8 +182,12 @@ impl Settings {
             let _ = writeln!(lines, "terminal_order={name}");
             lines
         });
+        let rig_lines = self.openrig_rigs.iter().fold(String::new(), |mut lines, host| {
+            let _ = writeln!(lines, "openrig_rig={host}");
+            lines
+        });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
             last_file,
             self.note_marks,
             self.html_browser_preview,
@@ -370,6 +380,7 @@ mod tests {
                 preview_mode: layout::PreviewMode::Edit,
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
+            openrig_rigs: vec!["build-box".to_string(), "me@gpu.example.com".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {
                 enabled: false,
                 rules: vec![crate::highlight::text_rules::HighlightRule::new(
@@ -386,6 +397,8 @@ mod tests {
         };
         let text = settings.to_text();
         assert!(text.contains("folder=ssh://server/srv/notes\n"), "{text}");
+        assert!(text.contains("openrig_rig=build-box\nopenrig_rig=me@gpu.example.com\n"), "{text}");
+        assert_eq!(Settings::parse("openrig_rig=-oProxyCommand=x\nopenrig_rig=\n").openrig_rigs, Vec::<String>::new());
         assert_eq!(Settings::parse(&text), settings);
         let with_tab = Settings { open_tabs: vec![remote_folder.join("a.md")], ..Settings::default() };
         assert!(with_tab.to_text().contains("tab=ssh://server/srv/notes/a.md\n"));

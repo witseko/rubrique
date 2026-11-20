@@ -102,9 +102,11 @@ the libraries listed under [Build](#build) first.
   by rig and pod.
 - To hand a task to a terminal's agent, write a line such as
   `@tmux-qa: check this` in your document, then select Send.
-- Send a Markdown step to an existing local OpenRig team. Select the step,
-  open Tasks, click **Send to OpenRig**, and choose a seat. Open Tasks in the
-  same file later to check the queue status and read the result.
+- Send a Markdown step to an existing OpenRig team, on this computer or on
+  another computer over SSH. Select the step, open Tasks, click **Send to
+  OpenRig**, choose a rig (or **Add remote rig...** with an SSH host name),
+  and choose a seat. Open Tasks in the same file later to check the queue
+  status and read the result.
 - Tabs take their group and color from their explorer folder. Drag tabs
   or groups to reorder them. To list tabs vertically, choose Settings >
   Appearance > Tabs > In the explorer and switch between Files and Tabs.
