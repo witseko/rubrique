@@ -15,6 +15,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   folder's color, then "Other" for the rest. OpenRig seats (`seat@rig`) go
   under one OpenRig group, with a group per rig and a sub-group per pod. Click a group's header to fold
   it; drag a terminal to reorder it inside its group.
+- **Remote OpenRig rigs.** Send to OpenRig can send a document step to a
+  seat on another computer, reached over SSH. Choose Add remote rig in the
+  rig list, pick or type an SSH host, and choose a seat there. Task cards
+  show which computer a task is on and check it there. No OpenRig CLI is
+  needed on this computer for a remote rig.
 
 ## [1.7.0] - 2026-11-20
 

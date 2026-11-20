@@ -8,7 +8,9 @@ use eframe::egui::{self, Context, Ui};
 
 use super::{OpenFile, RubriqueApp, char_to_byte};
 use crate::document::{preview_selection, view::editor_selection};
-use crate::openrig::{Inventory, MAX_BODY_BYTES, Rig, TaskLink, TaskStatus, store};
+use crate::openrig::{Inventory, MAX_BODY_BYTES, Rig, RigHost, TaskLink, TaskStatus, store};
+use crate::remote;
+use crate::remote::mirror::is_valid_host;
 use crate::settings::openrig_tasks_folder;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(8);
@@ -17,9 +19,39 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(8);
 struct Draft {
     document: PathBuf,
     body: String,
+    /// The machine whose seats are listed.
+    rig: RigHost,
+    /// The inline "Add remote rig" field, while it is open.
+    new_rig: Option<NewRig>,
     inventory: Option<Result<Inventory, String>>,
     seat: Option<usize>,
     error: Option<String>,
+}
+
+/// The SSH host typed for a new remote rig, and the hosts from `~/.ssh/config` to offer.
+struct NewRig {
+    host: String,
+    known_hosts: Vec<String>,
+}
+
+/// What the user did in the rig picker.
+enum RigEvent {
+    /// List the seats of another rig.
+    Choose(RigHost),
+    /// Add a remote rig by SSH host name and switch to it.
+    Add(String),
+    /// Remove a remote rig from the list.
+    Remove(String),
+}
+
+/// What the user did in the inline "Add remote rig" field.
+enum NewRigAction {
+    /// Still typing.
+    None,
+    /// Add the typed host.
+    Add,
+    /// Close the field without adding.
+    Cancel,
 }
 
 /// A saved link and its latest observed state.
@@ -56,6 +88,8 @@ impl TrackedTask {
 #[derive(Default)]
 pub(super) struct OpenRigPanel {
     draft: Option<Draft>,
+    /// The rig chosen last in this session; the next draft starts on it.
+    rig: RigHost,
     tasks: Option<Result<Vec<TrackedTask>, String>>,
     discover: Option<Receiver<Result<Inventory, String>>>,
     submit: Option<QueueRequest>,
@@ -86,14 +120,16 @@ impl RubriqueApp {
         let path = document.path.clone();
         self.openrig.prepare(ui.ctx(), &path);
         if self.openrig.draft.is_some() {
-            self.openrig.show_draft(ui);
+            if self.openrig.show_draft(ui, &mut self.settings.openrig_rigs) {
+                self.write_settings();
+            }
         } else {
             let button = ui.button("Send to OpenRig").on_hover_text("Select text in the document to fill in the step.");
             let visible = button.rect.intersect(ui.clip_rect());
             preview_selection::set_openrig_button_rect(ui.ctx(), visible);
             if button.clicked() {
                 let body = self.selected_openrig_step(ui.ctx()).unwrap_or_default();
-                self.openrig.compose(ui.ctx(), path.clone(), body);
+                self.openrig.compose(ui.ctx(), path.clone(), body, &self.settings.openrig_rigs);
             }
         }
         self.openrig.show_tasks(ui, &path);
@@ -137,16 +173,24 @@ impl OpenRigPanel {
         }
     }
 
-    /// Show the body preview and start finding available seats.
-    fn compose(&mut self, ctx: &Context, document: PathBuf, body: String) {
-        self.draft = Some(Draft { document, body, inventory: None, seat: None, error: None });
-        self.discover = Some(work(ctx, || Rig::find()?.inventory()));
+    /// Show the body preview and start finding available seats on the last chosen rig.
+    fn compose(&mut self, ctx: &Context, document: PathBuf, body: String, rigs: &[String]) {
+        if let RigHost::Ssh(host) = &self.rig
+            && !rigs.contains(host)
+        {
+            self.rig = RigHost::Local;
+        }
+        let rig = self.rig.clone();
+        self.draft =
+            Some(Draft { document, body, rig: rig.clone(), new_rig: None, inventory: None, seat: None, error: None });
+        self.discover = Some(find_seats(ctx, rig));
     }
 
-    /// Render the composer and handle its buttons.
-    fn show_draft(&mut self, ui: &mut Ui) {
-        let Some(draft) = &mut self.draft else { return };
+    /// Render the composer and handle its buttons. Returns true when the list of remote rigs changed.
+    fn show_draft(&mut self, ui: &mut Ui, rigs: &mut Vec<String>) -> bool {
+        let Some(draft) = &mut self.draft else { return false };
         ui.strong("Send to OpenRig");
+        let event = rig_picker(ui, draft, rigs);
         seat_picker(ui, draft);
         ui.label("Document step");
         ui.add(
@@ -182,9 +226,38 @@ impl OpenRigPanel {
         } else if reload {
             draft.seat = None;
             draft.inventory = None;
-            self.discover = Some(work(ui.ctx(), || Rig::find()?.inventory()));
+            self.discover = Some(find_seats(ui.ctx(), draft.rig.clone()));
         }
         ui.separator();
+        event.is_some_and(|event| self.apply_rig_event(ui.ctx(), event, rigs))
+    }
+
+    /// Switch to another rig, adding or removing a remote one first.
+    /// Returns true when the list of remote rigs changed.
+    fn apply_rig_event(&mut self, ctx: &Context, event: RigEvent, rigs: &mut Vec<String>) -> bool {
+        let (rig, changed) = match event {
+            RigEvent::Choose(rig) => (rig, false),
+            RigEvent::Add(host) => {
+                let added = !rigs.contains(&host);
+                if added {
+                    rigs.push(host.clone());
+                }
+                (RigHost::Ssh(host), added)
+            }
+            RigEvent::Remove(host) => {
+                rigs.retain(|known| *known != host);
+                (RigHost::Local, true)
+            }
+        };
+        self.rig = rig.clone();
+        if let Some(draft) = &mut self.draft {
+            draft.rig = rig.clone();
+            draft.seat = None;
+            draft.inventory = None;
+            draft.error = None;
+            self.discover = Some(find_seats(ctx, rig));
+        }
+        changed
     }
 
     /// Save the task link before launching the one queue create request.
@@ -207,8 +280,10 @@ impl OpenRigPanel {
         {
             tasks.insert(0, TrackedTask::new(link.clone()));
         }
-        self.submit =
-            Some(QueueRequest { id: link.id.clone(), response: work(ctx, move || Rig::find()?.send(&link, body)) });
+        self.submit = Some(QueueRequest {
+            id: link.id.clone(),
+            response: work(ctx, move || Rig::open(&link.host)?.send(&link, body)),
+        });
     }
 
     /// Show the durable references and their current state for this file.
@@ -229,6 +304,82 @@ impl OpenRigPanel {
             }
             None => {}
         }
+    }
+}
+
+/// Render the rig choice: this computer, the added remote rigs, and a way to add or remove one.
+fn rig_picker(ui: &mut Ui, draft: &mut Draft, rigs: &[String]) -> Option<RigEvent> {
+    let mut event = None;
+    ui.horizontal_wrapped(|ui| {
+        egui::ComboBox::from_id_salt("openrig-rig").selected_text(draft.rig.label()).show_ui(ui, |ui| {
+            let choices = std::iter::once(RigHost::Local).chain(rigs.iter().cloned().map(RigHost::Ssh));
+            for choice in choices {
+                let clicked = ui.selectable_label(choice == draft.rig, choice.label()).clicked();
+                if clicked && choice != draft.rig {
+                    event = Some(RigEvent::Choose(choice));
+                }
+            }
+            if ui.selectable_label(false, "Add remote rig…").clicked() {
+                draft.new_rig =
+                    Some(NewRig { host: String::new(), known_hosts: remote::ssh_config::user_host_names() });
+            }
+        });
+        if let RigHost::Ssh(host) = &draft.rig
+            && ui.small_button("Remove").on_hover_text("Remove this remote rig from the list").clicked()
+        {
+            event = Some(RigEvent::Remove(host.clone()));
+        }
+    });
+    if let Some(new_rig) = &mut draft.new_rig {
+        match new_rig_fields(ui, new_rig, rigs) {
+            NewRigAction::Add => {
+                event = Some(RigEvent::Add(new_rig.host.trim().to_owned()));
+                draft.new_rig = None;
+            }
+            NewRigAction::Cancel => draft.new_rig = None,
+            NewRigAction::None => {}
+        }
+    }
+    event
+}
+
+/// The inline SSH host field for a new remote rig, offering the hosts from `~/.ssh/config`.
+fn new_rig_fields(ui: &mut Ui, new_rig: &mut NewRig, rigs: &[String]) -> NewRigAction {
+    ui.label("SSH host of the remote rig");
+    let field = ui.add(
+        egui::TextEdit::singleline(&mut new_rig.host).hint_text("server or user@server").desired_width(f32::INFINITY),
+    );
+    let offered: Vec<&String> = new_rig.known_hosts.iter().filter(|name| !rigs.contains(name)).collect();
+    if !offered.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            for name in offered {
+                if ui.small_button(name).clicked() {
+                    new_rig.host.clone_from(name);
+                }
+            }
+        });
+    }
+    let host = new_rig.host.trim();
+    let valid = is_valid_host(host);
+    let listed = rigs.iter().any(|known| known == host);
+    if !host.is_empty() && !valid {
+        ui.weak("Use a host name, or user@host");
+    } else if listed {
+        ui.weak("This rig is in the list already.");
+    }
+    let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+    let (add, cancel) = ui
+        .horizontal(|ui| {
+            let add = ui.add_enabled(valid && !listed, egui::Button::new("Add rig")).clicked();
+            (add, ui.button("Cancel").clicked())
+        })
+        .inner;
+    if valid && !listed && (add || entered) {
+        NewRigAction::Add
+    } else if cancel {
+        NewRigAction::Cancel
+    } else {
+        NewRigAction::None
     }
 }
 
@@ -270,6 +421,7 @@ fn save_draft(draft: &Draft) -> Result<TaskLink, String> {
     let link = TaskLink {
         id: store::new_id()?,
         document: draft.document.clone(),
+        host: inventory.host.clone(),
         endpoint: inventory.endpoint,
         seat: seat.clone(),
     };
@@ -314,7 +466,16 @@ fn refresh_task(
         return None;
     }
     let link = link.clone();
-    Some(QueueRequest { id: link.id.clone(), response: work(ctx, move || Rig::find()?.read(&link)) })
+    Some(QueueRequest { id: link.id.clone(), response: work(ctx, move || Rig::open(&link.host)?.read(&link)) })
+}
+
+/// List the seats of `rig` in the background. The user asked for it, so a
+/// remote host that failed a moment ago is tried again at once.
+fn find_seats(ctx: &Context, rig: RigHost) -> Receiver<Result<Inventory, String>> {
+    if let RigHost::Ssh(host) = &rig {
+        remote::connection::forget_failure(host);
+    }
+    work(ctx, move || Rig::open(&rig)?.inventory())
 }
 
 /// Run a CLI operation away from the UI and redraw when it returns.
@@ -351,6 +512,9 @@ fn poll<T>(request: &mut Option<Receiver<Result<T, String>>>) -> Option<Result<T
 fn task_card(ui: &mut Ui, task: &mut TrackedTask, sending: bool, refreshing: bool) {
     ui.separator();
     ui.strong(&task.link.seat.address);
+    if let RigHost::Ssh(host) = &task.link.host {
+        ui.weak(format!("On {host}"));
+    }
     ui.label(egui::RichText::new(&task.link.id).monospace()).on_hover_text("OpenRig queue ID");
     if sending {
         ui.weak("Sending to OpenRig");
