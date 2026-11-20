@@ -10,7 +10,9 @@ use super::{OpenFile, RubriqueApp};
 use crate::explorer::tree::path_under_root;
 use crate::explorer::view::{InlineRename, SessionEdit};
 use crate::remote;
+use crate::terminal::groups::{TerminalGroup, group_terminals};
 use crate::terminal::is_terminal_path;
+use crate::terminal::monitor::{TerminalRow, move_name};
 use crate::terminal::session::LiveTerminal;
 use crate::terminal::tmux::{file_for_session, new_session_name};
 use crate::terminal::{TERMINAL_EXTENSION, TERMINAL_FILE_TEXT};
@@ -107,6 +109,31 @@ impl RubriqueApp {
         if shows_session(&self.open_file) {
             self.close_active_tab_now();
         }
+    }
+
+    /// Fold or unfold a group of the Terminals list, by its key.
+    pub(super) fn toggle_terminal_group(&mut self, key: String) {
+        if let Some(index) = self.folded_terminal_groups.iter().position(|known| *known == key) {
+            self.folded_terminal_groups.remove(index);
+        } else {
+            self.folded_terminal_groups.push(key);
+        }
+    }
+
+    /// The groups of the Terminals list for `rows` (as drawn): by explorer
+    /// folder, then "Other", then by rig.
+    pub(super) fn terminal_groups(&self, rows: Option<&[TerminalRow]>) -> Vec<TerminalGroup> {
+        let roots: Vec<(&str, &Path)> =
+            self.roots.iter().map(|root| (root.name.as_str(), root.path.as_path())).collect();
+        rows.map(|rows| group_terminals(rows, &roots)).unwrap_or_default()
+    }
+
+    /// A terminal was dragged: save the list as it was drawn (`rows`), with
+    /// session `name` moved before `anchor`, or after it when `after`.
+    pub(super) fn move_terminal(&mut self, rows: Option<&[TerminalRow]>, name: &str, anchor: &str, after: bool) {
+        let mut names: Vec<String> = rows.into_iter().flatten().map(|row| row.info.name.clone()).collect();
+        move_name(&mut names, name, anchor, after);
+        self.settings.terminal_order = names;
     }
 
     /// "Show in files": open the tree down to the session's `.tmux` file,

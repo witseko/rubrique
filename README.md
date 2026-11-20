@@ -98,6 +98,8 @@ the libraries listed under [Build](#build) first.
 - Open tmux sessions as tabs. The explorer shows whether an agent is
   working, idle or waiting for you, and lists Claude Code and Codex
   sessions you can resume. A `.tmux` file opens a terminal in its folder.
+  The Terminals list groups sessions by explorer folder, and OpenRig seats
+  by rig and pod.
 - To hand a task to a terminal's agent, write a line such as
   `@tmux-qa: check this` in your document, then select Send.
 - Send a Markdown step to an existing local OpenRig team. Select the step,
