@@ -39,6 +39,7 @@ mod tab_list;
 mod tabs;
 mod terminals;
 mod text_highlight;
+mod update;
 mod voice;
 
 use crate::ai::agents::{self, Agent};
@@ -438,6 +439,8 @@ pub struct RubriqueApp {
     remote: remote::RemoteState,
     /// The open file's Helm chart and the Helm panel.
     helm: helm::HelmState,
+    /// The check for new versions and its explorer card.
+    update: update::UpdateState,
     /// The git branch of the open file's folder, and switch or pull in flight.
     git: git_branch::GitState,
 }
@@ -544,6 +547,7 @@ impl RubriqueApp {
             privacy,
             remote: remote::RemoteState::default(),
             helm: helm::HelmState::default(),
+            update: update::UpdateState::default(),
             git: git_branch::GitState::default(),
         };
         preview_selection::install(ctx);
@@ -1381,23 +1385,34 @@ impl RubriqueApp {
             voice,
             terminals,
             html_preview,
+            self.update.settings_info(&mut self.settings.updates),
         );
         // Rules edited in the Highlights group color plain text at once;
         // they are compiled again only when they changed.
         install_text_rules(ui.ctx(), self.settings.text_highlight.active_rules());
-        let Some(action) = action else {
-            return;
-        };
+        if let Some(action) = action {
+            self.apply_settings_action(
+                ui.ctx(),
+                action,
+                [folder.as_deref(), scratch_folder.as_deref(), skills_folder.as_deref(), agents_folder.as_deref()],
+            );
+        }
+    }
+
+    /// Carry out a click in the settings window. `folders` are the themes,
+    /// scratch, skills and agents folders the window showed.
+    fn apply_settings_action(&mut self, ctx: &Context, action: SettingsAction, folders: [Option<&Path>; 4]) {
+        let [themes_folder, scratch_folder, skills_folder, agents_folder] = folders;
         match action {
             SettingsAction::PickTheme(_) | SettingsAction::PickCodeColors(_) | SettingsAction::ReloadThemes => {
-                self.appearance_settings_action(ui.ctx(), &action, folder.as_deref());
+                self.appearance_settings_action(ctx, &action, themes_folder);
             }
-            SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
+            SettingsAction::AccessibilityChanged => self.apply_look(ctx),
             SettingsAction::WriteHighlightRule => self.write_highlight_rule(),
             SettingsAction::StopHighlightRule => self.rule_writer.stop(),
             SettingsAction::ChooseScratchFolder
             | SettingsAction::ResetScratchFolder
-            | SettingsAction::ImportFromSublime => self.scratch_settings_action(&action, scratch_folder.as_deref()),
+            | SettingsAction::ImportFromSublime => self.scratch_settings_action(&action, scratch_folder),
             SettingsAction::RemoteChanged => self.remote_settings_changed(),
             SettingsAction::AiCommandChanged => self.check_ai_tools(),
             SettingsAction::ForgetAllowedFolders => {
@@ -1407,11 +1422,11 @@ impl RubriqueApp {
             SettingsAction::ChooseSkillsFolder
             | SettingsAction::ResetSkillsFolder
             | SettingsAction::ReloadSkills
-            | SettingsAction::CreateExampleSkill => self.skills_settings_action(&action, skills_folder.as_deref()),
+            | SettingsAction::CreateExampleSkill => self.skills_settings_action(&action, skills_folder),
             SettingsAction::ChooseAgentsFolder
             | SettingsAction::ResetAgentsFolder
             | SettingsAction::ReloadAgents
-            | SettingsAction::CreateExampleAgent => self.agents_settings_action(&action, agents_folder.as_deref()),
+            | SettingsAction::CreateExampleAgent => self.agents_settings_action(&action, agents_folder),
             SettingsAction::OpenFile(path) => {
                 self.settings_open = false;
                 self.open_in_tab(path);
@@ -1424,8 +1439,10 @@ impl RubriqueApp {
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
             SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
-            SettingsAction::Copy(text) => self.install_action(ui.ctx(), InstallAction::Copy(text)),
-            SettingsAction::Install(action) => self.install_action(ui.ctx(), action),
+            SettingsAction::Copy(text) => self.install_action(ctx, InstallAction::Copy(text)),
+            SettingsAction::Install(action) => self.install_action(ctx, action),
+            SettingsAction::CheckForUpdates => self.start_update_check(ctx),
+            SettingsAction::OpenReleasePage(version) => self.open_release_page(ctx, version),
             SettingsAction::Close => self.settings_open = false,
             // The Privacy buttons (privacy.rs).
             _ => self.privacy_action(&action),
@@ -3265,6 +3282,7 @@ impl eframe::App for RubriqueApp {
         self.poll_remote_saves();
         self.poll_pending_sends();
         self.poll_agent_sessions(&ctx);
+        self.poll_update(&ctx);
         self.poll_git(&ctx);
 
         let style = ctx.global_style();
@@ -3283,16 +3301,24 @@ impl eframe::App for RubriqueApp {
         // window). Only where that bar is switched off does a gear at the
         // bottom of the explorer stay, so Settings can still be found.
         let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
+        let update_card = self.update_card_wanted();
         egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
-            if menu_hidden {
+            if menu_hidden || update_card {
                 egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
                     ui.add_space(4.0);
-                    ui.horizontal(|ui| {
-                        let gear = icon_button(ui, Icon::Gear, "Settings", "Settings (Ctrl+,)", self.settings_open);
-                        if gear.clicked() {
-                            self.toggle_settings();
-                        }
-                    });
+                    if update_card {
+                        self.update_card(ui);
+                        ui.add_space(4.0);
+                    }
+                    if menu_hidden {
+                        ui.horizontal(|ui| {
+                            let tip = "Settings (Ctrl+,)";
+                            let gear = icon_button(ui, Icon::Gear, "Settings", tip, self.settings_open);
+                            if gear.clicked() {
+                                self.toggle_settings();
+                            }
+                        });
+                    }
                     ui.add_space(2.0);
                 });
             }

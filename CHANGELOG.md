@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **New version notice.** Rubrique asks once whether to check for new
+  versions once a day. When a newer release is out, a card at the bottom of
+  the file list says so, with Download (the release page) and Skip. Settings
+  > Updates turns the daily check on or off and has Check now. The check only
+  asks GitHub for the newest version number; nothing is installed.
+
 ## [1.6.1] - 2026-11-20
 
 ### Fixed
