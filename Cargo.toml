@@ -77,7 +77,7 @@ quick-xml = "0.42"
 zip = { version = "9.7", default-features = false, features = ["deflate"] }
 rclip-rtf = { version = "0.1", features = ["codepage"] }
 # The Chromium HTML preview gets the page's picture as base64 text.
-base64 = "0.22"
+base64 = "0.23"
 
 # The menu bar at the top of the screen on macOS (File, View, Settings), in
 # place of the menu bar drawn inside the window on other systems.
