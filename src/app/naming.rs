@@ -1,6 +1,6 @@
 //! Smart scratch names: after a scratch with its random name is saved, the
-//! summaries tool (a local model by default) suggests a name from its
-//! content, offered in a bar; the Rename dialog can ask for one too.
+//! "Summaries and names" tool suggests a name from its content and shows it
+//! in a bar. The Rename dialog can ask for a name too.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

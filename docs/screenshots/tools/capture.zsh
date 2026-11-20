@@ -32,12 +32,15 @@ drive="$work/drive"
 
 # Start one isolated window, then bind all capture commands to its process.
 start_window() {
-  local theme="$1" file="$2" side="$3"
+  local theme="$1" file="$2" side="$3" ask_tool="${4:-}"
   local profile="$work/profile-$theme"
   local config="$profile/Library/Application Support/rubrique"
   mkdir -p "$config"
   {
     printf 'theme=%s\nside_panel_open=%s\n' "$theme" "$side"
+    if [[ -n "$ask_tool" ]]; then
+      printf 'ai_tool=%s\n' "$ask_tool"
+    fi
     printf 'ai_summary_tool=off\nmarkdown_only=false\nwindow_width=1100\nwindow_height=700\n'
     printf 'tab=%s/ideas.md\ntab=%s/survey.md\nai_allowed_folder=%s\n' "$notes" "$notes" "$notes"
   } > "$config/settings"
