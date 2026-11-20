@@ -31,6 +31,7 @@ mod terminal;
 mod test_support;
 mod theme;
 mod touch_id;
+mod update;
 mod vfs;
 mod voice;
 

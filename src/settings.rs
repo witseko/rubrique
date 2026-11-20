@@ -13,6 +13,7 @@ use crate::settings::explorer_filter::ExplorerFilter;
 use crate::settings::layout::LayoutSettings;
 use crate::settings::privacy::PrivacySettings;
 use crate::settings::text_highlight::TextHighlightSettings;
+use crate::settings::updates::UpdateSettings;
 use crate::theme::catalog::ThemeChoice;
 use crate::theme::code_colors::CodeColors;
 use crate::voice::VoiceSettings;
@@ -22,6 +23,7 @@ pub mod explorer_filter;
 pub mod layout;
 pub mod privacy;
 pub mod text_highlight;
+pub mod updates;
 pub mod view;
 
 /// Everything Rubrique remembers between runs.
@@ -64,6 +66,8 @@ pub struct Settings {
     /// The order the user dragged the Terminals list into, by session name.
     /// Sessions not in it (new ones) show above, newest first.
     pub terminal_order: Vec<String>,
+    /// Whether to check for new versions, and when it last did.
+    pub updates: UpdateSettings,
 }
 
 impl Settings {
@@ -122,6 +126,7 @@ impl Settings {
                 || settings.layout.parse_line(key.trim(), value)
                 || settings.text_highlight.parse_line(key.trim(), value)
                 || settings.explorer_filter.parse_line(key.trim(), value)
+                || settings.updates.parse_line(key.trim(), value)
             {
                 continue;
             }
@@ -172,7 +177,7 @@ impl Settings {
             lines
         });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
             last_file,
             self.note_marks,
             self.html_browser_preview,
@@ -187,6 +192,7 @@ impl Settings {
             self.layout.to_lines(),
             self.text_highlight.to_lines(),
             self.explorer_filter.to_lines(),
+            self.updates.to_lines(),
         )
     }
 }
@@ -371,6 +377,11 @@ mod tests {
                     r"\bPROJ-[0-9]+\b",
                     crate::highlight::text_rules::RuleColor::Key,
                 )],
+            },
+            updates: updates::UpdateSettings {
+                auto_check: updates::AutoCheck::On,
+                last_check: Some(1_800_000_000),
+                skipped_version: crate::update::Version::parse("1.7.0"),
             },
         };
         let text = settings.to_text();

@@ -22,16 +22,20 @@ use crate::settings::privacy::PrivacySettings;
 use crate::theme::catalog::{ThemeChoice, Themes};
 use crate::theme::code_colors::CodeColors;
 use crate::theme::palette::{Base, Palette, Rgb, Theme};
+use crate::update::Version;
 use crate::voice::VoiceSettings;
 
 mod highlight_rules;
 mod privacy_page;
 mod skill_list;
+mod updates_page;
 
 use highlight_rules::highlights_section;
 pub use highlight_rules::{HighlightInfo, RuleWriter};
 use privacy_page::privacy_section;
 use skill_list::{SkillsInfo, skills_section};
+pub use updates_page::UpdateInfo;
+use updates_page::updates_section;
 
 /// Something the user asked for in the settings panel.
 #[derive(Debug)]
@@ -105,6 +109,10 @@ pub enum SettingsAction {
     RemovePin,
     /// Lock the window now.
     LockNow,
+    /// Ask GitHub for the newest version now.
+    CheckForUpdates,
+    /// Open this release's page in the browser.
+    OpenReleasePage(Version),
     Close,
 }
 
@@ -244,10 +252,11 @@ pub enum SettingsGroup {
     Agents,
     Terminals,
     VoiceMemos,
+    Updates,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 10] = [
+    pub const ALL: [SettingsGroup; 11] = [
         Self::Appearance,
         Self::Highlights,
         Self::Accessibility,
@@ -258,6 +267,7 @@ impl SettingsGroup {
         Self::Agents,
         Self::Terminals,
         Self::VoiceMemos,
+        Self::Updates,
     ];
 
     pub fn name(self) -> &'static str {
@@ -272,6 +282,7 @@ impl SettingsGroup {
             Self::Agents => "Agents",
             Self::Terminals => "Terminals",
             Self::VoiceMemos => "Voice memos",
+            Self::Updates => "Updates",
         }
     }
 }
@@ -323,6 +334,7 @@ pub fn show_settings(
     voice: VoiceInfo,
     terminals: TerminalsInfo,
     html_preview: HtmlPreviewInfo,
+    updates: UpdateInfo,
 ) -> Option<SettingsAction> {
     let mut action = None;
     let (outer, _) = ui.allocate_exact_size(window_size(ui.ctx()), Sense::hover());
@@ -378,6 +390,7 @@ pub fn show_settings(
                     }
                     SettingsGroup::Terminals => terminals_section(ui, terminals),
                     SettingsGroup::VoiceMemos => voice_section(ui, voice),
+                    SettingsGroup::Updates => updates_section(ui, updates),
                 };
                 if picked.is_some() {
                     action = picked;
