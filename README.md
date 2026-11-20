@@ -211,13 +211,25 @@ cargo run --release -- ~/notes
 ```
 
 Before a pull request: `cargo test`, `cargo clippy --all-targets -- -D warnings`,
-`cargo fmt --check`, `cargo deny check`.
+`cargo fmt --check`, `cargo deny --all-features check`.
 
 Releases: a `release X.Y.Z` commit on `main` (changelog section, version in
 `Cargo.toml` and `Cargo.lock`) pushed together with the `rubrique-vX.Y.Z`
 tag; the Release workflow builds the packages and publishes the crate to
 crates.io. Steps in
 [`AGENTS.md`](AGENTS.md), notes in [`CHANGELOG.md`](CHANGELOG.md).
+
+### Read aloud
+
+Open **Settings → Read aloud** and click **Download model (65 MB)** once.
+Rubrique verifies the English Phonon checkpoint and stores it locally.
+Then select up to 400 characters in the editor or preview and click
+**Read aloud** in the status bar. **Stop reading** cancels generation or
+playback. Playback works offline.
+
+On Linux, the model download uses `curl` and system CA certificates.
+The Debian package installs these dependencies. If you use the tarball or
+build from source, install them with your distribution's package manager.
 
 ## License
 

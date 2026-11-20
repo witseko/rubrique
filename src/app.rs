@@ -27,6 +27,7 @@ mod native_menu;
 mod new_entry;
 mod open_path;
 mod privacy;
+mod read_aloud;
 mod remote;
 mod scratch_paths;
 mod side_panel;
@@ -423,6 +424,7 @@ pub struct RubriqueApp {
     note_draft: Option<NoteDraft>,
     /// Voice memos: recording, playback, transcription.
     voice: voice::VoiceState,
+    read_aloud: read_aloud::ReadAloud,
     /// Installing missing tools.
     install: install::InstallState,
     /// The HTML preview drawn by a Chromium browser.
@@ -530,6 +532,7 @@ impl RubriqueApp {
             block_changes: changes_panel::ChangesCache::default(),
             note_draft: None,
             voice: voice::VoiceState::default(),
+            read_aloud: read_aloud::ReadAloud::default(),
             install: install::InstallState::default(),
             html_snapshots: html_snapshot::HtmlSnapshots::default(),
             drafts: drafts::DraftState::default(),
@@ -661,6 +664,8 @@ impl RubriqueApp {
         self.block_edit = None;
         self.note_draft = None;
         self.voice.stop_playback();
+        self.read_aloud.stop();
+        preview_selection::clear(&self.repaint);
         crate::document::view::restore_editor_state(&self.repaint, None);
         if let Some(file) = self.load_file(path) {
             self.open_file = file;
@@ -763,6 +768,7 @@ impl RubriqueApp {
         let has_preview = self.open_file.path().is_some_and(has_preview);
         if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = !*source;
+            preview_selection::clear(&self.repaint);
         }
     }
 
@@ -1319,6 +1325,7 @@ impl RubriqueApp {
 
     /// The settings window's content. Theme picks apply at once.
     fn settings_panel(&mut self, ui: &mut Ui) {
+        let read_aloud = self.read_aloud.info();
         let folder = themes_folder();
         let scratch_folder = self.settings.scratch_folder_or_default();
         let install = self.install_status();
@@ -1371,6 +1378,7 @@ impl RubriqueApp {
             privacy,
             ai,
             voice,
+            read_aloud,
             terminals,
             html_preview,
         );
@@ -1380,16 +1388,36 @@ impl RubriqueApp {
         let Some(action) = action else {
             return;
         };
+        self.apply_settings_action(
+            ui.ctx(),
+            action,
+            folder.as_deref(),
+            scratch_folder.as_deref(),
+            skills_folder.as_deref(),
+            agents_folder.as_deref(),
+        );
+    }
+
+    /// Handle the requested change after the settings view releases its borrows.
+    fn apply_settings_action(
+        &mut self,
+        ctx: &Context,
+        action: SettingsAction,
+        folder: Option<&Path>,
+        scratch_folder: Option<&Path>,
+        skills_folder: Option<&Path>,
+        agents_folder: Option<&Path>,
+    ) {
         match action {
             SettingsAction::PickTheme(_) | SettingsAction::PickCodeColors(_) | SettingsAction::ReloadThemes => {
-                self.appearance_settings_action(ui.ctx(), &action, folder.as_deref());
+                self.appearance_settings_action(ctx, &action, folder);
             }
-            SettingsAction::AccessibilityChanged => self.apply_look(ui.ctx()),
+            SettingsAction::AccessibilityChanged => self.apply_look(ctx),
             SettingsAction::WriteHighlightRule => self.write_highlight_rule(),
             SettingsAction::StopHighlightRule => self.rule_writer.stop(),
             SettingsAction::ChooseScratchFolder
             | SettingsAction::ResetScratchFolder
-            | SettingsAction::ImportFromSublime => self.scratch_settings_action(&action, scratch_folder.as_deref()),
+            | SettingsAction::ImportFromSublime => self.scratch_settings_action(&action, scratch_folder),
             SettingsAction::RemoteChanged => self.remote_settings_changed(),
             SettingsAction::AiCommandChanged => self.check_ai_tools(),
             SettingsAction::ForgetAllowedFolders => {
@@ -1399,11 +1427,11 @@ impl RubriqueApp {
             SettingsAction::ChooseSkillsFolder
             | SettingsAction::ResetSkillsFolder
             | SettingsAction::ReloadSkills
-            | SettingsAction::CreateExampleSkill => self.skills_settings_action(&action, skills_folder.as_deref()),
+            | SettingsAction::CreateExampleSkill => self.skills_settings_action(&action, skills_folder),
             SettingsAction::ChooseAgentsFolder
             | SettingsAction::ResetAgentsFolder
             | SettingsAction::ReloadAgents
-            | SettingsAction::CreateExampleAgent => self.agents_settings_action(&action, agents_folder.as_deref()),
+            | SettingsAction::CreateExampleAgent => self.agents_settings_action(&action, agents_folder),
             SettingsAction::OpenFile(path) => {
                 self.settings_open = false;
                 self.open_in_tab(path);
@@ -1414,10 +1442,11 @@ impl RubriqueApp {
                 }
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
+            SettingsAction::DownloadPhonon => self.download_phonon(ctx),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
             SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
-            SettingsAction::Copy(text) => self.install_action(ui.ctx(), InstallAction::Copy(text)),
-            SettingsAction::Install(action) => self.install_action(ui.ctx(), action),
+            SettingsAction::Copy(text) => self.install_action(ctx, InstallAction::Copy(text)),
+            SettingsAction::Install(action) => self.install_action(ctx, action),
             SettingsAction::Close => self.settings_open = false,
             // The Privacy buttons (privacy.rs).
             _ => self.privacy_action(&action),
@@ -2652,6 +2681,7 @@ impl RubriqueApp {
             // git command appears next to the branch it ran on. Drawn at the
             // same place either way, its menu also stays open over a message.
             self.branch_button(ui);
+            self.read_aloud_button(ui);
             if let Some((message, remaining_seconds)) = self.visible_status_message(now) {
                 ui.label(message);
                 ui.ctx().request_repaint_after(Duration::from_secs_f64(remaining_seconds));
@@ -3161,6 +3191,7 @@ impl eframe::App for RubriqueApp {
         self.handle_window_events(&ctx);
         self.track_activity(&ctx);
         self.poll_touch_id(&ctx);
+        self.poll_read_aloud(&ctx);
         if self.app_locked() {
             // Only the PIN screen; drafts and background work go on.
             self.poll_remote_saves();

@@ -79,6 +79,8 @@ pub enum SettingsAction {
     ForgetAllowedFolders,
     /// The transcription command changed, so look for its program again.
     VoiceCommandChanged,
+    /// Download the Phonon checkpoint for Read aloud.
+    DownloadPhonon,
     /// Look for tmux again (after installing it in a terminal).
     CheckTerminals,
     /// The Chromium HTML preview was turned on or off, or asked to look again.
@@ -129,6 +131,15 @@ pub struct VoiceInfo<'a> {
     /// How to download the model, when it is missing.
     pub model_recipe: Option<&'a Recipe>,
     pub install: &'a InstallStatus,
+}
+
+/// Model status for the Read aloud section.
+#[derive(Clone, Copy, Debug)]
+pub enum ReadAloudInfo<'a> {
+    Missing,
+    Downloading,
+    Installed,
+    Failed(&'a str),
 }
 
 /// Whether tmux was found, for the Terminals section.
@@ -244,10 +255,11 @@ pub enum SettingsGroup {
     Agents,
     Terminals,
     VoiceMemos,
+    ReadAloud,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 10] = [
+    pub const ALL: [SettingsGroup; 11] = [
         Self::Appearance,
         Self::Highlights,
         Self::Accessibility,
@@ -258,6 +270,7 @@ impl SettingsGroup {
         Self::Agents,
         Self::Terminals,
         Self::VoiceMemos,
+        Self::ReadAloud,
     ];
 
     pub fn name(self) -> &'static str {
@@ -272,6 +285,7 @@ impl SettingsGroup {
             Self::Agents => "Agents",
             Self::Terminals => "Terminals",
             Self::VoiceMemos => "Voice memos",
+            Self::ReadAloud => "Read aloud",
         }
     }
 }
@@ -321,6 +335,7 @@ pub fn show_settings(
     privacy: PrivacyInfo,
     ai: AiInfo,
     voice: VoiceInfo,
+    read_aloud: ReadAloudInfo,
     terminals: TerminalsInfo,
     html_preview: HtmlPreviewInfo,
 ) -> Option<SettingsAction> {
@@ -378,6 +393,7 @@ pub fn show_settings(
                     }
                     SettingsGroup::Terminals => terminals_section(ui, terminals),
                     SettingsGroup::VoiceMemos => voice_section(ui, voice),
+                    SettingsGroup::ReadAloud => read_aloud_section(ui, read_aloud),
                 };
                 if picked.is_some() {
                     action = picked;
@@ -386,6 +402,31 @@ pub fn show_settings(
         });
     });
     action
+}
+
+/// Offer the one-time download for offline reading.
+fn read_aloud_section(ui: &mut Ui, model: ReadAloudInfo<'_>) -> Option<SettingsAction> {
+    ui.label(RichText::new("Phonon 31M English").strong());
+    ui.label("Select text and click Read aloud in the status bar. Speech runs offline after the model download.");
+    ui.add_space(8.0);
+    match model {
+        ReadAloudInfo::Installed => {
+            ui.label("Model installed");
+            return None;
+        }
+        ReadAloudInfo::Downloading => {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Downloading and verifying Phonon…");
+            });
+            return None;
+        }
+        ReadAloudInfo::Failed(error) => {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
+        ReadAloudInfo::Missing => {}
+    }
+    ui.button("Download model (65 MB)").clicked().then_some(SettingsAction::DownloadPhonon)
 }
 
 /// One group in the side list: full width, filled when it is the open one.

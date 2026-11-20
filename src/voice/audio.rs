@@ -271,6 +271,11 @@ impl Player {
 
     /// Play from the current position (from the start when at the end).
     pub fn play(&self) {
+        let _ = self.try_play();
+    }
+
+    /// Start playback and report a failure to open the output stream.
+    pub fn try_play(&self) -> Result<(), String> {
         {
             let mut state = self.state();
             if state.position >= count(state.samples.len()) {
@@ -278,7 +283,10 @@ impl Player {
             }
             state.playing = true;
         }
-        let _ = self.stream.play();
+        self.stream.play().map_err(|error| {
+            self.state().playing = false;
+            format!("Cannot start playback: {error}")
+        })
     }
 
     pub fn pause(&self) {
@@ -317,6 +325,7 @@ where
     device.build_output_stream::<T, _, _>(
         *config,
         move |data: &mut [T], _| {
+            data.fill(T::from_sample(0.0_f32));
             // Never wait on the window: a busy lock means one buffer of silence.
             let Ok(mut playing) = state.try_lock() else {
                 return;

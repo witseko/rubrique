@@ -58,6 +58,11 @@ pub(super) struct VoiceState {
 }
 
 impl VoiceState {
+    /// Whether the microphone is recording a memo.
+    pub(super) fn is_recording(&self) -> bool {
+        self.recording.is_some()
+    }
+
     /// Stop playback (when another file opens).
     pub(super) fn stop_playback(&mut self) {
         self.player = None;
@@ -168,6 +173,7 @@ impl RubriqueApp {
         self.voice.player = None;
         match Recorder::start(&path) {
             Ok(recorder) => {
+                self.read_aloud.stop();
                 self.voice.recording = Some(Recording { recorder, note, label: memo_label(&now), level: 0.0 });
             }
             Err(error) => self.show_status(error),
@@ -399,6 +405,7 @@ impl RubriqueApp {
         let folder = self.open_file.path().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
         match action {
             MemoAction::Play(url) => {
+                self.read_aloud.stop();
                 if let Some(path) = resolve_url(&folder, &url)
                     && let Some(player) = self.player_for(&path)
                 {

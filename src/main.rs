@@ -19,6 +19,7 @@ mod install;
 mod markdown;
 mod media;
 mod open_documents;
+mod phonon;
 mod remote;
 mod rst;
 mod scratch;

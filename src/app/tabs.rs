@@ -194,6 +194,7 @@ impl RubriqueApp {
         self.note_draft = None;
         self.stats = None;
         self.ask.close_bar();
+        self.read_aloud.stop();
         preview_selection::clear(&self.repaint);
         let state = take_editor_state(&self.repaint);
         match &mut self.open_file {

@@ -255,6 +255,11 @@ pub fn themes_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("themes"))
 }
 
+/// Folder for the pinned Read aloud model.
+pub fn phonon_model_folder() -> Option<PathBuf> {
+    config_folder().map(|folder| folder.join("models").join(format!("phonon-31m-en-{}", crate::phonon::REVISION)))
+}
+
 /// macOS: `~/Library/Application Support/rubrique`.
 /// Linux: `$XDG_CONFIG_HOME/rubrique`, fallback `~/.config/rubrique`.
 pub fn config_folder() -> Option<PathBuf> {

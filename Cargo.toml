@@ -50,6 +50,9 @@ rustix = { version = "1.1.6", features = ["fs"] }
 # has no built-in command-line recorder, so running one would mean asking
 # people to install ffmpeg first. WAV files and resampling are our own code.
 cpal = "0.18.2"
+ptts = { version = "=0.7.1", default-features = false, features = ["hf"] }
+sha2 = "0.11"
+tempfile = "3.27"
 # Encrypted scratches and the app PIN: XChaCha20-Poly1305 for the files,
 # Argon2id to turn the password into a key and to store the PIN, and zeroize
 # to wipe the key from memory on lock. All from the audited RustCrypto set.
@@ -115,6 +118,18 @@ dbg_macro = "warn"
 allow_attributes_without_reason = "warn"
 undocumented_unsafe_blocks = "warn"
 
+# Temporary manifest patches for the offline Phonon runtime. See vendor/phonon/README.md.
+[patch.crates-io]
+pulp = { path = "vendor/phonon/pulp" }
+tokenizers = { path = "vendor/phonon/tokenizers" }
+xn-gemm = { path = "vendor/phonon/xn-gemm" }
+xn-gemm-c32 = { path = "vendor/phonon/xn-gemm-c32" }
+xn-gemm-c64 = { path = "vendor/phonon/xn-gemm-c64" }
+xn-gemm-common = { path = "vendor/phonon/xn-gemm-common" }
+xn-gemm-f16 = { path = "vendor/phonon/xn-gemm-f16" }
+xn-gemm-f32 = { path = "vendor/phonon/xn-gemm-f32" }
+xn-gemm-f64 = { path = "vendor/phonon/xn-gemm-f64" }
+
 # Argon2 (scratch password and PIN) is very slow unoptimized; keep debug
 # builds usable.
 [profile.dev.package.argon2]
@@ -133,6 +148,7 @@ panic = "abort"
 [package.metadata.deb]
 maintainer = "witseko"
 section = "editors"
+depends = "$auto, curl, ca-certificates"
 # Terminals run in tmux, which Ubuntu and Debian do not install by default.
 recommends = "tmux"
 extended-description = "A fast editor, agentic on demand. This version edits Markdown and other text, runs Claude Code, Codex, Grok or a local model, and reviews every change in a merge screen."

@@ -1,4 +1,4 @@
-//! Remember the text selected in the preview, for "Add note".
+//! Remember the text selected in the preview for selection actions.
 //!
 //! egui reports a finished label selection only at the end of a pass, as an
 //! output command; this plugin, registered after egui's own, catches it and
@@ -30,13 +30,26 @@ pub fn current(ctx: &Context) -> Option<PreviewSelection> {
 
 /// Forget the selection (after a note was added).
 pub fn clear(ctx: &Context) {
-    ctx.data_mut(|data| data.remove::<PreviewSelection>(selection_id()));
+    ctx.data_mut(|data| {
+        data.remove::<PreviewSelection>(selection_id());
+        data.remove::<egui::Rect>(button_id());
+        data.remove::<egui::Rect>(read_aloud_button_id());
+    });
     ctx.plugin::<egui::text_selection::LabelSelectionState>().lock().clear_selection();
 }
 
 /// Where the "Add note" button was drawn this frame.
 pub fn set_button_rect(ctx: &Context, rect: egui::Rect) {
     ctx.data_mut(|data| data.insert_temp(button_id(), rect));
+}
+
+/// Where the Read aloud button was drawn this frame.
+pub fn set_read_aloud_button_rect(ctx: &Context, rect: egui::Rect) {
+    ctx.data_mut(|data| data.insert_temp(read_aloud_button_id(), rect));
+}
+
+fn read_aloud_button_id() -> Id {
+    Id::unique("rubrique-read-aloud-button")
 }
 
 fn selection_id() -> Id {
@@ -47,15 +60,18 @@ fn button_id() -> Id {
     Id::unique("rubrique-add-note-button")
 }
 
-/// A click that started on the "Add note" button is still going on. Pressing
-/// the mouse clears egui's selection, so without this the button would vanish
-/// before the release, and the release would land on the text below it.
+/// Keep the selection until a click that started on a selection action ends.
 fn clicking_button(ctx: &Context, press_origin: Option<Pos2>) -> bool {
-    let Some(rect) = ctx.data(|data| data.get_temp::<egui::Rect>(button_id())) else {
+    let Some(origin) = press_origin else {
         return false;
     };
     let pressing = ctx.input(|input| input.pointer.any_down() || input.pointer.any_released());
-    pressing && press_origin.is_some_and(|origin| rect.contains(origin))
+    pressing
+        && ctx.data(|data| {
+            [button_id(), read_aloud_button_id()]
+                .into_iter()
+                .any(|id| data.get_temp::<egui::Rect>(id).is_some_and(|rect| rect.contains(origin)))
+        })
 }
 
 #[derive(Default)]
@@ -89,6 +105,7 @@ impl egui::Plugin for SelectionTracker {
                 ctx.data_mut(|data| {
                     data.remove::<PreviewSelection>(selection_id());
                     data.remove::<egui::Rect>(button_id());
+                    data.remove::<egui::Rect>(read_aloud_button_id());
                 });
             }
             return;
