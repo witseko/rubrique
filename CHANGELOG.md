@@ -16,6 +16,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   > Updates turns the daily check on or off and has Check now. The check only
   asks GitHub for the newest version number; nothing is installed.
 
+### Fixed
+
+- **Zoom on Ubuntu.** Ctrl+scroll scales the window or the text under the
+  pointer, and changes in Settings > Accessibility redraw the editor and preview.
+
 ## [1.6.1] - 2026-11-20
 
 ### Fixed

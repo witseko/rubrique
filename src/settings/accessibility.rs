@@ -62,7 +62,7 @@ impl TextSize {
 /// How far a Cmd/Ctrl + wheel or pinch gesture has to zoom before the text
 /// size moves one step: about one wheel notch, and close to the ratio
 /// between neighboring sizes.
-const ZOOM_GESTURE_STEP: f32 = 1.15;
+pub const ZOOM_GESTURE_STEP: f32 = 1.15;
 
 /// Gathers the zoom of Cmd/Ctrl + mouse wheel and trackpad pinch, which
 /// arrives as a small factor every frame, into whole [`TextSize`] steps.

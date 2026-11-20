@@ -1115,9 +1115,7 @@ impl RubriqueApp {
         } else if ctx.input_mut(|input| input.consume_shortcut(&TEXT_SMALLER)) {
             current.smaller()
         } else {
-            // egui turns the wheel into zoom while Cmd/Ctrl is down (and
-            // leaves the scroll delta at zero, so nothing scrolls), and folds
-            // a pinch into the same factor.
+            // A modified wheel and a pinch both arrive as a zoom factor.
             let factor = ctx.input(egui::InputState::zoom_delta);
             let over_page = self
                 .ask
@@ -3250,7 +3248,39 @@ fn unsaved_choice_buttons(ui: &mut Ui) -> Option<UnsavedChoice> {
     }
 }
 
+/// Convert Linux Ctrl+wheel input before egui can drop its first delta or clear it on scroll end.
+#[cfg(any(target_os = "linux", test))]
+fn linux_wheel_zoom(input: &mut egui::RawInput, page_height: f32) {
+    use crate::settings::accessibility::ZOOM_GESTURE_STEP;
+
+    // A discrete notch or 15 points of smooth wheel movement is one zoom step.
+    const POINTS_PER_STEP: f32 = 15.0;
+    for event in &mut input.events {
+        let egui::Event::MouseWheel { unit, delta, phase, modifiers, .. } = event else {
+            continue;
+        };
+        if !modifiers.ctrl {
+            continue;
+        }
+        let movement = delta.x + delta.y;
+        let steps = match unit {
+            egui::MouseWheelUnit::Line => movement,
+            egui::MouseWheelUnit::Point => movement / POINTS_PER_STEP,
+            egui::MouseWheelUnit::Page => movement * page_height / POINTS_PER_STEP,
+        };
+        let factor = ZOOM_GESTURE_STEP.powf(steps);
+        if *phase != egui::TouchPhase::Cancel && factor.is_finite() && factor > 0.0 {
+            *event = egui::Event::Zoom(factor);
+        }
+    }
+}
+
 impl eframe::App for RubriqueApp {
+    #[cfg(target_os = "linux")]
+    fn raw_input_hook(&mut self, ctx: &Context, input: &mut egui::RawInput) {
+        linux_wheel_zoom(input, ctx.content_rect().height());
+    }
+
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_window_events(&ctx);
@@ -3376,6 +3406,53 @@ mod tests {
     };
     use crate::markdown::blocks::parse_source_blocks;
     use eframe::egui::{Context, Event, Key, Modifiers, RawInput};
+
+    #[test]
+    fn linux_ctrl_wheel_zooms_on_the_first_event() {
+        use eframe::egui::{InputState, MouseWheelSource, MouseWheelUnit, TouchPhase, vec2};
+
+        let ctx = Context::default();
+        let mut gesture = super::ZoomGesture::default();
+        let mut size = super::TextSize::Default;
+        let modifiers = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        let wheel = |unit, delta, phase, modifiers| Event::MouseWheel {
+            unit,
+            delta,
+            phase,
+            source: MouseWheelSource::Unknown,
+            modifiers,
+        };
+        let frames = [
+            (
+                vec![
+                    wheel(MouseWheelUnit::Point, vec2(0.0, 15.0), TouchPhase::Start, modifiers),
+                    wheel(MouseWheelUnit::Point, vec2(0.0, 0.0), TouchPhase::End, modifiers),
+                ],
+                super::TextSize::Large,
+                false,
+            ),
+            (
+                vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), TouchPhase::Move, modifiers)],
+                super::TextSize::Default,
+                false,
+            ),
+            (
+                vec![wheel(MouseWheelUnit::Line, vec2(0.0, 1.0), TouchPhase::Move, Modifiers::NONE)],
+                super::TextSize::Default,
+                true,
+            ),
+        ];
+        for (events, expected_size, scrolls) in frames {
+            let mut input = RawInput { events, ..Default::default() };
+            super::linux_wheel_zoom(&mut input, 700.0);
+            ctx.run_ui(input, |ui| {
+                size = gesture.step(size, ui.input(InputState::zoom_delta));
+                assert_eq!(ui.input(|input| input.smooth_scroll_delta.y > 0.0), scrolls);
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(size, expected_size);
+        }
+    }
 
     /// One frame of the "unsaved changes" dialog with `keys` pressed.
     fn unsaved_answer(ctx: &Context, keys: &[Key]) -> Option<UnsavedChoice> {
