@@ -100,6 +100,23 @@ pub fn in_saved_order(mut rows: Vec<TerminalRow>, order: &[String]) -> Vec<Termi
     rows
 }
 
+/// Move `name` in `names` to go right before `anchor`, or right after it
+/// when `after` is true (a drop at the end of a group). Nothing changes
+/// when either name is missing.
+pub fn move_name(names: &mut Vec<String>, name: &str, anchor: &str, after: bool) {
+    if name == anchor || !names.iter().any(|known| known == anchor) {
+        return;
+    }
+    let Some(from) = names.iter().position(|known| known == name) else {
+        return;
+    };
+    let moved = names.remove(from);
+    let Some(to) = names.iter().position(|known| known == anchor) else {
+        return;
+    };
+    names.insert(if after { to + 1 } else { to }, moved);
+}
+
 /// Seconds since 1970, as tmux counts.
 /// Now, in Unix seconds.
 pub fn unix_now() -> i64 {
@@ -160,6 +177,30 @@ mod tests {
     fn no_saved_order_keeps_newest_first() {
         let rows = vec![row("c"), row("b"), row("a")];
         assert_eq!(names(&in_saved_order(rows, &[])), ["c", "b", "a"]);
+    }
+
+    fn moved(name: &str, anchor: &str, after: bool) -> Vec<String> {
+        let mut names: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+        move_name(&mut names, name, anchor, after);
+        names
+    }
+
+    #[test]
+    fn move_name_puts_it_before_the_anchor() {
+        assert_eq!(moved("d", "b", false), ["a", "d", "b", "c"]);
+        assert_eq!(moved("a", "c", false), ["b", "a", "c", "d"]);
+    }
+
+    #[test]
+    fn move_name_after_the_last_of_a_group() {
+        assert_eq!(moved("a", "c", true), ["b", "c", "a", "d"]);
+        assert_eq!(moved("b", "d", true), ["a", "c", "d", "b"]);
+    }
+
+    #[test]
+    fn move_name_ignores_missing_names() {
+        assert_eq!(moved("gone", "b", false), ["a", "b", "c", "d"]);
+        assert_eq!(moved("a", "gone", true), ["a", "b", "c", "d"]);
     }
 
     #[test]

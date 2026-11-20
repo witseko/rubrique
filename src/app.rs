@@ -390,6 +390,8 @@ pub struct RubriqueApp {
     last_agent_check: f64,
     /// Terminals whose agent sessions are unfolded in the list.
     expanded_terminals: Vec<String>,
+    /// Groups of the Terminals list folded down to their header, by key.
+    folded_terminal_groups: Vec<String>,
     /// Tab groups folded down to their chip, by folder (an empty path for
     /// the files outside every folder).
     folded_groups: Vec<PathBuf>,
@@ -527,6 +529,7 @@ impl RubriqueApp {
             agent_history: agent_history::load_history(),
             last_agent_check: f64::NEG_INFINITY,
             expanded_terminals: Vec::new(),
+            folded_terminal_groups: Vec::new(),
             mention_cache: (f64::NEG_INFINITY, Vec::new()),
             revealed: None,
             scroll_to_revealed: false,
@@ -1862,6 +1865,7 @@ impl RubriqueApp {
             .collect();
         let terminal_rows =
             self.terminals.as_ref().map(|monitor| in_saved_order(monitor.rows(), &self.settings.terminal_order));
+        let terminal_groups = self.terminal_groups(terminal_rows.as_deref());
         let scratch_folder = self.settings.scratch_folder_or_default();
         let context = TreeContext {
             root: Path::new(""),
@@ -1872,6 +1876,8 @@ impl RubriqueApp {
             note_marks: self.settings.note_marks.then_some(&self.note_marks),
             remote_enabled: self.settings.remote.enabled,
             terminals: terminal_rows.as_deref(),
+            terminal_groups: &terminal_groups,
+            folded_terminal_groups: &self.folded_terminal_groups,
             open_terminal: match &self.open_file {
                 OpenFile::Terminal { terminal } => Some(terminal.name.as_str()),
                 _ => None,
@@ -1931,11 +1937,9 @@ impl RubriqueApp {
             }
             Some(ExplorerAction::RemoveRoot(path)) => self.request_remove_root(path),
             Some(ExplorerAction::MoveRoot { from, to }) => self.move_root(from, to),
-            Some(ExplorerAction::MoveTerminal { from, to }) => {
-                // The new order is the list as it was drawn, with the move.
-                let mut names: Vec<String> = terminal_rows.iter().flatten().map(|row| row.info.name.clone()).collect();
-                move_item(&mut names, from, to);
-                self.settings.terminal_order = names;
+            Some(ExplorerAction::ToggleTerminalGroup(key)) => self.toggle_terminal_group(key),
+            Some(ExplorerAction::MoveTerminal { name, anchor, after }) => {
+                self.move_terminal(terminal_rows.as_deref(), &name, &anchor, after);
             }
             Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
             Some(ExplorerAction::OpenPath) => self.start_open_path(),

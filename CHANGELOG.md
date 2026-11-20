@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal groups.** With several explorer folders or an OpenRig team,
+  the Terminals list groups sessions by the folder they run in, with the
+  folder's color, then "Other" for the rest. OpenRig seats (`seat@rig`) go
+  under one OpenRig group, with a group per rig and a sub-group per pod. Click a group's header to fold
+  it; drag a terminal to reorder it inside its group.
+
 ## [1.7.0] - 2026-11-20
 
 ### Added

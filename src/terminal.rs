@@ -8,6 +8,7 @@
 
 pub mod agent_sessions;
 pub mod ansi;
+pub mod groups;
 pub mod keys;
 pub mod mentions;
 pub mod monitor;

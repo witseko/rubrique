@@ -12,6 +12,8 @@ pub const BUTTON_HEIGHT: f32 = BUTTON_SIZE.y;
 /// Line width of every icon: bold like the app icon's "R", but thin
 /// enough to stay sharp at 14 px.
 const LINE: f32 = 1.5;
+/// Radius of an agent's dot in the `OpenRig` icon.
+const RIG_NODE: f32 = 2.0;
 
 /// The icons Rubrique draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,6 +50,8 @@ pub enum Icon {
     /// A terminal (a tmux session). The `>_` prompt is the accent, so it can
     /// carry the status color of the agent inside.
     Terminal,
+    /// The group of `OpenRig` agents in the Terminals list.
+    OpenRig,
     /// Add one more of what the section lists (a new terminal).
     Plus,
     /// Show or hide the right panel: a window whose right column is the accent.
@@ -275,6 +279,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
             painter.circle_filled(center, 2.1, accent);
         }
         Icon::Terminal => paint_terminal(painter, center, line, detail),
+        Icon::OpenRig => paint_openrig(painter, center, color, accent),
         Icon::Code => {
             // Angle brackets; the slash between them is the accent.
             stroke_path(painter, &[at(-2.5, -4.0), at(-6.5, 0.0), at(-2.5, 4.0)], false, line);
@@ -299,6 +304,15 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
 
 /// A small flat button with `icon` (like a tab's close cross), `size` wide
 /// and tall. `label` is what screen readers announce.
+/// Three agents joined in a triangle; the one on top is the accent.
+fn paint_openrig(painter: &Painter, center: Pos2, color: Color32, accent: Color32) {
+    let (top, left, right) = (center + vec2(0.0, -4.5), center + vec2(-5.0, 4.0), center + vec2(5.0, 4.0));
+    stroke_path(painter, &[top, left, right], true, Stroke::new(LINE, color));
+    painter.circle_filled(left, RIG_NODE, color);
+    painter.circle_filled(right, RIG_NODE, color);
+    painter.circle_filled(top, RIG_NODE, accent);
+}
+
 /// Draw `icon` alone (no button) centered on `center`.
 pub fn paint_icon(painter: &Painter, icon: Icon, center: Pos2, line: Color32, accent: Color32, behind: Color32) {
     paint(painter, icon, center, Colors { line, accent, behind });

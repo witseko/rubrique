@@ -15,6 +15,7 @@ use crate::scratch::is_scratch;
 use crate::settings::explorer_filter::ExplorerFilter;
 use crate::settings::layout::LayoutSettings;
 use crate::terminal::agent_sessions::SessionHistory;
+use crate::terminal::groups::TerminalGroup;
 use crate::terminal::is_terminal_path;
 use crate::terminal::monitor::TerminalRow;
 use crate::terminal::tmux::session_name_for_file;
@@ -81,9 +82,12 @@ pub enum ExplorerAction {
     /// A root folder was dragged: move root `from` to go before root `to`
     /// (the root count for the end).
     MoveRoot { from: usize, to: usize },
-    /// A terminal was dragged: move row `from` of the Terminals list to go
-    /// before row `to` (the row count for the end).
-    MoveTerminal { from: usize, to: usize },
+    /// Fold or unfold this group of the Terminals list (its key).
+    ToggleTerminalGroup(String),
+    /// A terminal was dragged inside its group: move session `name` to go
+    /// before session `anchor`, or after it when `after` is true (a drop at
+    /// the end of the group).
+    MoveTerminal { name: String, anchor: String, after: bool },
 }
 
 /// What "New" in a folder's menu creates.
@@ -222,6 +226,10 @@ pub struct TreeContext<'a> {
     /// The tmux sessions and their status; `None` when tmux is not
     /// installed (no Terminals list then).
     pub terminals: Option<&'a [TerminalRow]>,
+    /// The groups of the Terminals list, by indexes into `terminals`.
+    pub terminal_groups: &'a [TerminalGroup],
+    /// The keys of the folded groups of the Terminals list.
+    pub folded_terminal_groups: &'a [String],
     /// The session shown in the active tab, highlighted in the list.
     pub open_terminal: Option<&'a str>,
     /// The entry "Show in files" pointed at, highlighted until the next
@@ -840,7 +848,7 @@ fn paint_file_lock(ui: &Ui, response: &egui::Response) {
 /// Paint a bar of a root's color on the left edge of its row: the counterpart
 /// of the colored line on top of its tabs. A bar rather than a dot after the
 /// name, so the folder color is never mistaken for the unsaved bullet.
-fn paint_root_bar(ui: &Ui, response: &egui::Response, color: egui::Color32) {
+pub(super) fn paint_root_bar(ui: &Ui, response: &egui::Response, color: egui::Color32) {
     let row = response.rect;
     let bar = egui::Rect::from_min_max(
         egui::pos2(row.left(), row.top() + ROOT_BAR_INSET),
@@ -1119,6 +1127,8 @@ mod tests {
                         note_marks: None,
                         remote_enabled: false,
                         terminals: None,
+                        terminal_groups: &[],
+                        folded_terminal_groups: &[],
                         open_terminal: None,
                         revealed: None,
                         root_color: None,

@@ -11,14 +11,16 @@ use super::section::{SECTION_HEADER_HEIGHT, paint_fold_arrow, section_header};
 use super::selection::FileRows;
 use super::view::{
     ExplorerAction, HEADER_BUTTON_SIZE, ICON_GAP, InlineRename, NOTE_MARK_SIZE, SessionEdit, TreeContext, file_click,
-    file_menu, is_revealed, rename_row, scroll_if_revealed, tree_row,
+    file_menu, is_revealed, paint_root_bar, rename_row, scroll_if_revealed, tree_row,
 };
 use crate::explorer::tree::FsNode;
 use crate::icons::{Icon, paint_icon, small_icon_button};
 use crate::terminal::agent_sessions::AgentSession;
+use crate::terminal::groups::TerminalGroup;
 use crate::terminal::monitor::{TerminalRow, ago_label, opened_label};
 use crate::terminal::status::TerminalStatus;
 use crate::terminal::tmux::session_name_for_file;
+use crate::theme::style::group_color;
 
 /// Height of the open Terminals section until the user drags its edge.
 const TERMINALS_DEFAULT_HEIGHT: f32 = 180.0;
@@ -34,6 +36,10 @@ const ICON_ROOM: &str = " ";
 /// Spaces left after the name for the status dot to be painted in.
 const DOT_ROOM: &str = "     ";
 const DOT_RADIUS: f32 = 3.5;
+/// How far right of a group's fold arrow the `OpenRig` icon is centered.
+const OPENRIG_ICON_SHIFT: f32 = 17.0;
+/// Spaces before the `OpenRig` group's title, for its icon.
+const OPENRIG_ICON_ROOM: &str = "      ";
 
 /// The Terminals section docked at the bottom of the explorer: a panel the
 /// user can resize by its top edge, or only its header while folded.
@@ -64,7 +70,8 @@ pub(super) fn show_docked_terminals(
 
 /// The "TERMINALS" header (with a count, status dots while folded, and
 /// "New terminal"), then one row per tmux session in its own scroll area:
-/// in the order the user dragged them into, new ones on top. `rename` is the name field for a new session (shown at the
+/// in the order the user dragged them into, new ones on top. With more than
+/// one group (folders, "Other", rigs) each group has a header and folds. `rename` is the name field for a new session (shown at the
 /// top) or for a session being renamed in its row, if any.
 /// Nothing when tmux is not installed.
 pub(super) fn show_terminals_section(
@@ -107,16 +114,117 @@ pub(super) fn show_terminals_section(
         if naming_new {
             rename_row(ui, rename);
         }
-        let mut drag = ListDrag::default();
-        for row in rows {
-            let top = ui.cursor().top();
-            let response = terminal_row(ui, row, context, rename, action);
-            drag.add(ui, top, response.as_ref());
-        }
-        if let Some((from, to)) = drag.finish(ui) {
-            *action = Some(ExplorerAction::MoveTerminal { from, to });
+        match context.terminal_groups {
+            // One folder and no rig: the plain list, without a header.
+            [group] if group.children.is_empty() => group_rows(ui, group, context, rename, action),
+            groups => {
+                for group in groups {
+                    terminal_group(ui, group, context, rename, action);
+                }
+            }
         }
     });
+}
+
+/// One group of the list: its header, then (unless folded) its sessions
+/// and its sub-groups (rigs, pods) indented under it.
+fn terminal_group(
+    ui: &mut Ui,
+    group: &TerminalGroup,
+    context: &TreeContext,
+    rename: &mut Option<InlineRename<SessionEdit>>,
+    action: &mut Option<ExplorerAction>,
+) {
+    let folded = context.folded_terminal_groups.contains(&group.key);
+    // Folder colors show only with several folders, as on the tabs.
+    let color = group.root.filter(|_| context.can_remove_roots).map(group_color);
+    if group_header(ui, group, folded, color) {
+        *action = Some(ExplorerAction::ToggleTerminalGroup(group.key.clone()));
+    }
+    if folded {
+        return;
+    }
+    ui.indent(("terminal-group", &group.key), |ui| {
+        group_rows(ui, group, context, rename, action);
+        for child in &group.children {
+            terminal_group(ui, child, context, rename, action);
+        }
+    });
+}
+
+/// A group's header row: the fold arrow, the title, the session count, for
+/// a folder a bar of its color, and for the `OpenRig` group its icon. Returns true when it was clicked.
+fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<Color32>) -> bool {
+    let mut job = LayoutJob::default();
+    let style = ui.style();
+    // The OpenRig group keeps room for its icon after the arrow.
+    let icon_room = if group.is_openrig() { OPENRIG_ICON_ROOM } else { "" };
+    RichText::new(format!("{ICON_GAP}{icon_room}{}", group.title)).strong().append_to(
+        &mut job,
+        style,
+        FontSelection::Default,
+        Align::Center,
+    );
+    RichText::new(format!("  {}", group.session_count())).small().weak().append_to(
+        &mut job,
+        style,
+        FontSelection::Default,
+        Align::Center,
+    );
+    let response = tree_row(ui, false, job);
+    let center = egui::pos2(
+        response.rect.left() + ui.spacing().button_padding.x + NOTE_MARK_SIZE / 2.0,
+        response.rect.center().y,
+    );
+    let arrow_color = ui.style().interact(&response).fg_stroke.color;
+    paint_fold_arrow(ui.painter(), center, !folded, arrow_color);
+    if group.is_openrig() {
+        let behind =
+            if response.hovered() { ui.visuals().widgets.hovered.weak_bg_fill } else { ui.visuals().panel_fill };
+        let icon_center = center + egui::vec2(OPENRIG_ICON_SHIFT, 0.0);
+        paint_icon(ui.painter(), Icon::OpenRig, icon_center, arrow_color, arrow_color, behind);
+    }
+    if let Some(color) = color {
+        paint_root_bar(ui, &response, color);
+    }
+    let tip = if folded { "Show these terminals" } else { "Hide these terminals" };
+    response.on_hover_text(tip).clicked()
+}
+
+/// The sessions of one group, which can be dragged up and down inside it.
+fn group_rows(
+    ui: &mut Ui,
+    group: &TerminalGroup,
+    context: &TreeContext,
+    rename: &mut Option<InlineRename<SessionEdit>>,
+    action: &mut Option<ExplorerAction>,
+) {
+    let Some(rows) = context.terminals else {
+        return;
+    };
+    let group_rows: Vec<&TerminalRow> = group.rows.iter().filter_map(|&index| rows.get(index)).collect();
+    let mut drag = ListDrag::default();
+    for row in &group_rows {
+        let top = ui.cursor().top();
+        let response = terminal_row(ui, row, context, rename, action);
+        drag.add(ui, top, response.as_ref());
+    }
+    if let Some((from, to)) = drag.finish(ui)
+        && let Some(moved) = move_action(&group_rows, from, to)
+    {
+        *action = Some(moved);
+    }
+}
+
+/// The drag of row `from` of a group to go before row `to` (the row count
+/// for the end), as a move by session names.
+fn move_action(group_rows: &[&TerminalRow], from: usize, to: usize) -> Option<ExplorerAction> {
+    let name = group_rows.get(from)?.info.name.clone();
+    let (anchor, after) = match group_rows.get(to) {
+        Some(row) => (row, false),
+        None => (group_rows.last()?, true),
+    };
+    Some(ExplorerAction::MoveTerminal { name, anchor: anchor.info.name.clone(), after })
 }
 
 /// One session in the list: a click shows it in a tab, a double click
