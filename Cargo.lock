@@ -3147,7 +3147,7 @@ dependencies = [
 
 [[package]]
 name = "rubrique"
-version = "1.6.1"
+version = "1.7.0"
 dependencies = [
  "argon2",
  "base64",

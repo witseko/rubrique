@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-20
+
 ### Added
 
 - **New version notice.** Rubrique asks once whether to check for new
