@@ -75,6 +75,7 @@ fn font_definitions() -> FontDefinitions {
 pub fn apply_accessibility(ctx: &Context, settings: &AccessibilitySettings) {
     ctx.set_zoom_factor(settings.text_size.scale());
     ctx.all_styles_mut(|style| adjust_style(style, settings));
+    ctx.request_repaint();
 }
 
 /// The editor font size, no animations, and thicker focus outlines.
@@ -262,6 +263,44 @@ mod tests {
         let mut plain = style(&Theme::builtin(Base::Light));
         adjust_style(&mut plain, &AccessibilitySettings::default());
         assert_eq!(format!("{plain:?}"), format!("{:?}", style(&Theme::builtin(Base::Light))));
+    }
+
+    #[test]
+    fn text_size_scales_window_layout_and_text_together() {
+        use crate::settings::accessibility::TextSize;
+
+        let ctx = Context::default();
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)));
+        let input = egui::RawInput { screen_rect, ..Default::default() };
+        ctx.run_ui(input.clone(), |_| {
+            apply_accessibility(&ctx, &AccessibilitySettings { text_size: TextSize::Largest, ..Default::default() });
+        })
+        .drop_without_applying_deltas();
+        ctx.run_ui(input, |ui| {
+            assert_eq!(ctx.content_rect().size(), egui::vec2(600.0, 400.0));
+            assert!((ui.pixels_per_point() - TextSize::Largest.scale()).abs() < f32::EPSILON);
+        })
+        .drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn text_area_zoom_schedules_a_frame_for_the_new_style() {
+        let ctx = Context::default();
+        for _ in 0..3 {
+            ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        }
+        let settings = AccessibilitySettings { page_zoom: 150, ..Default::default() };
+        ctx.run_ui(egui::RawInput::default(), |_| {
+            assert!(!ctx.has_requested_repaint());
+            apply_accessibility(&ctx, &settings);
+            assert!(ctx.has_requested_repaint());
+        })
+        .drop_without_applying_deltas();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            let editor_size = (f32::from(DEFAULT_EDITOR_FONT_SIZE) * 1.5).round();
+            assert_eq!(TextStyle::Monospace.resolve(ui.style()), FontId::monospace(editor_size));
+        })
+        .drop_without_applying_deltas();
     }
 
     #[test]
