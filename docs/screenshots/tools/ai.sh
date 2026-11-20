@@ -19,7 +19,7 @@ STUB
   chmod +x "$work/bin/$tool"
 done
 export RUBRIQUE_SAMPLE_ANSWERS="$tools/ai" RUBRIQUE_SAMPLE_RUNS="$work"
-start_window dark todo.md false
+start_window dark todo.md false claude
 "$drive" activate "$pid"
 sleep 0.5
 "$drive" key cmd+k

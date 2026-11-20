@@ -21,6 +21,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   show which computer a task is on and check it there. No OpenRig CLI is
   needed on this computer for a remote rig.
 
+### Changed
+
+- **Default AI agent.** Codex is the default for Ask and notes, and for
+  summaries and names. Settings → AI keeps any tool choices you saved.
+
 ## [1.7.0] - 2026-11-20
 
 ### Added

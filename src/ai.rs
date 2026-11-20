@@ -31,8 +31,8 @@ pub const MAX_PROMPT_BYTES: usize = 120_000;
 /// The tools Rubrique knows about, in the order Settings lists them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum AiTool {
-    #[default]
     Claude,
+    #[default]
     Codex,
     Gemini,
     Grok,
@@ -126,8 +126,8 @@ pub struct AiSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         AiSettings {
-            default_tool: AiTool::Claude,
-            summary_tool: Some(AiTool::Local),
+            default_tool: AiTool::default(),
+            summary_tool: Some(AiTool::default()),
             commands: AiTool::ALL.map(|tool| tool.default_command().to_string()),
             allowed_folders: Vec::new(),
             skills_folder: None,
@@ -599,13 +599,21 @@ mod tests {
     }
 
     #[test]
+    fn defaults_to_codex_for_both_ai_roles() {
+        let settings = crate::settings::Settings::parse("theme=dark\n");
+        assert_eq!(settings.ai.default_tool, AiTool::Codex);
+        assert_eq!(settings.ai.summary_tool, Some(AiTool::Codex));
+    }
+
+    #[test]
     fn writes_only_changed_commands() {
         let mut settings = AiSettings::default();
-        assert_eq!(settings.to_lines(), "ai_tool=claude\nai_summary_tool=local\n");
+        assert_eq!(settings.to_lines(), "ai_tool=codex\nai_summary_tool=codex\n");
         settings.set_command(AiTool::Local, "  ollama run gemma3:1b {prompt} ");
-        settings.default_tool = AiTool::Codex;
+        settings.default_tool = AiTool::Claude;
+        settings.summary_tool = Some(AiTool::Local);
         let text = settings.to_lines();
-        assert_eq!(text, "ai_tool=codex\nai_summary_tool=local\nai_command_local=ollama run gemma3:1b {prompt}\n");
+        assert_eq!(text, "ai_tool=claude\nai_summary_tool=local\nai_command_local=ollama run gemma3:1b {prompt}\n");
 
         let mut read = AiSettings::default();
         for line in text.lines() {

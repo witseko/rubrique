@@ -117,6 +117,10 @@ Use Claude Code, Codex, Gemini CLI, Grok or a local model through the
 tools on your computer. Rubrique needs no API key. The first time you ask
 for an edit in a folder, Rubrique shows the command and asks you to run it.
 
+Codex is the default for Ask and notes, and for summaries and names. You can
+choose a tool for each in Settings → AI. Automatic summaries and name
+suggestions with Codex run only in folders where you allowed AI.
+
 - **Ask** (`Cmd+K`) about the selected passage or the whole file. Write
   a request or choose Shorter, Fix grammar, Table, Translate or Explain.
 - **Review** suggested edits in the merge screen. Accept or reject each
@@ -195,7 +199,7 @@ installed; Settings → Terminals offers the install command.
 
 | Program | Used for |
 | --- | --- |
-| `claude`, `codex`, `gemini`, `grok` | Ask, Compare, Notes |
+| `claude`, `codex`, `gemini`, `grok` | Ask, Compare, Notes, summaries, file names |
 | `ollama` (or configure `llama-cli`) | Local requests, summaries and file names |
 | `whisper-cli` | Transcribing memos |
 | `helm` | Helm charts |

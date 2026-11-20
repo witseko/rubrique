@@ -1,6 +1,6 @@
 //! Hover summaries: rest the pointer on a file in the explorer and a small
-//! card shows a two-sentence summary made by the "Summaries use" tool
-//! (a local model by default). Summaries are cached by file content.
+//! card shows a two-sentence summary made by the "Summaries and names" tool.
+//! Summaries are cached by file content.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
