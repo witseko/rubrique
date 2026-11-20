@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Grok is found when Rubrique starts from Finder.** Settings > AI no
+  longer says "Not found" for a Grok CLI installed with its own installer
+  (in `~/.grok/bin`).
+
 ## [1.1.0] - 2026-11-13
 
 ### Added

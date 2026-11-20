@@ -92,13 +92,17 @@ fn path_from_env_output(output: &[u8]) -> Option<OsString> {
 }
 
 /// Where tools usually get installed, for when the shell gives no answer:
-/// the Claude Code and Codex installers (`~/.local/bin`), Homebrew (macOS
-/// and Linux), the classic local folder, and the folders where `npm -g`
-/// puts programs (see [`node_folders`]).
+/// the Claude Code and Codex installers (`~/.local/bin`), the Grok
+/// installer (`~/.grok/bin`), Homebrew (macOS and Linux), the classic local
+/// folder, and the folders where `npm -g` puts programs (see
+/// [`node_folders`]).
 fn usual_folders(home: Option<&Path>) -> Vec<PathBuf> {
     let mut folders = Vec::new();
     if let Some(home) = home {
         folders.push(home.join(".local/bin"));
+        // The Grok installer adds this folder to `PATH` in `.zshrc` or
+        // `.bashrc`, which a login shell does not read.
+        folders.push(home.join(".grok/bin"));
     }
     folders.push(PathBuf::from("/opt/homebrew/bin"));
     folders.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
@@ -262,6 +266,12 @@ mod tests {
             [versions.join("v22.11.0/bin"), versions.join("v20.18.1/bin"), versions.join("v9.11.2/bin")]
         );
         assert_eq!(nvm_folders(&temp.path().join("missing")), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn usual_folders_include_the_grok_installer_folder() {
+        let folders = usual_folders(Some(Path::new("/Users/me")));
+        assert!(folders.contains(&PathBuf::from("/Users/me/.grok/bin")));
     }
 
     #[test]
