@@ -41,7 +41,7 @@ const REMOTE_RIG: &str = "u=$1; p=$2; shift 2; \
     unset RIGGED_URL OPENRIG_URL OPENRIG_SESSION_NAME RIGGED_SESSION_NAME TMUX_PANE; \
     export OPENRIG_HOST_SELECTED=local NO_PROXY='*' no_proxy='*'; \
     [ -z \"$u\" ] || export OPENRIG_URL=\"$u\"; cd / || exit 1; exec 3>&1; \
-    e=$( { o=$(\"${SHELL:-/bin/sh}\" -lc 'exec \"$0\" \"$@\"' \"$p\" \"$@\" 3>&-); s=$?; \
+    e=$( { o=$(\"${SHELL:-/bin/sh}\" -lc 'command -v \"$0\" >/dev/null || exit 127; exec \"$0\" \"$@\"' \"$p\" \"$@\" 3>&-); s=$?; \
     printf '%s\\n%s ' \"$o\" \"$s\" >&3; } 2>&1 ); \
     case $e in *'Warning: failed to fetch nodes'*) echo 1;; *) echo 0;; esac";
 
