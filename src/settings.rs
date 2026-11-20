@@ -49,6 +49,8 @@ pub struct Settings {
     pub accessibility: AccessibilitySettings,
     /// Where new scratch files go; `None` means the default folder.
     pub scratch_folder: Option<PathBuf>,
+    /// `.html` previews are drawn by a Chromium browser (off: the built-in preview).
+    pub html_browser_preview: bool,
     /// AI tools and their commands.
     pub ai: AiSettings,
     /// Voice memos: folder, dropped files, transcription.
@@ -130,6 +132,7 @@ impl Settings {
                 "tab" => settings.open_tabs.extend(from_settings_text(value)),
                 "terminal_order" if !value.is_empty() => settings.terminal_order.push(value.to_string()),
                 "note_marks" => settings.note_marks = value == "true",
+                "html_browser_preview" => settings.html_browser_preview = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
                 "window_height" => height = value.parse::<f32>().ok(),
                 "theme" => settings.theme = ThemeChoice::parse(value),
@@ -169,9 +172,10 @@ impl Settings {
             lines
         });
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}",
             last_file,
             self.note_marks,
+            self.html_browser_preview,
             self.theme.id(),
             self.code_colors.id(),
             path_text(&self.scratch_folder),
@@ -236,6 +240,11 @@ pub fn drafts_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("drafts"))
 }
 
+/// Where Rubrique stores links to submitted `OpenRig` tasks.
+pub fn openrig_tasks_folder() -> Option<PathBuf> {
+    config_folder().map(|folder| folder.join("openrig-tasks"))
+}
+
 /// Default folder for agents (`agents` in the config folder).
 pub fn default_agents_folder() -> Option<PathBuf> {
     config_folder().map(|folder| folder.join("agents"))
@@ -253,7 +262,7 @@ pub fn themes_folder() -> Option<PathBuf> {
 
 /// macOS: `~/Library/Application Support/rubrique`.
 /// Linux: `$XDG_CONFIG_HOME/rubrique`, fallback `~/.config/rubrique`.
-fn config_folder() -> Option<PathBuf> {
+pub fn config_folder() -> Option<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let base = if cfg!(target_os = "macos") {
         home?.join("Library/Application Support")
@@ -309,6 +318,7 @@ mod tests {
             open_tabs: vec![PathBuf::from("/home/a/my notes/x=y.md"), PathBuf::from("/work/docs/photo.png")],
             explorer_filter: ExplorerFilter { markdown_only: true, unsaved_only: true, show_closed_terminals: false },
             note_marks: true,
+            html_browser_preview: true,
             window_size: Some((1200.0, 800.5)),
             theme: ThemeChoice::Named("dark".to_string()),
             code_colors: CodeColors::VsCode,
@@ -341,6 +351,7 @@ mod tests {
                 pin_hash: Some(crate::crypto::pin_hash("1234")),
                 lock_after_minutes: 15,
                 touch_id: true,
+                moved_scratches: vec![],
             },
             remote: crate::remote::RemoteSettings { enabled: true, ssh_program: "/opt/ssh".to_string() },
             layout: layout::LayoutSettings {
@@ -350,6 +361,7 @@ mod tests {
                 terminals_collapsed: true,
                 tab_position: layout::TabPosition::Explorer,
                 explorer_view: layout::ExplorerView::Tabs,
+                preview_mode: layout::PreviewMode::Edit,
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {

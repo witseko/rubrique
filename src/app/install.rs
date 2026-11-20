@@ -27,7 +27,7 @@ pub(super) struct InstallState {
     /// How the last install went, with the recipe's name.
     last: Option<(String, Progress)>,
     /// For each AI tool that was not found, in [`AiTool::ALL`] order.
-    pub(super) ai: [Option<Recipe>; 4],
+    pub(super) ai: [Option<Recipe>; 5],
     /// The local model's download, when Ollama is there but the model is not.
     pub(super) local_model: Option<Recipe>,
     /// The transcription program, when it was not found.
@@ -186,6 +186,7 @@ impl RubriqueApp {
         self.check_ai_tools();
         self.check_voice_tool();
         self.check_terminals();
+        self.check_html_browser();
         let progress = match result {
             Ok(()) => {
                 let found = recipe.provides.as_deref().is_none_or(|program| ai::find_on_path(program).is_some());

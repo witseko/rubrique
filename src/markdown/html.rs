@@ -13,8 +13,7 @@ use crate::theme::palette::{Palette, Rgb};
 /// A full HTML page for `blocks`, colored like the theme `palette`.
 /// `base` is the folder URL that relative links and images resolve against.
 pub fn html_page(title: &str, blocks: &[Block], palette: &Palette, base: Option<&str>) -> String {
-    let mut body = String::new();
-    write_blocks(&mut body, blocks);
+    let body = html_body(blocks);
     let base_tag = base.map(|url| format!("<base href=\"{}\">\n", escape(url))).unwrap_or_default();
     format!(
         "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n\
@@ -24,6 +23,13 @@ pub fn html_page(title: &str, blocks: &[Block], palette: &Palette, base: Option<
         escape(title),
         style(palette),
     )
+}
+
+/// Render Markdown blocks without the outer page or theme.
+pub fn html_body(blocks: &[Block]) -> String {
+    let mut body = String::new();
+    write_blocks(&mut body, blocks);
+    body
 }
 
 /// Put `<base href>` into an HTML document so its relative links work from a
@@ -119,6 +125,14 @@ fn write_block(out: &mut String, block: &Block) {
         Block::List(list) => write_list(out, list),
         Block::Table(table) => write_table(out, table),
         Block::ThematicBreak => out.push_str("<hr>\n"),
+        // As GitHub shows front matter: a table of its fields.
+        Block::FrontMatter(front) => {
+            out.push_str("<table>\n<tbody>\n");
+            for (key, value) in &front.fields {
+                let _ = writeln!(out, "<tr><th>{}</th><td><code>{}</code></td></tr>", escape(key), escape(value));
+            }
+            out.push_str("</tbody>\n</table>\n");
+        }
         Block::Aligned { align, blocks } => {
             let _ = writeln!(out, "<div style=\"text-align: {}\">", align_name(*align));
             write_blocks(out, blocks);

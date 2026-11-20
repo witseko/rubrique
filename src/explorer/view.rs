@@ -8,6 +8,7 @@ use egui::text::{CCursor, CCursorRange};
 use super::note_marks::NoteMarks;
 use super::reorder::{ListDrag, draggable};
 use super::section::{paint_fold_arrow, section_header};
+use super::selection::{FileRows, FileSelection};
 use super::terminals::{show_docked_terminals, show_terminal_file, show_terminals_section};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button, small_toggle_button};
 use crate::scratch::is_scratch;
@@ -31,6 +32,8 @@ use new_file::{NamePart, new_entry_row};
 pub enum ExplorerAction {
     /// The user clicked a file.
     OpenFile(PathBuf),
+    /// Open a local folder in the system file manager.
+    OpenInFileManager(PathBuf),
     /// Put this text on the clipboard.
     Copy(String),
     /// Re-read the folders from disk.
@@ -41,6 +44,8 @@ pub enum ExplorerAction {
     AddFolder,
     /// Show the "Open path" dialog, to open a file or folder by its path.
     OpenPath,
+    /// Show the "Clone repository" dialog, to clone a git repository and add it.
+    CloneRepository,
     /// Ask for a folder on another computer to add as a root.
     AddRemoteFolder,
     /// Create a new scratch file and open it: encrypted or plain, or
@@ -50,8 +55,10 @@ pub enum ExplorerAction {
     Rename(PathBuf),
     /// Turn this file's row into a name field (a double click).
     RenameInTree(PathBuf),
-    /// Ask, then move this file to the Trash.
-    Delete(PathBuf),
+    /// Ask for a local destination folder for these files.
+    MoveFiles(Vec<PathBuf>),
+    /// Ask, then delete the requested files or folder.
+    Delete(Vec<PathBuf>),
     /// Store this scratch encrypted (`true`) or as plain text.
     SetEncrypted { path: PathBuf, encrypt: bool },
     /// Show this tmux session in a tab.
@@ -253,16 +260,18 @@ pub fn show_explorer(
     filter: &mut ExplorerFilter,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
+    selection: &mut FileSelection,
 ) -> Option<ExplorerAction> {
     let mut action = None;
     let files_open = !layout.files_collapsed;
+    let mut files = FileRows::new(ui, selection, context.open_file);
     // With Files open, Terminals is a panel docked at the bottom (drawn
     // first so it claims its height); with Files folded it follows the
     // Files header and gets the rest of the height.
     if files_open {
         show_docked_terminals(ui, context, &mut layout.terminals_collapsed, edits.session, &mut action);
     }
-    if files_header(ui, context, files_open, filter, &mut action) {
+    if files_header(ui, roots, context, files_open, filter, &mut action) {
         layout.files_collapsed = files_open;
     }
     if !files_open {
@@ -285,20 +294,27 @@ pub fn show_explorer(
             let root_color = context.can_remove_roots.then(|| group_color(index));
             let context = TreeContext { root: &root_path, root_color, ..context };
             let top = ui.cursor().top();
-            let row = show_root(ui, root, &context, edits, &mut action);
+            let row = show_root(ui, root, &context, edits, &mut files, &mut action);
             drag.add(ui, top, Some(&row));
         }
         if let Some((from, to)) = drag.finish(ui) {
             action = Some(ExplorerAction::MoveRoot { from, to });
         }
+        files.update(ui);
     });
-    action
+    if let Some(ExplorerAction::Delete(paths) | ExplorerAction::MoveFiles(paths)) = &mut action
+        && let [path] = paths.as_slice()
+    {
+        *paths = files.action_targets(path);
+    }
+    action.or_else(|| files.keyboard_delete(ui).map(ExplorerAction::Delete))
 }
 
-/// The "FILES" header with the folder buttons and the Markdown filter.
-/// Returns true when the title was clicked.
+/// The "FILES" header with the folder buttons, the Markdown filter and the
+/// collapse / expand all button. Returns true when the title was clicked.
 fn files_header(
     ui: &mut Ui,
+    roots: &mut [FsNode],
     context: &TreeContext,
     expanded: bool,
     filter: &mut ExplorerFilter,
@@ -337,7 +353,7 @@ fn files_header(
             {
                 *action = Some(ExplorerAction::AddRemoteFolder);
             }
-            let folder_tip = "Add a folder to the explorer (right click to type a path)";
+            let folder_tip = "Add a folder to the explorer (right click to type a path or clone a repository)";
             let folder = small_icon_button(ui, Icon::FolderPlus, HEADER_BUTTON_SIZE, "Add folder", folder_tip);
             if folder.clicked() {
                 *action = Some(ExplorerAction::AddFolder);
@@ -346,9 +362,33 @@ fn files_header(
                 if ui.button("Open path... (Cmd+O)").clicked() {
                     *action = Some(ExplorerAction::OpenPath);
                 }
+                if ui.button("Clone repository...").clicked() {
+                    *action = Some(ExplorerAction::CloneRepository);
+                }
             });
+            fold_all_button(ui, roots);
         },
     )
+}
+
+/// The header button that folds every folder while any root is open, and
+/// otherwise opens again the folders that were listed before. It reads
+/// nothing from disk; "Expand all" in a folder's menu does.
+fn fold_all_button(ui: &mut Ui, roots: &mut [FsNode]) {
+    if roots.is_empty() {
+        return;
+    }
+    if roots.iter().any(|root| root.expanded) {
+        let tip = "Collapse all folders";
+        if small_icon_button(ui, Icon::CollapseAll, HEADER_BUTTON_SIZE, "Collapse all", tip).clicked() {
+            roots.iter_mut().for_each(FsNode::collapse_all);
+        }
+    } else {
+        let tip = "Expand all folders opened before. Right-click a folder to expand everything in it";
+        if small_icon_button(ui, Icon::ExpandAll, HEADER_BUTTON_SIZE, "Expand all", tip).clicked() {
+            roots.iter_mut().for_each(FsNode::expand_loaded);
+        }
+    }
 }
 
 /// The funnel in the Files header: a click opens a menu with one box per
@@ -430,6 +470,9 @@ fn show_no_folders(ui: &mut Ui, action: &mut Option<ExplorerAction>) {
     if ui.button("Add folder...").clicked() {
         *action = Some(ExplorerAction::AddFolder);
     }
+    if ui.button("Clone repository...").clicked() {
+        *action = Some(ExplorerAction::CloneRepository);
+    }
 }
 
 /// A root folder: a bold row that folds its tree open and closed, and
@@ -439,6 +482,7 @@ fn show_root(
     root: &mut FsNode,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
+    files: &mut FileRows,
     action: &mut Option<ExplorerAction>,
 ) -> egui::Response {
     let label = RichText::new(format!("{ICON_GAP}{}", root.name)).strong();
@@ -447,19 +491,22 @@ fn show_root(
         response = draggable(&response);
     }
     let response = response.on_hover_text(absolute_path_text(&root.path));
+    files.record_focus(&response);
     scroll_if_revealed(ui, context, &root.path, &response);
     let open = shows_contents(ui, root, context);
     paint_arrow(ui, &response, open);
     if let Some(color) = context.root_color {
         paint_root_bar(ui, &response, color);
     }
-    if toggles_fold(&response) {
-        root.toggle_expanded(repaint_when_done(ui));
+    click_on_folder(ui, &response, root);
+    let mut fold = None;
+    root_menu(&response, &root.path, context, &mut fold, action);
+    if let Some(fold) = fold {
+        fold_all(root, fold);
     }
-    root_menu(&response, &root.path, context, action);
     if open {
         let indent_id = root.path.clone();
-        ui.indent(indent_id, |ui| show_children(ui, root, context, edits, action));
+        ui.indent(indent_id, |ui| show_children(ui, root, context, edits, files, action));
     }
     response
 }
@@ -470,6 +517,7 @@ fn show_children(
     folder: &mut FsNode,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
+    files: &mut FileRows,
     action: &mut Option<ExplorerAction>,
 ) {
     folder.poll_loading();
@@ -489,10 +537,13 @@ fn show_children(
             for child in children.iter_mut() {
                 if child.is_folder() {
                     if folder_is_shown(child, context) {
-                        show_folder(ui, child, context, edits, action);
+                        show_folder(ui, child, context, edits, files, action);
                     }
                 } else if file_is_shown(child, context) {
-                    show_file(ui, child, context, edits, action);
+                    let row_id = ui.scope_id().with(&child.path);
+                    ui.scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
+                        show_file(ui, child, context, edits, files, action);
+                    });
                 }
             }
         }
@@ -505,6 +556,7 @@ fn show_folder(
     folder: &mut FsNode,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
+    files: &mut FileRows,
     action: &mut Option<ExplorerAction>,
 ) {
     // A folder being renamed shows a name field in place of its row.
@@ -514,22 +566,25 @@ fn show_folder(
     }
     let label = format!("{ICON_GAP}{}{}", folder.name, link_marker(folder));
     let response = tree_row(ui, is_revealed(context, &folder.path), label);
+    files.record_focus(&response);
     scroll_if_revealed(ui, context, &folder.path, &response);
     if folder.kind == NodeKind::SymlinkLoop {
         response.clone().on_hover_text("Link to a parent folder; not expanded to avoid a loop");
     } else {
         paint_arrow(ui, &response, shows_contents(ui, folder, context));
     }
-    if toggles_fold(&response) {
-        folder.toggle_expanded(repaint_when_done(ui));
-    }
+    click_on_folder(ui, &response, folder);
     if response.double_clicked() {
         *action = Some(ExplorerAction::RenameInTree(folder.path.clone()));
     }
-    folder_menu(&response, &folder.path, context, action);
+    let mut fold = None;
+    folder_menu(&response, &folder.path, context, &mut fold, action);
+    if let Some(fold) = fold {
+        fold_all(folder, fold);
+    }
     if shows_contents(ui, folder, context) {
         let indent_id = folder.path.clone();
-        ui.indent(indent_id, |ui| show_children(ui, folder, context, edits, action));
+        ui.indent(indent_id, |ui| show_children(ui, folder, context, edits, files, action));
     }
 }
 
@@ -540,6 +595,7 @@ fn show_file(
     file: &FsNode,
     context: &TreeContext,
     edits: &mut ExplorerEdits,
+    files: &mut FileRows,
     action: &mut Option<ExplorerAction>,
 ) {
     if edits.rename.as_ref().is_some_and(|rename| rename.target == file.path) {
@@ -547,7 +603,7 @@ fn show_file(
         return;
     }
     if is_terminal_path(&file.path) {
-        show_terminal_file(ui, file, context, action);
+        show_terminal_file(ui, file, context, files, action);
         return;
     }
     let is_open = context.open_file == Some(file.path.as_path()) || is_revealed(context, &file.path);
@@ -563,7 +619,7 @@ fn show_file(
     } else {
         egui::RichText::new(label)
     };
-    let row = file_row(ui, is_open, label);
+    let row = file_row(ui, files.highlights(&file.path, is_open), label);
     let response = row.inner;
     scroll_if_revealed(ui, context, &file.path, &response);
     if file.encrypted {
@@ -575,15 +631,28 @@ fn show_file(
     {
         paint_note_mark(ui, row.response.rect);
     }
-    if response.double_clicked() {
-        *action = Some(ExplorerAction::RenameInTree(file.path.clone()));
-    } else if response.clicked() {
-        *action = Some(ExplorerAction::OpenFile(file.path.clone()));
-    }
+    file_click(&response, &file.path, files, action);
     if response.hovered() {
         set_hovered(ui, HoveredFile { path: file.path.clone(), rect: response.rect });
     }
-    file_menu(&response, &file.path, context, action);
+    file_menu(&response, &file.path, context, None, files, action);
+}
+
+/// Modified clicks change the selection. Plain clicks open or rename the file.
+pub(super) fn file_click(
+    response: &egui::Response,
+    path: &Path,
+    files: &mut FileRows,
+    action: &mut Option<ExplorerAction>,
+) {
+    if files.record(path, response) {
+        return;
+    }
+    if response.double_clicked() {
+        *action = Some(ExplorerAction::RenameInTree(path.to_path_buf()));
+    } else if response.clicked() {
+        *action = Some(ExplorerAction::OpenFile(path.to_path_buf()));
+    }
 }
 
 /// The row of an entry being renamed (a file, or a terminal in the
@@ -649,6 +718,51 @@ pub(super) fn scroll_if_revealed(ui: &Ui, context: &TreeContext, path: &Path, re
         let strip = response.rect.with_min_x(left).with_max_x(left + 1.0);
         ui.scroll_to_rect(strip, Some(egui::Align::Center));
     }
+}
+
+/// Fold or unfold a folder whose row was clicked. With Alt (Option on a
+/// Mac) held, everything inside it folds or opens too.
+fn click_on_folder(ui: &Ui, response: &egui::Response, folder: &mut FsNode) {
+    if !toggles_fold(response) {
+        return;
+    }
+    if !ui.input(|input| input.modifiers.alt) {
+        folder.toggle_expanded(repaint_when_done(ui));
+        return;
+    }
+    let fold = if folder.expanded { FoldAll::Collapse } else { FoldAll::Expand };
+    fold_all(folder, fold);
+}
+
+/// A fold of a folder and everything inside it, asked for from its menu
+/// or with an Alt-click.
+#[derive(Clone, Copy, Debug)]
+enum FoldAll {
+    Expand,
+    Collapse,
+}
+
+/// Fold or open `folder` and everything inside it.
+fn fold_all(folder: &mut FsNode, fold: FoldAll) {
+    match fold {
+        FoldAll::Expand => folder.expand_all(),
+        FoldAll::Collapse => folder.collapse_all(),
+    }
+}
+
+/// "Expand all" and "Collapse all" at the top of a folder's menu.
+fn fold_all_items(ui: &mut Ui, fold: &mut Option<FoldAll>) {
+    let items = [
+        (FoldAll::Expand, "Expand all", "Open this folder and every folder inside it (or Alt/Option-click it)"),
+        (FoldAll::Collapse, "Collapse all", "Fold this folder and every folder inside it (or Alt/Option-click it)"),
+    ];
+    for (choice, label, tip) in items {
+        if ui.button(label).on_hover_text(tip).clicked() {
+            *fold = Some(choice);
+            ui.close();
+        }
+    }
+    ui.separator();
 }
 
 /// True when a click on a folder row should fold or unfold it. egui reports
@@ -748,12 +862,20 @@ fn link_marker(node: &FsNode) -> &'static str {
     if node.is_symlink { " ↗" } else { "" }
 }
 
-/// Right-click menu of a root: the copy actions, then "Remove from explorer".
-fn root_menu(response: &egui::Response, path: &Path, context: &TreeContext, action: &mut Option<ExplorerAction>) {
+/// Right-click menu of a root folder, including "Remove from explorer".
+fn root_menu(
+    response: &egui::Response,
+    path: &Path,
+    context: &TreeContext,
+    fold: &mut Option<FoldAll>,
+    action: &mut Option<ExplorerAction>,
+) {
     response.context_menu(|ui| {
+        fold_all_items(ui, fold);
         if new_menu(ui, path, context, action) {
             ui.separator();
         }
+        open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
         let remove = ui
@@ -767,43 +889,49 @@ fn root_menu(response: &egui::Response, path: &Path, context: &TreeContext, acti
     });
 }
 
-/// Right-click menu of a file: the copy actions, then "Rename…" and "Delete…".
+/// Right-click menu for a file, with "Exit terminal" when it is a .tmux file.
 pub(super) fn file_menu(
     response: &egui::Response,
     path: &Path,
     context: &TreeContext,
-    action: &mut Option<ExplorerAction>,
-) {
-    file_menu_with_exit(response, path, context, None, action);
-}
-
-/// [`file_menu`] for a `.tmux` file, which also offers "Exit terminal" for
-/// session, given as its name and whether it is running (the item is off when not).
-pub(super) fn file_menu_with_exit(
-    response: &egui::Response,
-    path: &Path,
-    context: &TreeContext,
     exit: Option<(&str, bool)>,
+    files: &FileRows,
     action: &mut Option<ExplorerAction>,
 ) {
     response.context_menu(|ui| {
-        if let Some((session, running)) = exit {
-            let exit_item = ui
-                .add_enabled(running, egui::Button::new("Exit terminal"))
-                .on_hover_text("End the session and everything running in it")
-                .on_disabled_hover_text("Not running");
-            if exit_item.clicked() {
-                *action = Some(ExplorerAction::ExitTerminal(session.to_string()));
+        let count = files.target_count(path);
+        let single_file = count == 1;
+        ui.add_enabled_ui(single_file, |ui| {
+            if let Some((session, running)) = exit {
+                let exit_item = ui
+                    .add_enabled(running, egui::Button::new("Exit terminal"))
+                    .on_hover_text("End the session and everything running in it")
+                    .on_disabled_hover_text(if single_file { "Not running" } else { "Select a single file" });
+                if exit_item.clicked() {
+                    *action = Some(ExplorerAction::ExitTerminal(session.to_string()));
+                    ui.close();
+                }
+                ui.separator();
+            }
+            copy_items(ui, path, context, action);
+            ui.separator();
+            if encryption_item(ui, path, context, action) {
+                ui.separator();
+            }
+        });
+        if exit.is_none() && !crate::remote::is_mirror(path) {
+            let label = if count > 1 {
+                format!("Move {count} Selected Files to Folder…")
+            } else {
+                "Move to Folder…".into()
+            };
+            if ui.button(label).clicked() {
+                *action = Some(ExplorerAction::MoveFiles(vec![path.to_path_buf()]));
                 ui.close();
             }
-            ui.separator();
         }
-        copy_items(ui, path, context, action);
-        ui.separator();
-        if encryption_item(ui, path, context, action) {
-            ui.separator();
-        }
-        rename_delete_items(ui, path, action);
+        let delete_label = if count > 1 { format!("Delete {count} selected files…") } else { "Delete…".into() };
+        rename_delete_items(ui, path, single_file, &delete_label, action);
     });
 }
 
@@ -831,28 +959,53 @@ fn encryption_item(ui: &mut Ui, path: &Path, context: &TreeContext, action: &mut
 }
 
 /// "Rename…" (also a double click) and "Delete…" for a file or folder.
-fn rename_delete_items(ui: &mut Ui, path: &Path, action: &mut Option<ExplorerAction>) {
-    if ui.button("Rename…").on_hover_text("Or double-click it").clicked() {
+fn rename_delete_items(
+    ui: &mut Ui,
+    path: &Path,
+    can_rename: bool,
+    delete_label: &str,
+    action: &mut Option<ExplorerAction>,
+) {
+    if ui.add_enabled(can_rename, egui::Button::new("Rename…")).on_hover_text("Or double-click it").clicked() {
         *action = Some(ExplorerAction::Rename(path.to_path_buf()));
         ui.close();
     }
-    if ui.button("Delete…").clicked() {
-        *action = Some(ExplorerAction::Delete(path.to_path_buf()));
+    if ui.button(delete_label).clicked() {
+        *action = Some(ExplorerAction::Delete(vec![path.to_path_buf()]));
         ui.close();
     }
 }
 
-/// Right-click menu of a folder: "New", the three copy actions, then
-/// "Rename…" and "Delete…".
-fn folder_menu(response: &egui::Response, path: &Path, context: &TreeContext, action: &mut Option<ExplorerAction>) {
+/// Right-click menu of a nested folder, including "Rename…" and "Delete…".
+fn folder_menu(
+    response: &egui::Response,
+    path: &Path,
+    context: &TreeContext,
+    fold: &mut Option<FoldAll>,
+    action: &mut Option<ExplorerAction>,
+) {
     response.context_menu(|ui| {
+        fold_all_items(ui, fold);
         if new_menu(ui, path, context, action) {
             ui.separator();
         }
+        open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
-        rename_delete_items(ui, path, action);
+        rename_delete_items(ui, path, true, "Delete…", action);
     });
+}
+
+/// Offer to open a local folder in the system file manager.
+fn open_in_file_manager_item(ui: &mut Ui, path: &Path, action: &mut Option<ExplorerAction>) {
+    if crate::remote::is_mirror(path) {
+        return;
+    }
+    let label = if cfg!(target_os = "macos") { "Open in Finder" } else { "Open in File Manager" };
+    if ui.button(label).clicked() {
+        *action = Some(ExplorerAction::OpenInFileManager(path.to_path_buf()));
+        ui.close();
+    }
 }
 
 /// The "New" submenu of a local folder: File, Folder, and Terminal when
@@ -901,8 +1054,9 @@ fn copy_items(ui: &mut Ui, path: &Path, context: &TreeContext, action: &mut Opti
 
 #[cfg(test)]
 mod tests {
-    use super::{file_row, icon_gap_width, name_stem_chars};
-    use eframe::egui::{self, Context, RawInput};
+    use super::{ExplorerAction, FileRows, FileSelection, file_click, file_row, icon_gap_width, name_stem_chars};
+    use eframe::egui::{self, Context, Event, Key, Modifiers, PointerButton, RawInput};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn open_file_highlight_starts_at_its_name() {
@@ -927,5 +1081,359 @@ mod tests {
         assert_eq!(name_stem_chars("README"), 6);
         assert_eq!(name_stem_chars(".env"), 4);
         assert_eq!(name_stem_chars("café.md"), 4);
+    }
+
+    const FILE_NAMES: [&str; 4] = ["one.md", "two.md", "three.md", "four.md"];
+
+    /// Draw file rows with egui and dispatch the same clicks as the explorer.
+    #[derive(Default)]
+    struct FileTree {
+        ctx: Context,
+        selection: FileSelection,
+        open_file: Option<PathBuf>,
+        positions: [egui::Pos2; 4],
+        folder_position: egui::Pos2,
+        hide_middle: bool,
+        highlighted: Vec<PathBuf>,
+        editor: String,
+        dialog_open: bool,
+        menu_items: Vec<(String, egui::Pos2)>,
+    }
+
+    impl FileTree {
+        /// Send input and record the action and highlights drawn by the rows.
+        fn frame(&mut self, events: Vec<Event>) -> Option<ExplorerAction> {
+            let mut action = None;
+            self.highlighted.clear();
+            let input = RawInput { events, ..Default::default() };
+            let mut output = self.ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let open = self.open_file.as_deref();
+                    let mut files = FileRows::new(ui, &mut self.selection, open);
+                    let context = super::TreeContext {
+                        root: Path::new("."),
+                        can_remove_roots: false,
+                        filter: super::ExplorerFilter::default(),
+                        open_file: open,
+                        dirty_files: &[],
+                        note_marks: None,
+                        remote_enabled: false,
+                        terminals: None,
+                        open_terminal: None,
+                        revealed: None,
+                        root_color: None,
+                        agent_history: None,
+                        expanded_terminals: &[],
+                        scratch_folder: None,
+                    };
+                    let folder = super::tree_row(ui, false, "Folder");
+                    self.folder_position = folder.rect.center();
+                    files.record_focus(&folder);
+                    for (index, name) in FILE_NAMES.iter().enumerate() {
+                        if self.hide_middle && index == 1 {
+                            continue;
+                        }
+                        let path = Path::new(name);
+                        let highlighted = files.highlights(path, open == Some(path));
+                        if highlighted {
+                            self.highlighted.push(path.to_path_buf());
+                        }
+                        let row_id = ui.scope_id().with(path);
+                        let row = ui
+                            .scope_builder(egui::UiBuilder::new().scope_id(row_id), |ui| {
+                                file_row(ui, highlighted, *name)
+                            })
+                            .inner;
+                        self.positions[index] = row.inner.rect.center();
+                        file_click(&row.inner, path, &mut files, &mut action);
+                        super::file_menu(&row.inner, path, &context, None, &files, &mut action);
+                    }
+                    files.update(ui);
+                    action = action.take().or_else(|| files.keyboard_delete(ui).map(ExplorerAction::Delete));
+                    ui.add(egui::TextEdit::multiline(&mut self.editor).id(egui::Id::unique("test-editor")));
+                });
+                if self.dialog_open {
+                    let dialog = egui::Modal::new(egui::Id::unique("test-dialog")).show(ui.ctx(), |ui| {
+                        ui.label("Confirm deletion");
+                    });
+                    self.dialog_open = !dialog.should_close();
+                }
+            });
+            output.textures_delta.clear();
+            self.menu_items = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => {
+                        Some((text.galley.text().to_owned(), text.visual_bounding_rect().center()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            if let Some(ExplorerAction::OpenFile(path)) = &action {
+                self.open_file = Some(path.clone());
+            }
+            action
+        }
+
+        /// Move to the file row, press and release the primary mouse button.
+        fn click(&mut self, index: usize, modifiers: Modifiers) -> Option<ExplorerAction> {
+            self.click_at(self.positions[index], modifiers)
+        }
+
+        /// Click a position in the test UI.
+        fn click_at(&mut self, pos: egui::Pos2, modifiers: Modifiers) -> Option<ExplorerAction> {
+            self.click_button(pos, PointerButton::Primary, modifiers)
+        }
+
+        /// Send a pointer click at a row or menu item.
+        fn click_button(
+            &mut self,
+            pos: egui::Pos2,
+            button: PointerButton,
+            modifiers: Modifiers,
+        ) -> Option<ExplorerAction> {
+            self.frame(vec![Event::PointerMoved(pos)]);
+            let event = |pressed| Event::PointerButton { pos, button, pressed, modifiers };
+            self.frame(vec![event(true)]);
+            self.frame(vec![event(false)])
+        }
+
+        /// Click a file's context menu item by its displayed label.
+        fn click_menu_item(&mut self, index: usize, label: &str) -> Option<ExplorerAction> {
+            self.click_button(self.positions[index], PointerButton::Secondary, Modifiers::NONE);
+            self.frame(Vec::new());
+            let (_, position) = self.menu_items.iter().find(|(text, _)| text == label).expect("menu item is visible");
+            self.click_at(*position, Modifiers::NONE)
+        }
+
+        /// Press Delete with no modifiers.
+        fn press_delete(&mut self) -> Option<ExplorerAction> {
+            self.press(Key::Delete, Modifiers::NONE)
+        }
+
+        /// Send a keyboard shortcut to the focused widget.
+        fn press(&mut self, key: Key, modifiers: Modifiers) -> Option<ExplorerAction> {
+            self.frame(vec![Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }])
+        }
+    }
+
+    #[test]
+    fn file_menu_disables_single_file_actions_on_a_selection() {
+        for item in ["Copy absolute path", "Copy relative path", "Copy name", "Rename…"] {
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            assert!(tree.click_menu_item(0, item).is_none(), "{item} is enabled on the selection");
+
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            let action = tree.click_menu_item(2, item);
+            match item {
+                "Rename…" => {
+                    assert!(matches!(action, Some(ExplorerAction::Rename(path)) if path == Path::new("three.md")));
+                }
+                _ => assert!(matches!(action, Some(ExplorerAction::Copy(_))), "{item} is disabled on a single target"),
+            }
+        }
+    }
+
+    #[test]
+    fn file_menu_keeps_batch_move_and_delete_enabled() {
+        for item in ["Move 2 Selected Files to Folder…", "Delete 2 selected files…"] {
+            let mut tree = FileTree::default();
+            tree.frame(Vec::new());
+            tree.click(0, Modifiers::NONE);
+            tree.click(1, Modifiers::SHIFT);
+            let action = tree.click_menu_item(0, item);
+            match item {
+                "Delete 2 selected files…" => assert!(matches!(action, Some(ExplorerAction::Delete(_)))),
+                _ => assert!(matches!(action, Some(ExplorerAction::MoveFiles(_)))),
+            }
+        }
+    }
+
+    #[test]
+    fn shift_click_selects_a_range_without_opening_files_and_delete_uses_visible_rows() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        let action = tree.click(0, Modifiers::NONE);
+        assert!(matches!(action, Some(ExplorerAction::OpenFile(path)) if path == Path::new("one.md")));
+        assert!(tree.click(2, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, FILE_NAMES[..3].iter().map(PathBuf::from).collect::<Vec<_>>());
+
+        tree.hide_middle = true;
+        assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths))
+            if paths == [PathBuf::from("one.md"), PathBuf::from("three.md")]));
+    }
+
+    #[test]
+    fn shift_arrows_extend_and_shrink_a_range_across_visible_files() {
+        let mut tree = FileTree { hide_middle: true, ..FileTree::default() };
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        for _ in 0..3 {
+            assert!(tree.press(Key::ArrowDown, Modifiers::SHIFT).is_none());
+        }
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["one.md", "three.md", "four.md"].map(PathBuf::from));
+
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["one.md", "three.md"].map(PathBuf::from));
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths))
+            if paths == ["one.md", "three.md"].map(PathBuf::from)));
+    }
+
+    #[test]
+    fn shift_arrows_move_the_shift_click_endpoint_across_its_anchor() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(1, Modifiers::NONE);
+        tree.click(0, Modifiers::SHIFT);
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        tree.press(Key::ArrowDown, Modifiers::SHIFT);
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, ["two.md", "three.md"].map(PathBuf::from));
+    }
+
+    #[test]
+    fn shift_down_from_a_focused_folder_starts_with_the_next_file() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click_at(tree.folder_position, Modifiers::NONE);
+        assert!(tree.press(Key::ArrowUp, Modifiers::SHIFT).is_none());
+        assert!(tree.press(Key::ArrowDown, Modifiers::SHIFT).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+        assert!(tree.open_file.is_none());
+    }
+
+    #[test]
+    fn shift_arrows_in_the_editor_select_text() {
+        let mut tree = FileTree { editor: "first line\nsecond line".into(), ..FileTree::default() };
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        let editor_id = egui::Id::unique("test-editor");
+        tree.ctx.memory_mut(|memory| memory.request_focus(editor_id));
+        tree.press(Key::ArrowUp, Modifiers::SHIFT);
+        let editor = egui::TextEdit::load_state(&tree.ctx, editor_id).unwrap();
+        let range = editor.cursor.char_range().unwrap().as_sorted_char_range();
+        assert_ne!(range.start, range.end);
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+    }
+
+    #[test]
+    fn command_click_toggles_individual_files_and_deletes_the_remaining_selection() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        assert!(tree.click(2, Modifiers::COMMAND).is_none());
+        assert!(tree.click(3, Modifiers::COMMAND).is_none());
+        assert!(tree.click(3, Modifiers::COMMAND).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md"), PathBuf::from("three.md")]);
+        assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths))
+            if paths == [PathBuf::from("one.md"), PathBuf::from("three.md")]));
+    }
+
+    #[test]
+    fn command_click_can_deselect_the_open_file_and_start_a_new_selection() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        assert!(tree.click(0, Modifiers::COMMAND).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, Vec::<PathBuf>::new());
+        assert!(tree.press_delete().is_none());
+
+        assert!(tree.click(2, Modifiers::COMMAND).is_none());
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("three.md")]);
+    }
+
+    #[test]
+    fn select_all_in_a_focused_tree_targets_every_displayed_file() {
+        for focus_folder in [false, true] {
+            let mut tree = FileTree { hide_middle: true, ..FileTree::default() };
+            tree.frame(Vec::new());
+            if focus_folder {
+                tree.click_at(tree.folder_position, Modifiers::NONE);
+            } else {
+                tree.click(0, Modifiers::NONE);
+            }
+            assert!(tree.press(Key::A, Modifiers::COMMAND).is_none());
+            let displayed = [PathBuf::from("one.md"), PathBuf::from("three.md"), PathBuf::from("four.md")];
+            tree.frame(Vec::new());
+            assert_eq!(tree.highlighted, displayed);
+            assert!(matches!(tree.press_delete(), Some(ExplorerAction::Delete(paths)) if paths == displayed));
+        }
+    }
+
+    #[test]
+    fn select_all_in_a_text_field_selects_its_text() {
+        let mut tree = FileTree { editor: "hello".into(), ..FileTree::default() };
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        let editor_id = egui::Id::unique("test-editor");
+        tree.ctx.memory_mut(|memory| memory.request_focus(editor_id));
+        assert!(tree.press(Key::A, Modifiers::COMMAND).is_none());
+        let editor = egui::TextEdit::load_state(&tree.ctx, editor_id).unwrap();
+        let range = editor.cursor.char_range().unwrap().as_sorted_char_range();
+        assert_eq!(range.start.0..range.end.0, 0..5);
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, [PathBuf::from("one.md")]);
+    }
+
+    #[test]
+    fn escape_clears_the_selection_and_keeps_keyboard_focus_in_the_tree() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        tree.press(Key::A, Modifiers::COMMAND);
+        tree.press(Key::Escape, Modifiers::NONE);
+        assert!(tree.press_delete().is_none());
+        assert_eq!(tree.highlighted, Vec::<PathBuf>::new());
+
+        tree.press(Key::A, Modifiers::COMMAND);
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, FILE_NAMES.map(PathBuf::from));
+    }
+
+    #[test]
+    fn escape_leaves_the_tree_selection_when_a_text_field_has_focus() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        tree.press(Key::A, Modifiers::COMMAND);
+        let editor_id = egui::Id::unique("test-editor");
+        tree.ctx.memory_mut(|memory| memory.request_focus(editor_id));
+        tree.press(Key::Escape, Modifiers::NONE);
+        assert_eq!(tree.highlighted, FILE_NAMES.map(PathBuf::from));
+        assert!(tree.ctx.memory(|memory| memory.focused().is_none()));
+    }
+
+    #[test]
+    fn escape_closes_the_dialog_before_it_can_clear_the_tree_selection() {
+        let mut tree = FileTree::default();
+        tree.frame(Vec::new());
+        tree.click(0, Modifiers::NONE);
+        tree.press(Key::A, Modifiers::COMMAND);
+        tree.dialog_open = true;
+        tree.frame(Vec::new());
+        tree.press(Key::Escape, Modifiers::NONE);
+        assert!(!tree.dialog_open);
+        tree.frame(Vec::new());
+        assert_eq!(tree.highlighted, FILE_NAMES.map(PathBuf::from));
     }
 }

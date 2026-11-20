@@ -16,6 +16,7 @@
 //! fingerprint: a locked tab or the Unlock dialog asks the system for it as
 //! soon as it shows, and the password field stays as the way back.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
@@ -33,6 +34,7 @@ use crate::explorer::paths::name_text;
 use crate::explorer::tree::FsNode;
 use crate::icons::paint_padlock;
 use crate::scratch::{decrypt_scratch, encrypt_scratch, encrypt_scratches, is_scratch, reencrypt_scratches};
+use crate::settings::Settings;
 use crate::settings::privacy::PrivacySettings;
 use crate::settings::view::{PrivacyInfo, SettingsAction};
 use crate::theme::style::page_fill;
@@ -74,6 +76,8 @@ pub(super) enum AfterPassword {
     ImportFromSublime,
     /// Store the scratch at this path encrypted (`true`) or plain.
     SetEncrypted { path: PathBuf, encrypt: bool },
+    /// Move a batch that contains saved encrypted edits.
+    MoveFiles { paths: Vec<PathBuf>, folder: PathBuf, encrypted_draft: PathBuf },
     /// Keep the key behind Touch ID.
     EnableTouchId,
 }
@@ -84,6 +88,7 @@ impl AfterPassword {
     fn encrypted_file(&self) -> Option<&Path> {
         match self {
             AfterPassword::SetEncrypted { path, encrypt: false } => Some(path),
+            AfterPassword::MoveFiles { encrypted_draft, .. } => Some(encrypted_draft),
             _ => None,
         }
     }
@@ -268,11 +273,21 @@ impl RubriqueApp {
     }
 
     /// Carry on with what waited for the scratch password.
-    fn after_password(&mut self, ctx: &Context, then: AfterPassword) {
+    fn after_password(
+        &mut self,
+        ctx: &Context,
+        then: AfterPassword,
+        save_settings: &impl Fn(&Settings) -> io::Result<()>,
+    ) {
         match then {
             AfterPassword::NewEncryptedScratch => self.new_scratch(ctx, true),
             AfterPassword::ImportFromSublime => self.import_from_sublime(),
             AfterPassword::SetEncrypted { path, encrypt } => self.set_scratch_encrypted(&path, encrypt),
+            AfterPassword::MoveFiles { paths, folder, .. } => {
+                if let Err(error) = self.move_files_to(&paths, &folder, save_settings) {
+                    self.show_status(error);
+                }
+            }
             AfterPassword::EnableTouchId => self.enable_touch_id(),
         }
     }
@@ -412,7 +427,7 @@ impl RubriqueApp {
                     if let Some(dialog) = self.privacy.dialog.take_if(|dialog| dialog.purpose == Purpose::Unlock)
                         && let Some(then) = dialog.then
                     {
-                        self.after_password(ctx, then);
+                        self.after_password(ctx, then, &Settings::save);
                     }
                     return;
                 }
@@ -701,9 +716,15 @@ impl RubriqueApp {
 
     /// Open tabs of `changed` files are now stored with `vault` (`None`: plain).
     fn follow_new_key(&mut self, changed: &[PathBuf], vault: Option<&Arc<Vault>>) {
+        if changed.is_empty() {
+            return;
+        }
+        // Open tabs may use a different path through a linked parent folder.
+        let resolved: Vec<_> = changed.iter().filter_map(|path| std::fs::canonicalize(path).ok()).collect();
         for file in self.all_tabs_mut() {
             if let OpenFile::Text { document, .. } = file
-                && changed.contains(&document.path)
+                && (changed.contains(&document.path)
+                    || std::fs::canonicalize(&document.path).is_ok_and(|path| resolved.contains(&path)))
             {
                 document.set_vault(vault.cloned());
             }
@@ -740,6 +761,9 @@ impl RubriqueApp {
                     RichText::new("If you forget this password, encrypted scratches cannot be read.")
                         .color(ui.visuals().warn_fg_color),
                 );
+            }
+            if matches!(dialog.then, Some(AfterPassword::MoveFiles { .. })) {
+                alert::body(ui, "Enter the scratch password to move the selected files and their saved drafts.");
             }
             let mut first_field = None;
             let mut field = |ui: &mut Ui, label: &str, text: &mut Zeroizing<String>| {
@@ -790,7 +814,7 @@ impl RubriqueApp {
         if cancel || modal.should_close() {
             self.privacy.dialog = None;
         } else if submit {
-            self.submit_dialog(ctx);
+            self.submit_dialog(ctx, &Settings::save);
         } else if use_touch_id {
             self.privacy.touch_id_declined = false;
             self.start_touch_id(ctx);
@@ -798,7 +822,7 @@ impl RubriqueApp {
     }
 
     /// Act on the dialog's fields; closes it on success, shows why not otherwise.
-    fn submit_dialog(&mut self, ctx: &Context) {
+    fn submit_dialog(&mut self, ctx: &Context, save_settings: &impl Fn(&Settings) -> io::Result<()>) {
         let Some(dialog) = self.privacy.dialog.take() else {
             return;
         };
@@ -824,7 +848,7 @@ impl RubriqueApp {
         match result {
             Ok(()) => {
                 if let Some(then) = dialog.then {
-                    self.after_password(ctx, then);
+                    self.after_password(ctx, then, save_settings);
                 }
             }
             Err(error) => self.privacy.dialog = Some(SecretDialog { error: Some(error), ..dialog }),
@@ -856,7 +880,7 @@ impl RubriqueApp {
         let folder = self.settings.scratch_folder_or_default().ok_or("No scratch folder")?;
         let (new, new_info) = Vault::create(&dialog.first);
         let new = Arc::new(new);
-        let changed = reencrypt_scratches(&folder, &old, &new)
+        let changed = reencrypt_scratches(&folder, &self.settings.privacy.moved_scratches, &old, &new)
             .map_err(|error| format!("Could not change the password: {error}. Some scratches may use the new one."))?;
         self.reseal_drafts(&old, &new);
         self.settings.privacy.vault = Some(new_info);
@@ -914,4 +938,113 @@ fn primary_button(ui: &Ui, label: &str) -> egui::Button<'static> {
     egui::Button::new(RichText::new(label).color(selection.stroke.color))
         .fill(selection.bg_fill)
         .min_size(vec2(LOCKED_COLUMN_WIDTH, LOCKED_ROW_HEIGHT))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+    use crate::app::drafts::DraftState;
+    use crate::document::draft::{Draft, DraftStore};
+    use crate::test_support::TempFolder;
+
+    /// Build a locked app with its own scratch folder and draft stores.
+    fn locked_app(temp: &TempFolder, ctx: &Context, vault: crate::crypto::VaultInfo) -> RubriqueApp {
+        let folder = temp.make_folder("scratches");
+        let mut settings = Settings { scratch_folder: Some(folder.clone()), ..Settings::default() };
+        settings.privacy.vault = Some(vault);
+        let mut app = RubriqueApp::new(ctx, settings, vec![folder], None);
+        app.open_file = OpenFile::Nothing;
+        app.tabs.clear();
+        app.active_tab = 0;
+        app.drafts = DraftState::in_folder(temp.path().join("drafts"));
+        app
+    }
+
+    /// Keep an encrypted draft as if the user had edited a scratch.
+    fn save_draft(store: &DraftStore, path: &Path, vault: &Vault) {
+        let draft = Draft { path: path.to_path_buf(), base_text: "saved".into(), text: "unsaved".into(), sealed: true };
+        store.write(&draft, Some(vault)).unwrap();
+    }
+
+    #[test]
+    fn unlock_retries_the_whole_move_with_the_original_destination() {
+        let temp = TempFolder::new();
+        let ctx = Context::default();
+        let (vault, info) = Vault::create("scratch password");
+        let cipher = vault.encrypt(b"saved");
+        let plain = temp.write("scratches/first.md", "plain");
+        let open = temp.write("scratches/open.md", &cipher);
+        let closed = temp.write("scratches/closed.md", &cipher);
+        let folder = temp.make_folder("dev/project");
+        let mut app = locked_app(&temp, &ctx, info);
+        let open_store = DraftStore::new(temp.path().join("drafts"));
+        let closed_store = DraftStore::new(temp.path().join("drafts/closed"));
+        save_draft(&open_store, &open, &vault);
+        save_draft(&closed_store, &closed, &vault);
+        app.open_in_tab(open.clone());
+        let paths = [plain, open.clone(), closed.clone()];
+        let settings_path = temp.path().join("settings");
+        let save = |settings: &Settings| fs::write(&settings_path, settings.to_text());
+
+        app.move_files_to(&paths, &folder, &save).unwrap();
+        let dialog = app.privacy.dialog.as_mut().unwrap();
+        assert_eq!(dialog.purpose, Purpose::Unlock);
+        dialog.current = Zeroizing::new("wrong password".into());
+        app.submit_dialog(&ctx, &save);
+        assert!(paths.iter().all(|path| path.exists()));
+        assert!(!folder.join("first.md").exists());
+        assert!(!settings_path.exists());
+        let dialog = app.privacy.dialog.as_mut().unwrap();
+        assert_eq!(dialog.error.as_deref(), Some("Wrong password"));
+
+        dialog.current = Zeroizing::new("scratch password".into());
+        app.submit_dialog(&ctx, &save);
+
+        assert!(app.privacy.dialog.is_none());
+        assert!(paths.iter().all(|path| !path.exists()));
+        assert_eq!(fs::read_to_string(folder.join("first.md")).unwrap(), "plain");
+        for (source, store) in [(&open, &open_store), (&closed, &closed_store)] {
+            let moved = folder.join(source.file_name().unwrap());
+            assert_eq!(fs::read(&moved).unwrap(), cipher);
+            assert!(!store.exists(source).unwrap());
+            let draft = store.read(&moved, Some(&vault)).unwrap();
+            assert!(draft.sealed);
+            assert_eq!(draft.text, "unsaved");
+        }
+        assert_eq!(app.open_file.path(), Some(folder.join("open.md").as_path()));
+        assert!(app.open_file.is_dirty());
+    }
+
+    #[test]
+    fn escape_cancels_the_move_while_waiting_for_the_password() {
+        let temp = TempFolder::new();
+        let ctx = Context::default();
+        let (vault, info) = Vault::create("scratch password");
+        let source = temp.write("scratches/note.md", vault.encrypt(b"saved"));
+        let folder = temp.make_folder("dev/project");
+        let mut app = locked_app(&temp, &ctx, info);
+        let store = DraftStore::new(temp.path().join("drafts/closed"));
+        save_draft(&store, &source, &vault);
+        app.move_files_to(std::slice::from_ref(&source), &folder, &|_| Ok(())).unwrap();
+
+        ctx.run_ui(egui::RawInput::default(), |ui| app.secret_dialog(ui.ctx())).textures_delta.clear();
+        let escape = egui::Event::Key {
+            key: Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let input = egui::RawInput { events: vec![escape], ..Default::default() };
+        ctx.run_ui(input, |ui| app.secret_dialog(ui.ctx())).textures_delta.clear();
+
+        assert!(app.privacy.dialog.is_none());
+        assert!(app.privacy.vault.is_none());
+        app.unlock_scratches("scratch password", None).unwrap();
+        assert!(source.exists());
+        assert!(store.exists(&source).unwrap());
+        assert!(!folder.join("note.md").exists());
+    }
 }

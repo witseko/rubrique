@@ -8,11 +8,157 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Voice notes on selected text.** Select a passage in a local, unencrypted
+  Markdown file, choose Add note, then Record voice note. Stop to attach the
+  recording and play it from the Notes panel.
+- **Send to OpenRig.** Select a document step in Markdown and use Tasks to
+  send it to a seat on a local OpenRig team. Reopen the file to check the
+  saved task's status and read its result.
+- **Document and spreadsheet previews.** Browse PDF pages, read text from
+  DOC and DOCX, and switch between sheets in XLS, XLSX and ODS workbooks.
+  View CSV and TSV as tables, or switch to Source to edit them. Legacy
+  DOC previews on Linux use `antiword`.
+- **PowerPoint and rich text previews.** Browse the text of each PPTX
+  slide and read the text of ODT and RTF documents in a tab.
+
 ### Fixed
 
 - **Grok is found when Rubrique starts from Finder.** Settings > AI no
   longer says "Not found" for a Grok CLI installed with its own installer
   (in `~/.grok/bin`).
+
+## [1.5.1] - 2026-11-19
+
+### Fixed
+
+- **File tree selection menu.** Rename, copy, scratch encryption, and terminal
+  exit are disabled when you right-click a selection of multiple files.
+
+## [1.5.0] - 2026-11-18
+
+### Added
+
+- **File tree selection.** Shift-click to select a range, or Cmd-click on
+  Mac and Ctrl-click on Linux to add or remove individual files. Press
+  Cmd+A on Mac or Ctrl+A on Linux to select all visible files in the focused
+  tree. Use Shift+Up or Shift+Down to extend or shrink a range and Esc to
+  clear it. Press Delete or use the right-click menu to delete the
+  selection with one confirmation.
+- **Move files to a folder.** Right-click a local file or a selection in the
+  file tree and choose Move to Folder… to pick or create a destination in
+  the system dialog. Open tabs follow their files and keep unsaved edits.
+  Encrypted scratches stay encrypted and follow scratch password changes.
+  If a saved draft needs the scratch password, enter it to continue the move.
+- **Open folder in the file manager.** Right-click a local folder in the file
+  tree to open it in Finder on macOS or the default file manager on Linux.
+
+### Fixed
+
+- **File tree keyboard focus.** Shift+Up and Shift+Down keep focus on the
+  end of the selection as the file tree scrolls.
+
+## [1.4.1] - 2026-11-18
+
+### Changed
+
+- **Find in preview.** Cmd+F searches and highlights the rendered text of
+  Markdown, HTML and reStructuredText files while keeping the preview open.
+  HTML uses the built-in text preview while a Find query is active.
+
+### Fixed
+
+- **Preview highlights.** Find matches and selected text fit the height of the
+  text and leave the space between lines clear.
+
+## [1.4.0] - 2026-11-17
+
+### Added
+
+- **Clone repository.** File > Clone repository (also in the explorer's
+  Add folder right-click menu) clones a git repository from an https
+  address or an SSH one like `git@github.com:owner/repo.git`. Choose the
+  folder to clone into and, if you like, another folder name; the clone
+  opens as a new explorer folder, its README (if it has one) opens in a
+  tab, and git's reason shows if the clone fails.
+- **Install with Cargo**: `cargo install rubrique` builds the editor from
+  crates.io. Every stable release is published there automatically.
+- **Collapse all and expand all in the file tree.** A button in the FILES
+  header folds every folder at once, and opens again the folders you had
+  open. Right-click a folder for "Expand all", which opens every folder
+  inside it, or "Collapse all"; Alt-click (Option-click on a Mac) a folder
+  does the same.
+- **reStructuredText preview.** `.rst` files open in a read-only preview,
+  like HTML files, with a Read | Source switch: section titles, inline
+  markup and roles, links and footnotes, bullet, numbered, field and
+  definition lists, simple, grid, list and CSV tables, code and literal
+  blocks, and admonitions such as `.. note::` and `.. warning::` as
+  quotes under their name. Images and figures show, comments and
+  targets stay hidden, and Open in browser works for them too.
+
+### Fixed
+
+- **Inline code at the start of a line sits on the line.** `Code` that
+  begins a paragraph, a list item or a line after a break now shares the
+  baseline of the text after it instead of riding a few pixels higher.
+
+## [1.3.0] - 2026-11-17
+
+### Added
+
+- **Chromium HTML preview.** Settings > Files > HTML preview draws `.html`
+  files with a real browser engine, so the preview shows the page as
+  Chrome would: CSS layout, gradients, shadows, web fonts and images.
+  Rubrique uses Chrome, Chromium, Edge or Brave when one is installed, and
+  otherwise offers to install Google's headless Chrome in one click, like
+  whisper.cpp and the AI tools. Scripts stay off; the picture redraws as
+  you edit and when the pane changes size. Off by default: the built-in
+  preview, which never loads anything, stays the default and the fallback.
+- **Open Knowledge Format bundles.** A Markdown file's YAML front matter
+  shows as a card at the top of the preview instead of a stray heading:
+  the title and description, then each field as a labeled row in plain
+  words, with tags as chips, dates spelled out and links that open. For an
+  [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format)
+  concept the card also shows its type, a draft or deprecated status, its
+  trust tier and how fresh it is, who wrote and verified it, and its
+  sources as links.
+- **Links between Markdown files open in a tab.** In the preview, a click
+  on a link to a local `.md` file opens it. A link that starts with `/`
+  opens from the root of the bundle, as OKF writes links between concepts.
+- **Footnotes in the preview.** A footnote reference such as `[^source]`
+  shows its label in superscript, and the footnote line itself starts on
+  its own line without the colon.
+- **Gemini CLI as an agent.** Settings → AI lists Google's `gemini` next
+  to Claude Code, Codex and Grok, with a one-click npm install. It runs
+  in plan mode, the closest Gemini has to read-only. Skills from
+  `~/.gemini/skills` and agents from `~/.gemini/agents` show up too, each
+  with its own switch.
+  Gemini only runs in folders you trusted in Gemini.
+
+### Fixed
+
+- **Inline code sits on the line.** `Code` in the Markdown preview now
+  shares the baseline of the text around it instead of riding a little
+  higher.
+
+## [1.2.0] - 2026-11-16
+
+### Added
+
+- **Read mode for the Markdown preview.** The Preview | Source switch is
+  now Read | Edit | Source. Read is the default: a click selects text or
+  opens a link instead of opening the block, so a note reads like a
+  document. Edit is the preview as it was, where a click edits the block.
+  Cmd+Shift+E (or View > Edit in preview) flips between them, and the
+  choice is kept for every file.
+
+### Changed
+
+- **Import from Sublime Text saves plain text.** Imported tabs become
+  `.txt` scratches instead of `.md`, so a note written in Sublime opens as
+  the text it was and is not read as Markdown. Running the import again
+  still skips texts that are already a scratch, `.md` or `.txt`.
 
 ## [1.1.0] - 2026-11-13
 

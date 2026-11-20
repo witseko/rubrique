@@ -9,22 +9,27 @@ use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, RichText, Ui
 mod agent_history;
 mod ask;
 mod changes_panel;
+mod clone_repo;
 mod delegate;
 mod delete;
 mod drafts;
 mod find;
 mod git_branch;
 mod helm;
+mod html_snapshot;
 mod images;
 mod install;
 mod menu_bar;
+mod move_files;
 mod naming;
 #[cfg(target_os = "macos")]
 mod native_menu;
 mod new_entry;
 mod open_path;
+mod openrig;
 mod privacy;
 mod remote;
+mod scratch_paths;
 mod side_panel;
 mod structure;
 mod sublime_import;
@@ -41,6 +46,7 @@ use crate::ai::mention_list::{self, Suggestion};
 use crate::ai::skills::{self, Skill, SourceFolder};
 use crate::ai::{self, AiTool};
 use crate::alert::{self, ButtonKind};
+use crate::document::file_preview::{Delimited, DelimitedPreview, FilePreview, Kind as PreviewKind};
 use crate::document::highlighting::Syntax;
 use crate::document::highlighting::{install_text_rules, takes_text_highlights};
 use crate::document::media_view::{MediaEvent, image_pixels, show_image, show_video};
@@ -56,6 +62,7 @@ use crate::document::view::{
 use crate::explorer::note_marks::NoteMarks;
 use crate::explorer::paths::{absolute_path_text, name_text};
 use crate::explorer::reorder::move_item;
+use crate::explorer::selection::FileSelection;
 use crate::explorer::tree::{FsNode, is_markdown_path};
 use crate::explorer::view::{
     ExplorerAction, ExplorerEdits, InlineRename, NewEntry, Revealed, SessionEdit, TreeContext, show_explorer,
@@ -66,14 +73,14 @@ use crate::icons::{Icon, icon_button};
 use crate::install::view::InstallAction;
 use crate::markdown::blocks::{SourceBlock, parse_blocks, parse_source_blocks};
 use crate::markdown::html::{file_url, html_page, is_html_path, with_base};
-use crate::markdown::html_blocks::html_source_blocks;
-use crate::markdown::notes::{self, Note, find_notes, insert_note, remove_note, rewrite_note};
+use crate::markdown::notes::{self, Note, NoteContent, find_notes, insert_note, remove_note, rewrite_note};
 use crate::markdown::render::CodeAction;
 use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
+use crate::rst::{is_rst_path, parse_rst, rst_source_blocks};
 use crate::scratch::{create_scratch, rename_target};
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
-use crate::settings::layout::{ExplorerView, TabPosition};
+use crate::settings::layout::{ExplorerView, PreviewMode, TabPosition};
 use crate::settings::view::{
     AiInfo, AppearanceInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
 };
@@ -125,6 +132,9 @@ const STATUS_SEPARATOR_HEIGHT: f32 = 16.0;
 
 const SAVE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::S);
 const TOGGLE_PREVIEW: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::E);
+/// Switch the Markdown preview between Read and Edit.
+const TOGGLE_PREVIEW_EDITING: KeyboardShortcut =
+    KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::E);
 const TOGGLE_HIGHLIGHTS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::H);
 const ADD_NOTE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::M);
 const FORMAT: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::F);
@@ -173,6 +183,8 @@ enum OpenFile {
         document: Document,
         /// Parsed preview, rebuilt lazily after the text changes.
         preview: Option<Vec<SourceBlock>>,
+        /// Parsed CSV or TSV table for the current text revision.
+        delimited: Option<DelimitedPreview>,
         /// Shown when the file changed or vanished on disk.
         disk_notice: Option<DiskState>,
         /// Cursor and undo history while the tab is hidden.
@@ -191,6 +203,10 @@ enum OpenFile {
         modified: Option<std::time::SystemTime>,
         /// An image at its own size (with scroll bars) instead of fitted to the page.
         actual_size: bool,
+    },
+    Preview {
+        path: PathBuf,
+        preview: Box<FilePreview>,
     },
     Unsupported {
         path: PathBuf,
@@ -212,7 +228,10 @@ impl OpenFile {
         match self {
             OpenFile::Nothing => None,
             OpenFile::Text { document, .. } => Some(&document.path),
-            OpenFile::Media { path, .. } | OpenFile::Unsupported { path, .. } | OpenFile::Locked { path } => Some(path),
+            OpenFile::Media { path, .. }
+            | OpenFile::Preview { path, .. }
+            | OpenFile::Unsupported { path, .. }
+            | OpenFile::Locked { path } => Some(path),
             OpenFile::Terminal { terminal } => terminal.file.as_deref(),
         }
     }
@@ -232,7 +251,10 @@ impl OpenFile {
         match self {
             OpenFile::Nothing => {}
             OpenFile::Text { document, .. } => document.path = target.to_path_buf(),
-            OpenFile::Media { path, .. } | OpenFile::Unsupported { path, .. } | OpenFile::Locked { path } => {
+            OpenFile::Media { path, .. }
+            | OpenFile::Preview { path, .. }
+            | OpenFile::Unsupported { path, .. }
+            | OpenFile::Locked { path } => {
                 *path = target.to_path_buf();
             }
             OpenFile::Terminal { terminal } => terminal.follow_rename(target),
@@ -252,6 +274,18 @@ impl OpenFile {
             _ => false,
         }
     }
+}
+
+/// How a Markdown or HTML file is shown: the three segments of the switch
+/// at the end of the tab strip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PageMode {
+    /// The preview as a document: clicks select text and open links.
+    Read,
+    /// The preview where a click opens a block for editing (Markdown only).
+    Edit,
+    /// The raw text in the editor.
+    Source,
 }
 
 /// An action that closes files, so it may need the "unsaved changes"
@@ -337,7 +371,7 @@ pub struct RubriqueApp {
     repaint: Context,
     /// Where each AI tool's program was found, in [`AiTool::ALL`] order.
     /// Checked when Settings or Ask opens and when a command changes.
-    ai_found: [Option<PathBuf>; 4],
+    ai_found: [Option<PathBuf>; 5],
     /// The "Rename" dialog, while it is open.
     renaming: Option<Renaming>,
     /// The file being renamed in its explorer row (after a double click).
@@ -360,6 +394,8 @@ pub struct RubriqueApp {
     folded_groups: Vec<PathBuf>,
     /// `@tmux-` messages waiting for a busy terminal to be idle.
     pending_sends: Vec<delegate::PendingSend>,
+    /// `OpenRig` task composition and status for the Tasks panel.
+    openrig: openrig::OpenRigPanel,
     /// What typing `@` suggests, and when it was gathered (egui time):
     /// gathering reads folders, so it is redone every few seconds only.
     mention_cache: (f64, Vec<Suggestion>),
@@ -368,10 +404,14 @@ pub struct RubriqueApp {
     revealed: Option<PathBuf>,
     /// Scroll the tree to `revealed` on the next frame.
     scroll_to_revealed: bool,
-    /// The file the "Delete" dialog asks about, while it is open.
-    deleting: Option<PathBuf>,
+    /// The files or folder the "Delete" dialog asks about, while it is open.
+    deleting: Option<Vec<PathBuf>>,
+    /// The range selected in the file tree.
+    file_selection: FileSelection,
     /// The "Open path" dialog, while it is open.
     open_path: Option<open_path::OpenPathDialog>,
+    /// The "Clone repository" dialog, while it is open.
+    clone_repo: Option<clone_repo::CloneDialog>,
     /// Watches the tmux sessions for the explorer; `None` when tmux is not installed.
     terminals: Option<TerminalMonitor>,
     /// The merge screen for the open file, while it is open.
@@ -388,6 +428,8 @@ pub struct RubriqueApp {
     voice: voice::VoiceState,
     /// Installing missing tools.
     install: install::InstallState,
+    /// The HTML preview drawn by a Chromium browser.
+    html_snapshots: html_snapshot::HtmlSnapshots,
     /// Unsaved edits kept between runs.
     drafts: drafts::DraftState,
     /// Scratch key for this session, PIN lock screen and their dialogs.
@@ -407,6 +449,10 @@ struct NoteDraft {
     quote: String,
     /// Where that text is in the source, when known (selection in Edit mode).
     range: Option<std::ops::Range<usize>>,
+    /// The block that held the preview selection, if it stayed in one block.
+    source_block: Option<std::ops::Range<usize>>,
+    /// The document revision at which the selection was captured.
+    source_revision: u64,
     /// What the note says.
     text: String,
     /// The note being changed, for Edit.
@@ -466,13 +512,14 @@ impl RubriqueApp {
             naming: naming::NamingState::default(),
             rule_writer: text_highlight::RuleWriterState::default(),
             repaint: ctx.clone(),
-            ai_found: [None, None, None, None],
+            ai_found: [None, None, None, None, None],
             renaming: None,
             tree_rename: None,
             tab_rename: None,
             session_edit: None,
             new_entry: None,
             pending_sends: Vec::new(),
+            openrig: openrig::OpenRigPanel::default(),
             folded_groups: Vec::new(),
             agent_history: agent_history::load_history(),
             last_agent_check: f64::NEG_INFINITY,
@@ -481,7 +528,9 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            file_selection: FileSelection::default(),
             open_path: None,
+            clone_repo: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
             merging: None,
             last_disk_check: 0.0,
@@ -490,6 +539,7 @@ impl RubriqueApp {
             note_draft: None,
             voice: voice::VoiceState::default(),
             install: install::InstallState::default(),
+            html_snapshots: html_snapshot::HtmlSnapshots::default(),
             drafts: drafts::DraftState::default(),
             privacy,
             remote: remote::RemoteState::default(),
@@ -502,6 +552,7 @@ impl RubriqueApp {
         // The editor suggests agents when typing `@ai-`, so read them now
         // rather than waiting for Settings or Ask to open.
         app.load_skills_and_agents();
+        app.check_html_browser();
         // Reopen last session's tabs (with their unsaved edits), then the file asked for.
         let saved_tabs = std::mem::take(&mut app.settings.open_tabs);
         app.reopen_tabs(saved_tabs);
@@ -580,12 +631,22 @@ impl RubriqueApp {
                 }
             };
         }
+        if let Some(kind) = PreviewKind::of_path(&path) {
+            return Some(OpenFile::Preview { path, preview: Box::new(FilePreview::new(kind)) });
+        }
         match Document::open(&path, self.privacy.vault.as_ref()) {
             Ok(Opened::Text(document)) => {
                 if crate::remote::is_mirror(&document.path) {
                     self.fetch_remote_images(&document.path, &document.text);
                 }
-                Some(OpenFile::Text { document, preview: None, disk_notice: None, editor: None, source: false })
+                Some(OpenFile::Text {
+                    document,
+                    preview: None,
+                    delimited: None,
+                    disk_notice: None,
+                    editor: None,
+                    source: false,
+                })
             }
             Ok(Opened::Unsupported(reason)) => Some(OpenFile::Unsupported { path, reason }),
             Ok(Opened::Locked) => Some(OpenFile::Locked { path }),
@@ -704,18 +765,56 @@ impl RubriqueApp {
         ctx.copy_text(text);
     }
 
-    /// Switch a Markdown or HTML file between editor and preview (no-op for
-    /// other files).
+    /// Switch a supported text file between source and preview.
     fn toggle_preview(&mut self) {
         self.finish_block_edit();
-        let has_preview = self.open_file.path().is_some_and(|path| is_markdown_path(path) || is_html_path(path));
+        let has_preview = self.open_file.path().is_some_and(has_preview);
         if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = !*source;
         }
     }
 
-    /// True when the right panel shows the Markdown preview, where blocks
-    /// are edited in place.
+    /// Switch the Markdown preview between Read and Edit (an app-wide
+    /// choice). From the source of a Markdown file this also shows the
+    /// preview, so the shortcut always lands on the mode it names.
+    fn toggle_preview_editing(&mut self) {
+        self.finish_block_edit();
+        let layout = &mut self.settings.layout;
+        layout.preview_mode =
+            if layout.preview_mode == PreviewMode::Edit { PreviewMode::Read } else { PreviewMode::Edit };
+        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
+        if is_markdown && let OpenFile::Text { source, .. } = &mut self.open_file {
+            *source = false;
+        }
+    }
+
+    /// Show the open file in `mode`: Read or Edit set the app-wide preview
+    /// mode and show the preview, Source shows the editor.
+    fn set_page_mode(&mut self, mode: PageMode) {
+        self.finish_block_edit();
+        let has_preview = self.open_file.path().is_some_and(has_preview);
+        match mode {
+            PageMode::Read => self.settings.layout.preview_mode = PreviewMode::Read,
+            PageMode::Edit => self.settings.layout.preview_mode = PreviewMode::Edit,
+            PageMode::Source => {}
+        }
+        if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
+            *source = mode == PageMode::Source;
+        }
+    }
+
+    /// How the open file is shown, for the Read | Edit | Source switch.
+    fn page_mode(&self) -> PageMode {
+        if !self.showing_any_preview() {
+            PageMode::Source
+        } else if self.showing_preview() && self.settings.layout.preview_mode == PreviewMode::Edit {
+            PageMode::Edit
+        } else {
+            PageMode::Read
+        }
+    }
+
+    /// True when the right panel shows the Markdown preview (Read or Edit).
     fn showing_preview(&self) -> bool {
         matches!(self.open_file, OpenFile::Text { source: false, .. })
             && self.open_file.path().is_some_and(is_markdown_path)
@@ -727,13 +826,32 @@ impl RubriqueApp {
             && self.open_file.path().is_some_and(is_html_path)
     }
 
-    /// True when the right panel shows either preview instead of the editor.
+    /// True when the right panel shows the read-only preview of a
+    /// reStructuredText file.
+    fn showing_rst_preview(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { source: false, .. }) && self.open_file.path().is_some_and(is_rst_path)
+    }
+
+    /// True when a CSV or TSV tab shows its grid.
+    fn showing_delimited_preview(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { source: false, .. })
+            && self.open_file.path().and_then(Delimited::of_path).is_some()
+    }
+
+    /// True when the right panel shows any text file preview instead of the editor.
     fn showing_any_preview(&self) -> bool {
-        self.showing_preview() || self.showing_html_preview()
+        self.showing_preview()
+            || self.showing_html_preview()
+            || self.showing_rst_preview()
+            || self.showing_delimited_preview()
     }
 
     /// When the window regains focus, look for changes made by other programs.
     fn check_disk(&mut self) {
+        if let OpenFile::Preview { path, preview } = &mut self.open_file {
+            preview.check_disk(path);
+            return;
+        }
         // Remote files: a new version of an image shows when it is opened
         // again; a text file is checked in the background.
         if let OpenFile::Media { path, .. } = &self.open_file
@@ -800,7 +918,9 @@ impl RubriqueApp {
 
     /// Check for outside changes every few seconds while a file is open.
     fn poll_disk(&mut self, ctx: &Context) {
-        if !matches!(self.open_file, OpenFile::Text { .. } | OpenFile::Media { .. }) || self.merging.is_some() {
+        if !matches!(self.open_file, OpenFile::Text { .. } | OpenFile::Media { .. } | OpenFile::Preview { .. })
+            || self.merging.is_some()
+        {
             return;
         }
         let now = ctx.input(|input| input.time);
@@ -906,12 +1026,17 @@ impl RubriqueApp {
             && self.tab_rename.is_none()
             && self.deleting.is_none()
             && self.open_path.is_none()
+            && self.clone_repo.is_none()
             && ctx.input_mut(|input| input.consume_key(Modifiers::NONE, Key::Escape))
         {
             self.settings_open = false;
         }
         if ctx.input_mut(|input| input.consume_shortcut(&SAVE)) {
             self.save();
+        }
+        // Shift first: egui lets Cmd+Shift+E also match Cmd+E.
+        if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_PREVIEW_EDITING)) {
+            self.toggle_preview_editing();
         }
         if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_PREVIEW)) {
             self.toggle_preview();
@@ -925,7 +1050,6 @@ impl RubriqueApp {
             *preview = None;
         }
         self.handle_undo_keys(ctx);
-        self.prepare_find(ctx);
     }
 
     /// Cmd+Z and Shift+Cmd+Z (or Cmd+Y) when no text box takes the keys, as
@@ -1096,6 +1220,7 @@ impl RubriqueApp {
             self.load_skills_and_agents();
             self.check_voice_tool();
             self.check_terminals();
+            self.check_html_browser();
         }
     }
 
@@ -1235,6 +1360,8 @@ impl RubriqueApp {
         let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
         let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
         let highlight = self.rule_writer.highlight_info(&mut self.settings.text_highlight, ask_tool_name);
+        let html_preview =
+            html_snapshot::html_preview_info(&mut self.settings.html_browser_preview, &self.html_snapshots, &install);
         let action = show_settings(
             ui,
             &mut self.settings_group,
@@ -1253,6 +1380,7 @@ impl RubriqueApp {
             ai,
             voice,
             terminals,
+            html_preview,
         );
         // Rules edited in the Highlights group color plain text at once;
         // they are compiled again only when they changed.
@@ -1295,6 +1423,7 @@ impl RubriqueApp {
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
+            SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
             SettingsAction::Copy(text) => self.install_action(ui.ctx(), InstallAction::Copy(text)),
             SettingsAction::Install(action) => self.install_action(ui.ctx(), action),
             SettingsAction::Close => self.settings_open = false,
@@ -1339,8 +1468,11 @@ impl RubriqueApp {
             html_page(&name_text(&path), &parse_blocks(&document.text), &palette, Some(&folder))
         } else if is_html_path(&path) {
             with_base(&document.text, &folder)
+        } else if is_rst_path(&path) {
+            let palette = self.current_palette(ctx);
+            html_page(&name_text(&path), &parse_rst(&document.text), &palette, Some(&folder))
         } else {
-            self.show_status("Open in browser works for Markdown and HTML files".to_string());
+            self.show_status("Open in browser works for Markdown, HTML and reStructuredText files".to_string());
             return;
         };
         match write_browser_copy(&path, &page) {
@@ -1541,12 +1673,22 @@ impl RubriqueApp {
         if self.remote_save_running(path) {
             return Err("Cannot rename while it is being saved; try again in a moment".to_string());
         }
-        crate::vfs::rename(path, &target).map_err(|error| format!("Cannot rename: {error}"))?;
-        let uri = image_uri(path);
+        scratch_paths::follow_relocation(&mut self.settings, path, &target, false, Settings::save, || {
+            crate::vfs::rename(path, &target)
+        })
+        .map_err(|error| format!("Cannot rename: {error}"))?;
+        self.follow_relocated_path(path, &target);
+        self.roots.iter_mut().for_each(FsNode::refresh);
+        self.show_status(format!("Renamed to {}", name_text(&target)));
+        Ok(())
+    }
+
+    /// Update tabs, cached images and the last file after a path moves on disk.
+    fn follow_relocated_path(&mut self, path: &Path, target: &Path) {
         // A renamed folder moves every open file inside it too.
         let moved = |old: &Path| -> PathBuf {
             match old.strip_prefix(path) {
-                Ok(rest) if rest.as_os_str().is_empty() => target.clone(),
+                Ok(rest) if rest.as_os_str().is_empty() => target.to_path_buf(),
                 Ok(rest) => target.join(rest),
                 Err(_) => old.to_path_buf(),
             }
@@ -1557,13 +1699,10 @@ impl RubriqueApp {
                 tab.set_path(&new);
             }
         }
-        self.repaint.forget_image(&uri);
+        self.repaint.forget_image(&image_uri(path));
         if let Some(last) = self.settings.last_file.as_deref().filter(|last| last.starts_with(path)) {
             self.settings.last_file = Some(moved(last));
         }
-        self.roots.iter_mut().for_each(FsNode::refresh);
-        self.show_status(format!("Renamed to {}", name_text(&target)));
-        Ok(())
     }
 
     /// Rename the file whose tree row was just submitted; on failure the
@@ -1739,6 +1878,7 @@ impl RubriqueApp {
                 new_entry: &mut self.new_entry,
                 session: &mut self.session_edit,
             },
+            &mut self.file_selection,
         );
         self.scroll_to_revealed = false;
         self.finish_tree_rename();
@@ -1751,6 +1891,11 @@ impl RubriqueApp {
         match action {
             // Opens a tab, or switches to the file's tab when it is open.
             Some(ExplorerAction::OpenFile(path)) => self.open_in_tab(path),
+            Some(ExplorerAction::OpenInFileManager(path)) => {
+                if let Err(error) = crate::media::open_in_file_manager(&path) {
+                    self.show_status(error);
+                }
+            }
             Some(ExplorerAction::Copy(text)) => self.copy_to_clipboard(ui.ctx(), text),
             Some(ExplorerAction::Refresh) => {
                 self.roots.iter_mut().for_each(FsNode::refresh);
@@ -1779,6 +1924,7 @@ impl RubriqueApp {
             }
             Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
             Some(ExplorerAction::OpenPath) => self.start_open_path(),
+            Some(ExplorerAction::CloneRepository) => self.start_clone_repo(),
             Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
             Some(ExplorerAction::NewScratch { encrypted }) => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
@@ -1790,7 +1936,8 @@ impl RubriqueApp {
                 self.clear_name_fields();
                 self.tree_rename = Some(InlineRename::new(path));
             }
-            Some(ExplorerAction::Delete(path)) => self.request_delete(path),
+            Some(ExplorerAction::MoveFiles(paths)) => self.choose_move_folder(&paths),
+            Some(ExplorerAction::Delete(paths)) => self.request_delete(paths),
             None => {}
         }
     }
@@ -1817,8 +1964,16 @@ impl RubriqueApp {
         if self.merging.is_none() {
             self.recording_bar(ui);
         }
+        self.document_content(ui);
+        self.drop_hint(ui.ctx(), page);
+        if self.showing_preview() && self.block_edit.is_none() && self.note_draft.is_none() && !self.ask.is_open() {
+            self.add_note_button(ui.ctx());
+        }
+    }
+
+    /// Draw the active tab and apply its actions.
+    fn document_content(&mut self, ui: &mut Ui) {
         let showing_preview = self.showing_preview();
-        let showing_html_preview = self.showing_html_preview();
         let mentions = self.mentions(ui.ctx());
         self.refresh_block_changes();
         let mut notice_choice = None;
@@ -1826,13 +1981,13 @@ impl RubriqueApp {
         let mut merge_action = None;
         let mut preview_event = None;
         let mut media_event = None;
-        if let OpenFile::Locked { path } = &self.open_file {
-            let path = path.clone();
-            self.locked_tab(ui, &path);
-            return;
-        }
+        let mut preview_status = None;
         match &mut self.open_file {
-            OpenFile::Locked { .. } => {}
+            OpenFile::Locked { path } => {
+                let path = path.clone();
+                self.locked_tab(ui, &path);
+                return;
+            }
             OpenFile::Terminal { terminal } => show_terminal(ui, terminal),
             OpenFile::Nothing => {
                 ui.centered_and_justified(|ui| ui.label(RichText::new("Pick a file in the explorer").weak()));
@@ -1843,8 +1998,9 @@ impl RubriqueApp {
             OpenFile::Media { path, kind: MediaKind::Video, bytes, .. } => {
                 media_event = show_video(ui, path, *bytes);
             }
+            OpenFile::Preview { path, preview } => preview_status = preview.show(ui, path),
             OpenFile::Unsupported { path, reason } => unsupported_notice(ui, path, reason),
-            OpenFile::Text { document, preview, disk_notice, .. } => {
+            OpenFile::Text { document, preview, delimited, disk_notice, source, .. } => {
                 if let Some(session) = &mut self.merging {
                     merge_action = show_merge(ui, session, &name_text(&document.path));
                 } else if let Some(state) = disk_notice {
@@ -1862,19 +2018,26 @@ impl RubriqueApp {
                     let blocks = preview.get_or_insert_with(|| parse_source_blocks(&document.text));
                     let folder = document.path.parent().unwrap_or(Path::new("/"));
                     set_memo_states(ui.ctx(), self.voice.memo_states(folder, blocks));
-                    let output = show_preview(
-                        ui,
-                        &document.path,
-                        blocks,
-                        self.block_edit.as_mut(),
-                        &mentions,
-                        &self.block_changes.list,
-                    );
+                    let output = find::draw_preview(ui, &mut self.find, |ui| {
+                        show_preview(
+                            ui,
+                            &document.path,
+                            blocks,
+                            self.settings.layout.preview_mode == PreviewMode::Edit,
+                            self.block_edit.as_mut(),
+                            &mentions,
+                            &self.block_changes.list,
+                        )
+                    });
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
-                } else if showing_html_preview {
-                    let blocks = preview.get_or_insert_with(|| html_source_blocks(&document.text));
-                    preview_event = show_read_only_preview(ui, &document.path, blocks);
+                } else if !*source && let Some(kind) = Delimited::of_path(&document.path) {
+                    DelimitedPreview::show(delimited, ui, kind, document);
+                } else if !*source && has_preview(&document.path) {
+                    let use_browser = self.settings.html_browser_preview;
+                    let snapshots = &mut self.html_snapshots;
+                    preview_event =
+                        show_read_only_file_preview(ui, document, preview, snapshots, use_browser, &mut self.find);
                 } else {
                     let was_dirty = document.is_dirty();
                     let syntax = Syntax::of(&document.path);
@@ -1906,9 +2069,8 @@ impl RubriqueApp {
         if let Some(event) = media_event {
             self.media_action(ui.ctx(), event);
         }
-        self.drop_hint(ui.ctx(), page);
-        if showing_preview && self.block_edit.is_none() && self.note_draft.is_none() && !self.ask.is_open() {
-            self.add_note_button(ui.ctx());
+        if let Some(status) = preview_status {
+            self.show_status(status);
         }
     }
 
@@ -1925,6 +2087,7 @@ impl RubriqueApp {
             PreviewEvent::Code { index, action } => self.code_block_action(ctx, index, action),
             PreviewEvent::Memo(action) => self.memo_action(ctx, action),
             PreviewEvent::PlayVideo(path) => self.play_video(&path),
+            PreviewEvent::OpenFile(path) => self.open_in_tab(path),
             PreviewEvent::RevertChange(change) => self.revert_change(&change),
         }
     }
@@ -2179,7 +2342,9 @@ impl RubriqueApp {
             .order(egui::Order::Foreground)
             .fixed_pos(selection.pointer + egui::vec2(10.0, 14.0));
         let shown = area.show(ctx, |ui| {
-            ui.button("+ Add note").on_hover_text("Add a note about the selected text (Cmd+Shift+M)").clicked()
+            ui.button("+ Add note")
+                .on_hover_text("Write or record a note about the selected text (Cmd+Shift+M)")
+                .clicked()
         });
         preview_selection::set_button_rect(ctx, shown.response.rect);
         if shown.inner {
@@ -2197,6 +2362,8 @@ impl RubriqueApp {
             preview_selection::current(ctx).map(|selection| NoteDraft {
                 quote: normalize_space(&selection.text),
                 range: None,
+                source_block: selection.source_block,
+                source_revision: document.revision(),
                 text: String::new(),
                 existing: None,
                 error: None,
@@ -2208,6 +2375,8 @@ impl RubriqueApp {
                 NoteDraft {
                     quote: normalize_space(&shown),
                     range: Some(range),
+                    source_block: None,
+                    source_revision: document.revision(),
                     text: String::new(),
                     existing: None,
                     error: None,
@@ -2249,6 +2418,7 @@ impl RubriqueApp {
             return;
         }
         let mentions = self.mentions(ctx);
+        let can_record = self.open_file.path().is_some_and(is_markdown_path);
         let Some(draft) = &mut self.note_draft else {
             return;
         };
@@ -2280,18 +2450,32 @@ impl RubriqueApp {
             }
             // Enter starts a new line in the note, so Cmd+Enter saves.
             let save_keys = ui.input_mut(|input| input.consume_key(Modifiers::COMMAND, Key::Enter));
-            let ((), (save, cancel)) = alert::button_row(
+            let (record, (save, cancel)) = alert::button_row(
                 ui,
-                |_| (),
+                |ui| {
+                    draft.existing.is_none()
+                        && can_record
+                        && icon_text_button(ui, Icon::Mic, "Record voice note", "Record from your microphone", false)
+                            .clicked()
+                },
                 |ui| {
                     let save = alert::button(ui, "Save note", ButtonKind::Primary, true).on_hover_text("Cmd+Enter");
                     let cancel = alert::button(ui, "Cancel", ButtonKind::Secondary, false);
                     (save.clicked() || save_keys, cancel.clicked())
                 },
             );
-            (save || alert::enter_for_default(ui), cancel)
+            (save || alert::enter_for_default(ui), cancel, record)
         });
-        let (save, cancel) = modal.inner;
+        let (save, cancel, record) = modal.inner;
+        if record && let Some(mut draft) = self.note_draft.take() {
+            if let Err(error) = self.record_voice_note(&draft) {
+                draft.error = Some(error);
+                self.note_draft = Some(draft);
+            } else {
+                preview_selection::clear(ctx);
+            }
+            return;
+        }
         if cancel || modal.should_close() {
             self.note_draft = None;
             return;
@@ -2315,10 +2499,15 @@ impl RubriqueApp {
         let OpenFile::Text { document, .. } = &self.open_file else {
             return;
         };
+        let source_revision = document.revision();
         let notes = find_notes(&document.text);
+        let has_text_notes = notes.iter().any(|note| matches!(note.content, NoteContent::Text(_)));
+        let voice_folder =
+            document.path.parent().filter(|_| !document.is_encrypted() && !crate::remote::is_mirror(&document.path));
         let mut edit = None;
         let mut delete = None;
         let mut resolve = None;
+        let mut playback = None;
         let mut stop = false;
         let busy = self.ai_busy();
         let all_state = self.resolving_state(&ask::Resolving::All);
@@ -2326,15 +2515,14 @@ impl RubriqueApp {
             notes.iter().map(|note| self.resolving_state(&ask::Resolving::One(note.quote.clone()))).collect();
         egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             if notes.is_empty() {
-                let hint = "No notes in this file. Select text in the preview, then Add note (Cmd+Shift+M).";
-                ui.label(RichText::new(hint).weak().size(11.5));
+                notes_help(ui, self.settings.ai.default_tool.name());
                 return;
             }
             ui.horizontal(|ui| {
                 let count = if notes.len() == 1 { "1 note".to_string() } else { format!("{} notes", notes.len()) };
                 ui.label(RichText::new(count).weak());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_enabled_ui(!busy, |ui| {
+                    ui.add_enabled_ui(has_text_notes && !busy, |ui| {
                         let tip = "Ask AI to resolve every note; the answer opens in merge";
                         if icon_text_button(ui, Icon::Sparkle, "Resolve all", tip, false).clicked() {
                             resolve = Some(ask::Resolving::All);
@@ -2353,50 +2541,48 @@ impl RubriqueApp {
                                 .weak()
                                 .size(11.5),
                         );
-                        ui.label(&note.text);
-                        ui.horizontal(|ui| {
-                            if let Some((tool, seconds)) = note_states[index].or(all_state) {
-                                ui.add(egui::Spinner::new().size(11.0));
-                                let working = format!("{} is working · {}", tool.name(), ai::format_elapsed(seconds));
-                                ui.label(RichText::new(working).weak().size(11.5));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if icon_text_button(ui, Icon::Stop, "Stop", "Stop the tool", false).clicked() {
-                                        stop = true;
-                                    }
-                                });
-                                return;
+                        match &note.content {
+                            NoteContent::Text(text) => {
+                                ui.label(text);
                             }
-                            ui.add_enabled_ui(!busy, |ui| {
-                                let tip = "Ask AI to do what the note says; the answer opens in merge";
-                                if icon_text_button(ui, Icon::Sparkle, "Resolve", tip, false).clicked() {
-                                    resolve = Some(ask::Resolving::One(note.quote.clone()));
+                            NoteContent::Voice(url) => {
+                                if let Some(action) = self.voice.voice_note_playback(ui, voice_folder, url) {
+                                    playback = Some(action);
                                 }
-                            });
-                            if ui.small_button("Edit").clicked() {
-                                edit = Some(index);
                             }
-                            if ui.small_button("Delete").clicked() {
-                                delete = Some(index);
-                            }
-                        });
+                        }
+                        match note_controls(ui, &note.content, note_states[index].or(all_state), busy) {
+                            Some(NoteControl::Resolve) => resolve = Some(ask::Resolving::One(note.quote.clone())),
+                            Some(NoteControl::Stop) => stop = true,
+                            Some(NoteControl::Edit) => edit = Some(index),
+                            Some(NoteControl::Delete) => delete = Some(index),
+                            None => {}
+                        }
                     });
                     ui.add_space(8.0);
                 }
                 notes_help(ui, self.settings.ai.default_tool.name());
             });
         });
+        if let Some(action) = playback {
+            self.memo_action(ui.ctx(), action);
+        }
         if stop {
             self.stop_ai();
         }
         if let Some(which) = resolve {
             self.resolve_notes(ui.ctx(), which);
         }
-        if let Some(index) = edit {
+        if let Some(index) = edit
+            && let NoteContent::Text(text) = &notes[index].content
+        {
             let note = notes[index].clone();
             self.note_draft = Some(NoteDraft {
                 quote: note.quote.clone(),
                 range: None,
-                text: note.text.clone(),
+                source_block: None,
+                source_revision,
+                text: text.clone(),
                 existing: Some(note),
                 error: None,
             });
@@ -2530,13 +2716,12 @@ impl RubriqueApp {
         let path_text = format!("{dirty}{}", crate::remote::display(path));
         let is_text = matches!(self.open_file, OpenFile::Text { .. });
         let showing_preview = self.showing_any_preview();
-        let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
-        let is_html = self.open_file.path().is_some_and(is_html_path);
+        let is_page = self.open_file.path().is_some_and(has_preview);
         // Right side first, so a long path is shortened instead of overlapping it.
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             self.media_status(ui);
             if is_text {
-                self.text_file_buttons(ui, is_markdown || is_html, showing_preview);
+                self.text_file_buttons(ui, is_page, showing_preview);
             }
             let left = egui::Layout::left_to_right(egui::Align::Center);
             ui.allocate_ui_with_layout(ui.available_size(), left, |ui| {
@@ -2674,6 +2859,31 @@ impl RubriqueApp {
 /// file is empty or already ends with one, and a line break after it. Empty
 /// input gives an empty string, so nothing is added.
 /// The hint under the notes: how to add one and what Resolve does.
+/// True for a text file with a Read or Edit preview.
+fn has_preview(path: &Path) -> bool {
+    is_markdown_path(path) || is_html_path(path) || is_rst_path(path) || Delimited::of_path(path).is_some()
+}
+
+/// Draw an HTML or reStructuredText file in read mode.
+fn show_read_only_file_preview(
+    ui: &mut Ui,
+    document: &Document,
+    preview: &mut Option<Vec<SourceBlock>>,
+    html_snapshots: &mut html_snapshot::HtmlSnapshots,
+    use_browser: bool,
+    find: &mut Option<find::FindBar>,
+) -> Option<PreviewEvent> {
+    find::draw_preview(ui, find, |ui| {
+        if is_html_path(&document.path) {
+            // Chromium supplies an image. Find needs the built-in renderer's text.
+            let use_browser = use_browser && !crate::markdown::preview_find::active(ui);
+            return html_snapshots.show_preview(ui, document, preview, use_browser);
+        }
+        let blocks = preview.get_or_insert_with(|| rst_source_blocks(&document.text));
+        show_read_only_preview(ui, &document.path, blocks)
+    })
+}
+
 /// A hairline between two groups of buttons in the status bar.
 fn status_separator(ui: &mut Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, STATUS_SEPARATOR_HEIGHT), egui::Sense::hover());
@@ -2686,6 +2896,53 @@ fn notes_help(ui: &mut Ui, tool: &str) {
          Resolve sends the file and the note to {tool}; the answer opens in merge."
     );
     ui.label(RichText::new(text).weak().size(11.5));
+}
+
+/// A button on a note card.
+enum NoteControl {
+    Resolve,
+    Stop,
+    Edit,
+    Delete,
+}
+
+/// Show the controls for a written note or a voice note.
+fn note_controls(
+    ui: &mut Ui,
+    content: &NoteContent,
+    resolving: Option<(AiTool, u64)>,
+    busy: bool,
+) -> Option<NoteControl> {
+    if matches!(content, NoteContent::Voice(_)) {
+        return ui
+            .small_button("Remove note")
+            .on_hover_text("Keep the recording file")
+            .clicked()
+            .then_some(NoteControl::Delete);
+    }
+    ui.horizontal(|ui| {
+        if let Some((tool, seconds)) = resolving {
+            ui.add(egui::Spinner::new().size(11.0));
+            let working = format!("{} is working · {}", tool.name(), ai::format_elapsed(seconds));
+            ui.label(RichText::new(working).weak().size(11.5));
+            return ui
+                .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    icon_text_button(ui, Icon::Stop, "Stop", "Stop the tool", false).clicked()
+                })
+                .inner
+                .then_some(NoteControl::Stop);
+        }
+        let resolve = ui.add_enabled_ui(!busy, |ui| {
+            let tip = "Ask AI to do what the note says; the answer opens in merge";
+            icon_text_button(ui, Icon::Sparkle, "Resolve", tip, false).clicked()
+        });
+        let edit = ui.small_button("Edit").clicked();
+        let delete = ui.small_button("Delete").clicked();
+        [(resolve.inner, NoteControl::Resolve), (edit, NoteControl::Edit), (delete, NoteControl::Delete)]
+            .into_iter()
+            .find_map(|(clicked, control)| clicked.then_some(control))
+    })
+    .inner
 }
 
 /// The Markdown of an edited block without the blank lines Enter leaves
@@ -3003,6 +3260,7 @@ impl eframe::App for RubriqueApp {
         self.poll_rule_writer();
         self.poll_voice(&ctx);
         self.poll_install(&ctx);
+        self.poll_html_snapshots();
         self.poll_remote();
         self.poll_remote_saves();
         self.poll_pending_sends();
@@ -3055,6 +3313,7 @@ impl eframe::App for RubriqueApp {
                 .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
                 .show(ui, |ui| self.helm_panel(ui));
         }
+        self.prepare_find(&ctx);
         egui::CentralPanel::default().frame(page_frame).show(ui, |ui| self.document_area(ui));
         self.handle_dropped_files(&ctx);
         self.open_system_documents(&ctx);
@@ -3069,6 +3328,7 @@ impl eframe::App for RubriqueApp {
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
         self.open_path_dialog(&ctx);
+        self.clone_repo_dialog(&ctx);
         self.add_remote_dialog(&ctx);
         self.secret_dialog(&ctx);
         self.update_title(&ctx);

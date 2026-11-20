@@ -38,7 +38,8 @@ pub enum Inline {
     },
     /// Text with a look only HTML gives (a color, a highlight, underline,
     /// superscript), from an HTML page's `style` attributes and tags such
-    /// as `<mark>` and `<sup>`. Markdown never makes one.
+    /// as `<mark>` and `<sup>`. In Markdown, only a footnote label
+    /// (`[^label]`) makes one, in superscript.
     Styled {
         style: HtmlStyle,
         content: Vec<Inline>,
@@ -136,7 +137,7 @@ fn parse_chars(chars: &[char], depth: usize) -> Vec<Inline> {
             '<' => parse_comment(chars, index, &mut output)
                 .or_else(|| parse_autolink(chars, index, &mut output))
                 .or_else(|| parse_inline_html(chars, index, &mut output)),
-            '[' => parse_link(chars, index, &mut output),
+            '[' => parse_footnote(chars, index, &mut output).or_else(|| parse_link(chars, index, &mut output)),
             '!' if chars.get(index + 1) == Some(&'[') => parse_image(chars, index, &mut output),
             '*' | '_' | '~' => Some(parse_delimiter_run(chars, index, &mut output)),
             _ => None,
@@ -243,7 +244,11 @@ fn parse_comment(chars: &[char], index: usize, output: &mut Output) -> Option<us
     let close = (content_start..chars.len().saturating_sub(2))
         .find(|&at| chars[at] == '-' && chars[at + 1] == '-' && chars[at + 2] == '>')?;
     let inner: String = chars[content_start..close].iter().collect();
-    if let Some((quote, text)) = super::notes::parse_note(&inner) {
+    if let Some((quote, content)) = super::notes::parse_note(&inner) {
+        let text = match content {
+            super::notes::NoteContent::Text(text) => text,
+            super::notes::NoteContent::Voice(_) => "Voice recording in the Notes panel".to_string(),
+        };
         output.push(Inline::Note { quote, text });
     }
     Some(close + 3)
@@ -327,6 +332,38 @@ fn find_end_tag(chars: &[char], from: usize, name: &str) -> Option<(usize, usize
         at += 1;
     }
     None
+}
+
+/// `[^label]`, a footnote reference, shown as its label in superscript.
+/// At the start of a line, `[^label]: text` is the footnote itself: the
+/// colon is dropped and, after other text, the footnote starts a new line.
+fn parse_footnote(chars: &[char], index: usize, output: &mut Output) -> Option<usize> {
+    if chars.get(index + 1) != Some(&'^') {
+        return None;
+    }
+    let close = (index + 2..chars.len()).find(|&at| chars[at] == ']')?;
+    let label: String = chars[index + 2..close].iter().collect();
+    if label.is_empty() || label.contains(|c: char| c.is_whitespace() || c == '[') {
+        return None;
+    }
+    let mut next = close + 1;
+    let line_start = index == 0 || chars[index - 1] == '\n';
+    let definition = line_start && chars.get(next) == Some(&':');
+    if definition && index > 0 {
+        // The line break before it was read as a space.
+        output.text.truncate(output.text.trim_end().len());
+        output.push(Inline::LineBreak);
+    }
+    let superscript = HtmlStyle { script: Some(Script::Superscript), ..HtmlStyle::default() };
+    output.push(Inline::Styled { style: superscript, content: vec![Inline::Text(label)] });
+    if definition {
+        next += 1;
+        while chars.get(next) == Some(&' ') {
+            next += 1;
+        }
+        output.text.push(' ');
+    }
+    Some(next)
 }
 
 /// `[text](url "optional title")`
@@ -591,6 +628,23 @@ mod tests {
             ]
         );
         assert_eq!(parse_inlines("[not a link]"), vec![text("[not a link]")]);
+    }
+
+    #[test]
+    fn footnotes_show_their_label_in_superscript() {
+        let label = |text: &str| Styled {
+            style: HtmlStyle { script: Some(Script::Superscript), ..HtmlStyle::default() },
+            content: vec![self::text(text)],
+        };
+        assert_eq!(parse_inlines("Sharded daily.[^ga4-schema]"), vec![text("Sharded daily."), label("ga4-schema")]);
+        assert_eq!(
+            parse_inlines("[^a]: First source\n[^b]: Second"),
+            vec![label("a"), text(" First source"), LineBreak, label("b"), text(" Second")]
+        );
+        // Mid-line, a colon after the label is text.
+        assert_eq!(parse_inlines("see[^a]: x"), vec![text("see"), label("a"), text(": x")]);
+        assert_eq!(parse_inlines("[^not a label]"), vec![text("[^not a label]")]);
+        assert_eq!(parse_inlines("[^]"), vec![text("[^]")]);
     }
 
     #[test]

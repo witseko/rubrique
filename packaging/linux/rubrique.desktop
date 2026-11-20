@@ -7,5 +7,5 @@ Exec=rubrique %F
 Icon=rubrique
 Terminal=false
 Categories=Utility;TextEditor;
-MimeType=text/markdown;text/x-markdown;text/plain;application/json;application/xml;text/xml;
+MimeType=text/markdown;text/x-markdown;text/plain;application/json;application/xml;text/xml;text/csv;text/tab-separated-values;application/pdf;application/msword;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.ms-excel;application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.oasis.opendocument.spreadsheet;application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.oasis.opendocument.text;application/rtf;text/rtf;
 Keywords=markdown;notes;editor;ai;agent;claude;codex;writing;

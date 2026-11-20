@@ -1,24 +1,13 @@
-# Weekly notes
+# Survey handoff
 
-Rubrique is a **source**-first editor. It never rewrites your file, it *only* saves what you typed. Read [the docs](https://example.com) or open [ideas](ideas.md). Old plan: ~~ship in May~~.
+At low tide, make your way to the brass marker that is located at the north end of the beach.
 
-## Tasks
+## In the field
 
-- [x] Add themes
-- [ ] Ship v0.2 with a better preview
+- Walk the line from the brass marker to the kelp edge.
+- Count the limpets in each quadrat.
+- Write down the pool depth before moving on.
 
-## Release steps
+## Back at the lab
 
-1. Run `cargo test` and clippy
-2. Update the docs
-   - README screenshots
-     - One image for all themes
-3. Tag the release
-
-> A quote stands out with a colored bar, and its text is softer than the body.
-
-```rust
-fn main() {
-    println!("hello");
-}
-```
+Make sure that every photograph is given a name that includes the station number and the date.

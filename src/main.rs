@@ -4,6 +4,7 @@
 mod ai;
 mod alert;
 mod app;
+mod chromium;
 mod crypto;
 mod date;
 mod document;
@@ -18,7 +19,9 @@ mod install;
 mod markdown;
 mod media;
 mod open_documents;
+mod openrig;
 mod remote;
+mod rst;
 mod scratch;
 mod settings;
 mod shell_path;

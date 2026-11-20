@@ -3,6 +3,7 @@
 pub mod block_changes;
 pub mod changes_view;
 pub mod draft;
+pub mod file_preview;
 pub mod highlighting;
 pub mod line_ops;
 pub mod media_view;

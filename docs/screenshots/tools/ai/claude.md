@@ -1,18 +1,13 @@
-# Weekly notes
+# Survey handoff
 
-Rubrique is a **source**-first editor: it saves only what you typed. See [the docs](https://example.com) or [ideas](ideas.md).
+At low tide, meet at the brass marker on North Beach.
 
-## Tasks
+## In the field
 
-- [x] Add themes
-- [ ] Ship v0.2 with a better preview
+- Walk the line from the brass marker to the kelp edge.
+- Count the limpets in each quadrat.
+- Write down the pool depth before moving on.
 
-## Release steps
+## Back at the lab
 
-1. Run `cargo test` and clippy
-2. Update the docs
-   - README screenshots
-     - One image for all themes
-3. Tag the release
-
-> A quote has a colored bar and softer text.
+Name each photo with its station and date.

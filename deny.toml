@@ -37,10 +37,6 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-[licenses.private]
-# Rubrique itself is not published, so it needs no license field.
-ignore = true
-
 [bans]
 # Several versions of one crate are normal in GUI stacks (winit, objc2), so
 # they are not reported.

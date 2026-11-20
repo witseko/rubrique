@@ -19,7 +19,7 @@ use crate::markdown::blocks::{Block, SourceBlock};
 use crate::markdown::render::page_text;
 use crate::markdown::render::{
     CodeAction, render_read_only_block, render_top_block, render_top_table, set_image_folder, take_cell_click,
-    take_code_action, take_play_request, top_gap,
+    take_code_action, take_open_request, take_play_request, top_gap,
 };
 use crate::markdown::table_edit::{TableAction, TableCell};
 use crate::voice::view::{MemoAction, take_memo_action};
@@ -164,12 +164,17 @@ pub fn match_fill(visuals: &egui::Visuals) -> Color32 {
     visuals.warn_fg_color.gamma_multiply(MATCH_TINT)
 }
 
+/// The accent tint behind the current find match.
+pub fn current_match_fill(visuals: &egui::Visuals) -> Color32 {
+    visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT)
+}
+
 /// Tint the find matches behind the text, the current one in the accent,
 /// and scroll to the current one when asked.
 fn paint_matches(ui: &Ui, output: &TextEditOutput, text: &str, find: FindHighlight<'_>) {
     let visuals = ui.visuals();
     let tint = match_fill(visuals);
-    let current_tint = visuals.hyperlink_color.gamma_multiply(CURRENT_MATCH_TINT);
+    let current_tint = current_match_fill(visuals);
     let clip = ui.clip_rect();
     // Byte to character conversion, walking forward through the sorted matches.
     let mut walked = (0_usize, 0_usize);
@@ -320,6 +325,8 @@ pub enum PreviewEvent {
     Code { index: usize, action: CodeAction },
     /// Play on a video in the preview.
     PlayVideo(PathBuf),
+    /// A link to a Markdown file: open it in a tab.
+    OpenFile(PathBuf),
     /// A button on a voice memo.
     Memo(MemoAction),
     /// Revert, Remove or Restore on an unsaved change: back to the saved block.
@@ -353,18 +360,25 @@ const INSERT_LINE_WIDTH: f32 = 1.5;
 /// Radius of the circled + in the middle of the insert line.
 const INSERT_BUTTON_RADIUS: f32 = 9.0;
 
-/// Draw the rendered Markdown, one clickable block at a time; the block in
-/// `editing` shows as a Markdown text box instead, where typing `@ai-`
-/// suggests `mentions`. Blocks in `changes` (in block order) get a mark in
-/// the margin, and deleted ones a dashed line where they were.
+/// Draw the rendered Markdown. With `editable` (Edit mode) each block is
+/// clickable and the block in `editing` shows as a Markdown text box
+/// instead, where typing `@ai-` suggests `mentions`; without it (Read mode)
+/// a click selects text or opens a link and nothing starts an edit. Blocks
+/// in `changes` (in block order) get a mark in the margin, and deleted ones
+/// a dashed line where they were.
 pub fn show_preview(
     ui: &mut Ui,
     path: &Path,
     blocks: &[SourceBlock],
+    editable: bool,
     mut editing: Option<&mut BlockEdit>,
     mentions: &[Suggestion],
     changes: &[BlockChange],
 ) -> PreviewOutput {
+    // Read mode never shows an edit box, even if one was left open.
+    if !editable {
+        editing = None;
+    }
     let mut event = None;
     let mut pending_changes = changes.iter().peekable();
     let mut hovered = None;
@@ -389,7 +403,8 @@ pub fn show_preview(
                         ui.add_space(gap.max(0.0));
                         found
                     }
-                    _ => insert_line(ui, index, above, ui.cursor().top()),
+                    _ if editable => insert_line(ui, index, above, ui.cursor().top()),
+                    _ => None,
                 };
                 if event.is_none() {
                     event = found;
@@ -407,7 +422,8 @@ pub fn show_preview(
                         Some(cell) => cell_edit_block(ui, index, source, edit, cell),
                         None => edit_box(ui, edit, mentions),
                     },
-                    _ => clickable_block(ui, index, source),
+                    _ if editable => clickable_block(ui, index, source),
+                    _ => reading_block(ui, index, source),
                 };
                 let span = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
                 let marked = here.iter().find(|change| change.kind != ChangeKind::Deleted);
@@ -442,7 +458,11 @@ pub fn show_preview(
             let found = match editing {
                 Some(edit) if edit.index >= blocks.len() => edit_box(ui, edit, mentions),
                 Some(_) => None,
-                None => new_block_space(ui),
+                None if editable => new_block_space(ui),
+                None => {
+                    ui.add_space(NEW_BLOCK_SPACE);
+                    None
+                }
             };
             if event.is_none() {
                 event = found;
@@ -455,6 +475,10 @@ pub fn show_preview(
         }
         None => data.remove::<usize>(preview_top_id(path)),
     });
+    super::preview_selection::track_block(
+        ui.ctx(),
+        hovered.and_then(|index| blocks.get(index)).map(|block| block.range.clone()),
+    );
     PreviewOutput { event, hovered }
 }
 
@@ -481,6 +505,9 @@ pub fn show_read_only_preview(ui: &mut Ui, path: &Path, blocks: &[SourceBlock]) 
                 }
                 if let Some(path) = take_play_request(ui.ctx()) {
                     event = Some(PreviewEvent::PlayVideo(path));
+                }
+                if let Some(path) = take_open_request(ui.ctx()) {
+                    event = Some(PreviewEvent::OpenFile(path));
                 }
             }
         });
@@ -604,14 +631,8 @@ fn clickable_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<Pr
         }
     }
     // A code block button was clicked: that, not editing the block.
-    if let Some(action) = take_code_action(ui.ctx()) {
-        return Some(PreviewEvent::Code { index, action });
-    }
-    if let Some(action) = take_memo_action(ui.ctx()) {
-        return Some(PreviewEvent::Memo(action));
-    }
-    if let Some(path) = take_play_request(ui.ctx()) {
-        return Some(PreviewEvent::PlayVideo(path));
+    if let Some(event) = block_buttons(ui, index) {
+        return Some(event);
     }
     // A click (pointer released without dragging) that did not open a link;
     // drags select text for notes instead. On a table cell, that cell alone.
@@ -633,6 +654,37 @@ fn clickable_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<Pr
         return Some(PreviewEvent::StartEdit(index));
     }
     None
+}
+
+/// A rendered block in Read mode: no hover tint, no delete cross, and a
+/// click edits nothing, so text can be selected and links followed. The
+/// block's own buttons (code Copy, memo rows, video Play) still work.
+fn reading_block(ui: &mut Ui, index: usize, source: &SourceBlock) -> Option<PreviewEvent> {
+    // The same padding as an editable block, so switching modes moves nothing.
+    egui::Frame::new().inner_margin(BLOCK_PAD).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        render_top_block(ui, &source.block);
+    });
+    // A table reports clicks on its cells; drop them so a later switch to
+    // Edit mode does not open a cell clicked while reading.
+    take_cell_click(ui.ctx());
+    block_buttons(ui, index)
+}
+
+/// What a button inside block `index` asked for this frame, if one was
+/// clicked: a code block action, a memo action, playing a video, or a
+/// link to a Markdown file.
+fn block_buttons(ui: &Ui, index: usize) -> Option<PreviewEvent> {
+    if let Some(path) = take_open_request(ui.ctx()) {
+        return Some(PreviewEvent::OpenFile(path));
+    }
+    if let Some(action) = take_code_action(ui.ctx()) {
+        return Some(PreviewEvent::Code { index, action });
+    }
+    if let Some(action) = take_memo_action(ui.ctx()) {
+        return Some(PreviewEvent::Memo(action));
+    }
+    take_play_request(ui.ctx()).map(PreviewEvent::PlayVideo)
 }
 
 /// Where the click that opened a block for editing leaves how far down the
@@ -1055,6 +1107,8 @@ mod preview_tests {
         blocks: Vec<SourceBlock>,
         path: PathBuf,
         time: f64,
+        /// Edit mode (the default here) or Read mode.
+        editable: bool,
     }
 
     impl Preview {
@@ -1064,6 +1118,7 @@ mod preview_tests {
                 blocks: parse_source_blocks(TABLE),
                 path: PathBuf::from("t.md"),
                 time: 0.0,
+                editable: true,
             }
         }
 
@@ -1079,7 +1134,8 @@ mod preview_tests {
             let mut output = None;
             let mut full = self.ctx.run_ui(input, |ui| {
                 egui::CentralPanel::default().show(ui, |ui| {
-                    output = Some(show_preview(ui, &self.path, &self.blocks, edit.as_deref_mut(), &[], &[]));
+                    output =
+                        Some(show_preview(ui, &self.path, &self.blocks, self.editable, edit.as_deref_mut(), &[], &[]));
                 });
             });
             // No screen here: the font texture is never uploaded.
@@ -1125,6 +1181,45 @@ mod preview_tests {
 
     fn cell(row: usize, column: usize) -> TableCell {
         TableCell { row, column }
+    }
+
+    #[test]
+    fn dragging_preview_text_remembers_its_source_block() {
+        let ctx = Context::default();
+        super::super::preview_selection::install(&ctx);
+        let blocks = parse_source_blocks("First passage.\n\nSecond passage.");
+        let frame = |events| {
+            let mut output = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
+                ui.style_mut().interaction.selectable_labels = true;
+                egui::CentralPanel::default().show(ui, |ui| {
+                    show_preview(ui, Path::new("test.md"), &blocks, true, None, &[], &[]);
+                });
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let output = frame(vec![]);
+        let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text() == "Second passage." => Some(text),
+            _ => None,
+        });
+        let text = text.expect("the second paragraph is visible");
+        let row = &text.galley.rows[0];
+        let point = |index| text.pos + row.pos.to_vec2() + egui::vec2(row.x_offset(index), row.size.y / 2.0);
+        let from = point(0.into());
+        let to = point(6.into());
+        let button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        frame(vec![Event::PointerMoved(from), button(from, true)]);
+        frame(vec![Event::PointerMoved(to)]);
+        frame(vec![button(to, false)]);
+        let selection = super::super::preview_selection::current(&ctx).expect("the drag selected preview text");
+        assert_eq!(selection.text, "Second");
+        assert_eq!(selection.source_block, Some(blocks[1].range.clone()));
     }
 
     fn cells_clicked(events: &[PreviewEvent]) -> BTreeSet<(usize, usize)> {
@@ -1196,6 +1291,17 @@ mod preview_tests {
         assert!(cells.is_superset(&expected), "{events:?}");
         // Next to the cells the table itself is still clickable.
         assert!(events.contains(&PreviewEvent::StartEdit(0)), "{events:?}");
+    }
+
+    #[test]
+    fn read_mode_clicks_edit_nothing() {
+        let mut preview = Preview::new();
+        preview.blocks = parse_source_blocks(&format!("# Title\n\nSome text to read.\n\n{TABLE}"));
+        preview.editable = false;
+        // Blocks, table cells, the gaps between blocks and the space under
+        // the last one: no click starts, inserts or deletes anything.
+        let events = preview.scan(20..780, 10..400, None);
+        assert!(events.is_empty(), "{events:?}");
     }
 
     #[test]

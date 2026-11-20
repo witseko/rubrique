@@ -1,14 +1,17 @@
 //! Voice memos in the app: record, add audio files (dialog or drag and
 //! drop), play memos in the preview, and transcribe them into the note.
 
+mod selection;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use eframe::egui::{self, Context, Ui, vec2};
 
+use self::selection::VoiceAnchor;
 use super::images::copy_into;
-use super::{OpenFile, RubriqueApp, char_to_byte};
+use super::{NoteDraft, OpenFile, RubriqueApp, char_to_byte, replace_with_undo};
 use crate::ai::format_elapsed;
 use crate::ai::run::{AiRun, RunEnd};
 use crate::document::merge::MergeSession;
@@ -21,8 +24,8 @@ use crate::media::is_image_path;
 use crate::voice::audio::{Player, Recorder};
 use crate::voice::view::{MemoAction, MemoState, MemoStates, RecordingChoice, RecordingInfo, recording_bar};
 use crate::voice::{
-    NoteKind, add_transcript, clean_transcript, free_path, is_audio_path, is_wav, memo_file_name, memo_label,
-    memo_link, reference, relative_url, resolve_url, wav,
+    NoteKind, add_transcript, clean_transcript, decode_url, encode_path, free_path, is_audio_path, is_wav,
+    memo_file_name, memo_label, memo_link, reference, relative_url, resolve_url, wav,
 };
 
 /// Seconds of silence before the bar suggests checking the microphone.
@@ -61,6 +64,25 @@ impl VoiceState {
     /// Stop playback (when another file opens).
     pub(super) fn stop_playback(&mut self) {
         self.player = None;
+    }
+
+    /// Show playback for a voice note when its WAV is available.
+    pub(super) fn voice_note_playback(&self, ui: &mut Ui, folder: Option<&Path>, url: &str) -> Option<MemoAction> {
+        let path = folder.and_then(|folder| voice_note_path(folder, url)).filter(|path| path.is_file());
+        let Some(path) = path else {
+            ui.weak("Voice recording unavailable");
+            return None;
+        };
+        let playing = self.player.as_ref().is_some_and(|(loaded, player)| loaded == &path && player.is_playing());
+        if playing {
+            icon_text_button(ui, Icon::Pause, "Pause", "Pause the voice note", true)
+                .clicked()
+                .then_some(MemoAction::Pause)
+        } else {
+            icon_text_button(ui, Icon::Play, "Play voice note", "Play the selected passage's recording", false)
+                .clicked()
+                .then(|| MemoAction::Play(url.to_string()))
+        }
     }
 
     /// What the preview should show for each memo in `blocks`.
@@ -105,6 +127,8 @@ struct Recording {
     recorder: Recorder,
     /// The note the memo is for.
     note: PathBuf,
+    /// The selected passage for an annotation, if this is a voice note.
+    anchor: Option<VoiceAnchor>,
     label: String,
     level: f32,
 }
@@ -158,25 +182,47 @@ impl RubriqueApp {
             self.show_status("Open a Markdown or HTML file to record a voice memo".to_string());
             return;
         };
-        let folder = self.settings.voice.memos_folder(note.parent().unwrap_or(Path::new("/")));
-        if let Err(error) = std::fs::create_dir_all(&folder) {
-            self.show_status(format!("Cannot create {}: {error}", folder.display()));
-            return;
+        if let Err(error) = self.open_recorder(note, None) {
+            self.show_status(error);
         }
+    }
+
+    /// Start recording a voice note for the selection captured by Add note.
+    pub(super) fn record_voice_note(&mut self, draft: &NoteDraft) -> Result<(), String> {
+        if self.voice.recording.is_some() {
+            return Err("Stop or cancel the current recording first.".to_string());
+        }
+        if self.merging.is_some() {
+            return Err("Finish reviewing the changes before recording.".to_string());
+        }
+        let OpenFile::Text { document, .. } = &self.open_file else {
+            return Err("Open a Markdown file to record a voice note.".to_string());
+        };
+        if crate::remote::is_mirror(&document.path) || document.is_encrypted() {
+            return Err("Voice notes need a local, unencrypted Markdown file.".to_string());
+        }
+        if document.revision() != draft.source_revision {
+            return Err("The passage changed. Cancel and select it again.".to_string());
+        }
+        let anchor = VoiceAnchor::new(&document.text, &draft.quote, draft.range.as_ref(), draft.source_block.as_ref())?;
+        self.open_recorder(document.path.clone(), Some(anchor))
+    }
+
+    /// Open the microphone and a new file for either kind of recording.
+    fn open_recorder(&mut self, note: PathBuf, anchor: Option<VoiceAnchor>) -> Result<(), String> {
+        let folder = self.settings.voice.memos_folder(note.parent().unwrap_or(Path::new("/")));
+        std::fs::create_dir_all(&folder).map_err(|error| format!("Cannot create {}: {error}", folder.display()))?;
         let now = crate::date::now_local();
         let path = free_path(&folder, &memo_file_name(&now), Path::exists);
         self.voice.player = None;
-        match Recorder::start(&path) {
-            Ok(recorder) => {
-                self.voice.recording = Some(Recording { recorder, note, label: memo_label(&now), level: 0.0 });
-            }
-            Err(error) => self.show_status(error),
-        }
+        let recorder = Recorder::start(&path)?;
+        self.voice.recording = Some(Recording { recorder, note, anchor, label: memo_label(&now), level: 0.0 });
+        Ok(())
     }
 
     /// Stop recording and add the memo to its note.
     fn stop_recording(&mut self, ctx: &Context) {
-        let Some(Recording { recorder, note, label, .. }) = self.voice.recording.take() else {
+        let Some(Recording { recorder, note, anchor, label, .. }) = self.voice.recording.take() else {
             return;
         };
         let path = recorder.path().to_path_buf();
@@ -193,6 +239,10 @@ impl RubriqueApp {
             }
         }
         self.refresh_explorer();
+        if let Some(anchor) = anchor {
+            self.attach_voice_note(ctx, &note, &path, &anchor);
+            return;
+        }
         if self.open_file.path() != Some(note.as_path()) {
             self.show_status(format!("Saved {}. Open {} to add it.", path.display(), name_text(&note)));
             return;
@@ -205,6 +255,24 @@ impl RubriqueApp {
         } else {
             self.show_status(format!("Added {} (save to keep the link)", name_text(&path)));
         }
+    }
+
+    /// Link the recording only when its original passage is still in the open document.
+    fn attach_voice_note(&mut self, ctx: &Context, note: &Path, path: &Path, anchor: &VoiceAnchor) {
+        self.finish_block_edit();
+        if self.merging.is_none()
+            && let OpenFile::Text { document, preview, .. } = &mut self.open_file
+            && document.path == note
+            && !document.is_encrypted()
+            && let Some(folder) = note.parent()
+            && let Some((range, comment)) = anchor.insertion(&document.text, &relative_url(folder, path))
+        {
+            replace_with_undo(ctx, document, preview, range, &comment);
+            self.show_notes_panel();
+            self.show_status("Voice note added. Save the file to keep it.".to_string());
+            return;
+        }
+        self.show_status(format!("The selected passage is unavailable. Recording saved to {}.", path.display()));
     }
 
     fn cancel_recording(&mut self) {
@@ -382,6 +450,7 @@ impl RubriqueApp {
         recording.level = level.max(recording.level * METER_FALL);
         let seconds = recording.recorder.elapsed_seconds();
         let info = RecordingInfo {
+            voice_note: recording.anchor.is_some(),
             seconds,
             level: recording.level,
             silent_hint: seconds >= SILENT_HINT_SECONDS && !recording.recorder.heard_sound(),
@@ -587,6 +656,16 @@ impl RubriqueApp {
     }
 }
 
+/// Voice note comments accept the same relative WAV URLs the recorder writes.
+fn voice_note_path(folder: &Path, url: &str) -> Option<PathBuf> {
+    let decoded = decode_url(url);
+    let path = Path::new(&decoded);
+    if path.is_absolute() || !is_wav(path) || decoded.chars().any(char::is_control) || encode_path(&decoded) != url {
+        return None;
+    }
+    Some(folder.join(path))
+}
+
 /// Link targets of every memo in a block, nested ones too.
 fn collect_memo_urls(block: &Block, urls: &mut Vec<String>) {
     match block {
@@ -607,4 +686,18 @@ fn wav_duration(path: &Path) -> Option<f64> {
     let mut start = Vec::with_capacity(HEADER_READ);
     file.take(HEADER_READ as u64).read_to_end(&mut start).ok()?;
     wav::duration_seconds(&start, length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn voice_notes_only_link_to_encoded_relative_wav_paths() {
+        let folder = Path::new("/notes");
+        assert_eq!(voice_note_path(folder, "../voice%20notes/memo.wav"), Some(folder.join("../voice notes/memo.wav")));
+        for url in ["/tmp/memo.wav", "https://example.com/memo.wav", "memo.mp3", "memo%00.wav", "memo.wav?x"] {
+            assert_eq!(voice_note_path(folder, url), None, "{url}");
+        }
+    }
 }

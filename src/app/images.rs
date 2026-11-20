@@ -116,8 +116,14 @@ mod tests {
         let mut app = RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![temp.path().into()], None);
         let vault = std::sync::Arc::new(crate::crypto::Vault::create("pw").0);
         let document = Document::missing(&temp.path().join("secret.md"), String::new(), String::new(), Some(vault));
-        app.open_file =
-            super::super::OpenFile::Text { document, preview: None, disk_notice: None, editor: None, source: false };
+        app.open_file = super::super::OpenFile::Text {
+            document,
+            preview: None,
+            delimited: None,
+            disk_notice: None,
+            editor: None,
+            source: false,
+        };
         app.add_image_file(&ctx, &photo);
         // No plain copy of the image lands next to the scratch.
         assert!(!temp.path().join(IMAGES_FOLDER).exists());

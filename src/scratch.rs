@@ -27,16 +27,28 @@ const NOUNS: [&str; 32] = [
 /// Names tried before giving up when they all exist already.
 const MAX_ATTEMPTS: u32 = 64;
 
+/// The extension of a scratch made with Cmd+N: a Markdown note.
+const SCRATCH_EXTENSION: &str = "md";
+/// The extension of a scratch imported from another editor: its text is
+/// kept as plain text, not read as Markdown.
+const IMPORT_EXTENSION: &str = "txt";
+
 /// `DATE-adjective-noun.md`, words picked from `seed`.
 pub fn scratch_name(date: &str, seed: u64) -> String {
-    let adjective = ADJECTIVES[usize::try_from(seed % 32).unwrap_or(0)];
-    let noun = NOUNS[usize::try_from((seed / 32) % 32).unwrap_or(0)];
-    format!("{date}-{adjective}-{noun}.md")
+    format!("{}.{SCRATCH_EXTENSION}", random_stem(date, seed))
 }
 
-/// The name is still a random scratch name (`DATE-adjective-noun.md`).
+/// `DATE-adjective-noun`, words picked from `seed`, without an extension.
+fn random_stem(date: &str, seed: u64) -> String {
+    let adjective = ADJECTIVES[usize::try_from(seed % 32).unwrap_or(0)];
+    let noun = NOUNS[usize::try_from((seed / 32) % 32).unwrap_or(0)];
+    format!("{date}-{adjective}-{noun}")
+}
+
+/// The name is still a random scratch name (`DATE-adjective-noun.md`, or
+/// `.txt` for an import).
 pub fn is_random_scratch_name(name: &str) -> bool {
-    let Some(stem) = name.strip_suffix(".md") else {
+    let Some(stem) = name.strip_suffix(".md").or_else(|| name.strip_suffix(".txt")) else {
         return false;
     };
     let mut parts = stem.rsplitn(3, '-');
@@ -101,11 +113,11 @@ fn name_slug(name: &str) -> String {
     slug.trim_end_matches('-').to_string()
 }
 
-/// Write `text` into a new scratch in `folder` (made if missing), encrypted
-/// with `vault` when given, named `DATE-name.md` after `name`
-/// (`DATE-name-2.md` and on when that is taken), or a random scratch name
-/// when `name` has no letters or digits. Never overwrites. Returns the new
-/// file's path.
+/// Write `text` into a new plain text scratch in `folder` (made if
+/// missing), encrypted with `vault` when given, named `DATE-name.txt` after
+/// `name` (`DATE-name-2.txt` and on when that is taken), or a random scratch
+/// name (`DATE-adjective-noun.txt`) when `name` has no letters or digits.
+/// Never overwrites. Returns the new file's path.
 ///
 /// # Errors
 ///
@@ -114,11 +126,12 @@ pub fn import_scratch(folder: &Path, date: &str, name: &str, text: &str, vault: 
     fs::create_dir_all(folder)?;
     let slug = name_slug(name);
     for attempt in 0..MAX_ATTEMPTS {
-        let file_name = match (slug.is_empty(), attempt) {
-            (true, _) => scratch_name(date, random_seed(attempt)),
-            (false, 0) => format!("{date}-{slug}.md"),
-            (false, _) => format!("{date}-{slug}-{}.md", attempt + 1),
+        let stem = match (slug.is_empty(), attempt) {
+            (true, _) => random_stem(date, random_seed(attempt)),
+            (false, 0) => format!("{date}-{slug}"),
+            (false, _) => format!("{date}-{slug}-{}", attempt + 1),
         };
+        let file_name = format!("{stem}.{IMPORT_EXTENSION}");
         let path = folder.join(file_name);
         match OpenOptions::new().write(true).create_new(true).open(&path) {
             Ok(mut file) => {
@@ -151,7 +164,8 @@ pub fn scratch_texts(folder: &Path, vault: Option<&Vault>) -> Vec<String> {
         .collect()
 }
 
-/// The Markdown files directly in the scratch folder.
+/// The scratches directly in the scratch folder: the Markdown ones made
+/// here and the plain text ones imported from another editor.
 fn scratch_files(folder: &Path) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(folder) else {
         return Vec::new();
@@ -159,7 +173,12 @@ fn scratch_files(folder: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|extension| extension == "md"))
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension == SCRATCH_EXTENSION || extension == IMPORT_EXTENSION)
+        })
         .collect();
     files.sort();
     files
@@ -220,16 +239,23 @@ pub fn decrypt_scratch(path: &Path, vault: &Vault) -> io::Result<()> {
     write_atomically(path, &plain)
 }
 
-/// Seal every scratch encrypted with `old` again with `new` (a new
-/// password); returns the paths that changed. Files sealed with another
-/// key are left as they are.
+/// Seal scratches in `folder` and at remembered destinations with `new`.
+/// Returns the paths that changed. Files with another key stay as they are.
 ///
 /// # Errors
 ///
 /// The first read or write error.
-pub fn reencrypt_scratches(folder: &Path, old: &Vault, new: &Vault) -> io::Result<Vec<PathBuf>> {
+pub fn reencrypt_scratches(folder: &Path, moved: &[PathBuf], old: &Vault, new: &Vault) -> io::Result<Vec<PathBuf>> {
+    let mut paths = scratch_files(folder);
+    for path in moved {
+        if tracked_file_is_present(path)? {
+            paths.push(path.clone());
+        }
+    }
+    paths.sort_unstable();
+    paths.dedup();
     let mut changed = Vec::new();
-    for path in scratch_files(folder) {
+    for path in paths {
         let bytes = fs::read(&path)?;
         if let Ok(plain) = old.decrypt(&bytes) {
             write_atomically(&path, &new.encrypt(&plain))?;
@@ -237,6 +263,22 @@ pub fn reencrypt_scratches(folder: &Path, old: &Vault, new: &Vault) -> io::Resul
         }
     }
     Ok(changed)
+}
+
+/// A remembered file can be missing or replaced. Only use its original local path.
+fn tracked_file_is_present(path: &Path) -> io::Result<bool> {
+    if crate::remote::is_mirror(path) {
+        return Ok(false);
+    }
+    let resolved = match fs::canonicalize(path) {
+        Ok(resolved) => resolved,
+        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if resolved != path || !fs::symlink_metadata(path)?.is_file() {
+        return Ok(false);
+    }
+    crypto::read_encryption_marker(path)
 }
 
 /// The typed file or folder name, trimmed, when it is a valid single name
@@ -281,7 +323,8 @@ mod tests {
         assert!(is_random_scratch_name("2026-10-28-brave-otter.md"));
         assert!(!is_random_scratch_name("2026-10-28-beta-plan.md"));
         assert!(!is_random_scratch_name("brave-otter.md"));
-        assert!(!is_random_scratch_name("2026-10-28-brave-otter.txt"));
+        assert!(is_random_scratch_name("2026-10-28-brave-otter.txt"));
+        assert!(!is_random_scratch_name("2026-10-28-brave-otter.json"));
     }
     use crate::test_support::TempFolder;
 
@@ -344,7 +387,7 @@ mod tests {
         assert_eq!(fs::read(temp.path().join("image.png")).unwrap(), b"not a scratch");
         assert!(encrypt_scratches(temp.path(), &old).unwrap().is_empty(), "already done");
 
-        assert_eq!(reencrypt_scratches(temp.path(), &old, &new).unwrap().len(), 2);
+        assert_eq!(reencrypt_scratches(temp.path(), &[], &old, &new).unwrap().len(), 2);
         assert_eq!(new.decrypt(&fs::read(&plain).unwrap()).unwrap(), b"words");
         assert!(old.decrypt(&fs::read(&plain).unwrap()).is_err());
     }
@@ -386,13 +429,14 @@ mod tests {
         let folder = temp.path().join("scratches");
         let first = import_scratch(&folder, "2026-11-12", "Todo list", "one", None).unwrap();
         let second = import_scratch(&folder, "2026-11-12", "todo list", "two", None).unwrap();
-        assert_eq!(first, folder.join("2026-11-12-todo-list.md"));
-        assert_eq!(second, folder.join("2026-11-12-todo-list-2.md"));
+        assert_eq!(first, folder.join("2026-11-12-todo-list.txt"));
+        assert_eq!(second, folder.join("2026-11-12-todo-list-2.txt"));
         assert_eq!(fs::read_to_string(&first).unwrap(), "one");
         assert_eq!(fs::read_to_string(&second).unwrap(), "two");
 
         let unnamed = import_scratch(&folder, "2026-11-12", "", "three", None).unwrap();
         assert!(is_random_scratch_name(unnamed.file_name().unwrap().to_str().unwrap()));
+        assert_eq!(unnamed.extension().and_then(|extension| extension.to_str()), Some("txt"));
     }
 
     #[test]
@@ -401,12 +445,18 @@ mod tests {
         let vault = Vault::create("password").0;
         let other = Vault::create("another").0;
         temp.write("a-plain.md", "words");
-        temp.write("notes.txt", "not a scratch");
+        temp.write("notes.json", "not a scratch");
         let sealed = import_scratch(temp.path(), "2026-11-12", "b sealed", "secret", Some(&vault)).unwrap();
         assert!(crypto::is_encrypted(&fs::read(&sealed).unwrap()));
-        assert_eq!(scratch_texts(temp.path(), None), vec!["words".to_string()]);
-        assert_eq!(scratch_texts(temp.path(), Some(&other)), vec!["words".to_string()]);
-        assert_eq!(scratch_texts(temp.path(), Some(&vault)), vec!["secret".to_string(), "words".to_string()]);
+        let imported = import_scratch(temp.path(), "2026-11-12", "c plain", "imported", None).unwrap();
+        assert_eq!(imported.extension().and_then(|extension| extension.to_str()), Some("txt"));
+        let plain = vec!["imported".to_string(), "words".to_string()];
+        assert_eq!(scratch_texts(temp.path(), None), plain);
+        assert_eq!(scratch_texts(temp.path(), Some(&other)), plain);
+        assert_eq!(
+            scratch_texts(temp.path(), Some(&vault)),
+            vec!["secret".to_string(), "imported".to_string(), "words".to_string()]
+        );
     }
 
     #[test]

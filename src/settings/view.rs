@@ -81,6 +81,8 @@ pub enum SettingsAction {
     VoiceCommandChanged,
     /// Look for tmux again (after installing it in a terminal).
     CheckTerminals,
+    /// The Chromium HTML preview was turned on or off, or asked to look again.
+    CheckHtmlBrowser,
     /// Put this text on the clipboard.
     Copy(String),
     /// A click in an install prompt.
@@ -144,7 +146,7 @@ pub struct TerminalsInfo<'a> {
 pub struct AiInfo<'a> {
     pub settings: &'a mut AiSettings,
     /// Where each tool's program was found, in [`AiTool::ALL`] order.
-    pub found: &'a [Option<PathBuf>; 4],
+    pub found: &'a [Option<PathBuf>; 5],
     /// Skills found in the skills folders.
     pub skills: &'a [Skill],
     /// Every skill source's folder, in reading order, switched on or not.
@@ -154,7 +156,7 @@ pub struct AiInfo<'a> {
     /// Rubrique's agents folder (the chosen one or the default).
     pub agents_folder: Option<&'a Path>,
     /// How to install each missing tool, in [`AiTool::ALL`] order.
-    pub recipes: &'a [Option<Recipe>; 4],
+    pub recipes: &'a [Option<Recipe>; 5],
     /// How to download the local model, when Ollama is there but the model is not.
     pub local_model: Option<&'a Recipe>,
     pub install: &'a InstallStatus,
@@ -168,6 +170,17 @@ pub struct PrivacyInfo<'a> {
     pub unlocked: bool,
     /// A fingerprint is enrolled, so Touch ID can be offered (macOS).
     pub touch_id_available: bool,
+}
+
+/// The Chromium HTML preview, for the Files section.
+#[derive(Debug)]
+pub struct HtmlPreviewInfo<'a> {
+    pub enabled: &'a mut bool,
+    /// The browser that draws, when one was found.
+    pub found: Option<&'a Path>,
+    /// How to install one, when none was found.
+    pub recipe: Option<&'a Recipe>,
+    pub install: &'a InstallStatus,
 }
 
 /// Where scratch files go, and remote folder settings, for the Files section.
@@ -309,6 +322,7 @@ pub fn show_settings(
     ai: AiInfo,
     voice: VoiceInfo,
     terminals: TerminalsInfo,
+    html_preview: HtmlPreviewInfo,
 ) -> Option<SettingsAction> {
     let mut action = None;
     let (outer, _) = ui.allocate_exact_size(window_size(ui.ctx()), Sense::hover());
@@ -351,7 +365,7 @@ pub fn show_settings(
                     SettingsGroup::Appearance => appearance_section(ui, appearance),
                     SettingsGroup::Highlights => highlights_section(ui, highlight),
                     SettingsGroup::Accessibility => accessibility_section(ui, accessibility),
-                    SettingsGroup::Files => files_section(ui, scratch, note_marks),
+                    SettingsGroup::Files => files_section(ui, scratch, note_marks, html_preview),
                     SettingsGroup::Privacy => privacy_section(ui, privacy),
                     SettingsGroup::Ai => ai_section(ui, ai),
                     SettingsGroup::Skills => {
@@ -513,11 +527,19 @@ fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> O
 }
 
 /// Files: where scratch files go, and the explorer's note marker.
-fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Option<SettingsAction> {
+fn files_section(
+    ui: &mut Ui,
+    scratch: ScratchInfo,
+    note_marks: &mut bool,
+    html_preview: HtmlPreviewInfo,
+) -> Option<SettingsAction> {
     let mut action = None;
     ui.label(RichText::new("Explorer").strong());
     ui.checkbox(note_marks, "Mark files that have notes")
         .on_hover_text("A small speech bubble before the name of a Markdown file with notes");
+    ui.add_space(6.0);
+    ui.separator();
+    action = html_preview_section(ui, html_preview).or(action);
     ui.add_space(6.0);
     ui.separator();
     ui.label(RichText::new("Scratches").strong());
@@ -537,8 +559,8 @@ fn files_section(ui: &mut Ui, scratch: ScratchInfo, note_marks: &mut bool) -> Op
     if ui
         .button("Import from Sublime Text")
         .on_hover_text(
-            "Copy every unsaved Sublime Text tab (new tabs and edited files) into a new scratch here. Texts \
-             already in a scratch are skipped, so it is safe to run again",
+            "Copy every unsaved Sublime Text tab (new tabs and edited files) into a new plain text scratch \
+             here. Texts already in a scratch are skipped, so it is safe to run again",
         )
         .clicked()
     {
@@ -596,12 +618,12 @@ const MISSING_DOT_RADIUS: f32 = 3.5;
 /// Space inside one tool row.
 const ROW_MARGIN: egui::Margin = egui::Margin { left: 12, right: 10, top: 8, bottom: 8 };
 /// What the Ask picker offers, in the order of the tools list.
-const ASK_CHOICES: [Option<AiTool>; 4] =
-    [Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Grok), Some(AiTool::Local)];
+const ASK_CHOICES: [Option<AiTool>; 5] =
+    [Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Gemini), Some(AiTool::Grok), Some(AiTool::Local)];
 /// What the summaries picker offers: the local model first (text stays on
 /// this computer), then the others, then Off.
-const SUMMARY_CHOICES: [Option<AiTool>; 5] =
-    [Some(AiTool::Local), Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Grok), None];
+const SUMMARY_CHOICES: [Option<AiTool>; 6] =
+    [Some(AiTool::Local), Some(AiTool::Claude), Some(AiTool::Codex), Some(AiTool::Gemini), Some(AiTool::Grok), None];
 
 /// The AI section: which tool answers Ask and which writes summaries, then
 /// every tool with its status, install help and (folded) command, then safety.
@@ -646,7 +668,7 @@ fn section_title(ui: &mut Ui, title: &str, hint: &str) {
 
 /// The two choices that matter most, side by side: the tool behind Ask and
 /// the tool behind summaries.
-fn role_pickers(ui: &mut Ui, settings: &mut AiSettings, found: &[Option<PathBuf>; 4]) {
+fn role_pickers(ui: &mut Ui, settings: &mut AiSettings, found: &[Option<PathBuf>; 5]) {
     let is_found = |tool: AiTool| found[tool_index(tool)].is_some();
     ui.columns(2, |columns| {
         let ui = &mut columns[0];
@@ -986,6 +1008,61 @@ fn safety_row(ui: &mut Ui, settings: &AiSettings) -> Option<SettingsAction> {
     action
 }
 
+/// The HTML preview: drawn built in, or by a Chromium browser, with the
+/// browser's status and an install prompt when none was found.
+fn html_preview_section(ui: &mut Ui, info: HtmlPreviewInfo) -> Option<SettingsAction> {
+    let HtmlPreviewInfo { enabled, found, recipe, install } = info;
+    let visuals = ui.visuals().clone();
+    let mut action = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("HTML preview").strong());
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| match found {
+            Some(path) => {
+                let status = ui.label(RichText::new("Browser found").size(STATUS_SIZE).weak());
+                let (check, _) = ui.allocate_exact_size(vec2(CHECK_SIZE, CHECK_SIZE), Sense::hover());
+                paint_check(ui.painter(), check.center(), visuals.hyperlink_color);
+                status.on_hover_text(RichText::new(path.display().to_string()).monospace());
+            }
+            None => {
+                ui.label(RichText::new("No browser found").size(STATUS_SIZE).color(visuals.warn_fg_color));
+            }
+        });
+    });
+    if ui.checkbox(enabled, "Draw .html files with Chromium").changed() {
+        action = Some(SettingsAction::CheckHtmlBrowser);
+    }
+    ui.add(
+        egui::Label::new(
+            RichText::new(
+                "Shows the page as Chrome would: its layout, style sheets, web fonts and images. \
+                 Scripts stay off, but the page may load images and fonts from the web. \
+                 Uses Chrome, Chromium, Edge or Brave when installed. Off: the built-in preview, \
+                 which never loads anything.",
+            )
+            .weak(),
+        )
+        .wrap(),
+    );
+    if found.is_some() || !*enabled {
+        return action;
+    }
+    match recipe {
+        Some(recipe) => {
+            let message = "No Chromium browser found. Install one to draw HTML files.";
+            if let Some(clicked) = prompt(ui, message, recipe, install) {
+                action = Some(SettingsAction::Install(clicked));
+            }
+        }
+        None => {
+            ui.label(RichText::new("Install Google Chrome or Chromium.").size(SMALL_SIZE).weak());
+        }
+    }
+    if ui.button("Check again").on_hover_text("Look for a Chromium browser again").clicked() {
+        action = Some(SettingsAction::CheckHtmlBrowser);
+    }
+    action
+}
+
 /// The install prompt for `recipe`, with how its install went.
 fn prompt(ui: &mut Ui, message: &str, recipe: &Recipe, install: &InstallStatus) -> Option<InstallAction> {
     install_prompt(ui, message, recipe, install.of(recipe), install.busy)
@@ -1024,6 +1101,9 @@ fn agents_section(
         }
     });
     if ui.checkbox(&mut settings.use_claude_agents, "Also use Claude's agents (~/.claude/agents)").changed() {
+        action = Some(SettingsAction::ReloadAgents);
+    }
+    if ui.checkbox(&mut settings.use_gemini_agents, "Also use Gemini CLI's agents (~/.gemini/agents)").changed() {
         action = Some(SettingsAction::ReloadAgents);
     }
     ui.add_space(6.0);

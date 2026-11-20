@@ -53,7 +53,8 @@ Group fixes from the same day into one patch release where you can.
 
 The `Release` workflow (`.github/workflows/release.yml`) builds the macOS
 and Linux packages and publishes the GitHub release with the changelog
-section for that version. It runs on the tag push, and also on any push
+section for that version, then publishes a stable version to crates.io
+(Trusted Publishing, no token; release candidates are not published there). It runs on the tag push, and also on any push
 to `main` whose `Cargo.toml` version has no tag yet. If Actions did not
 run (for example the account's spending limit was reached), start it by
 hand from the Actions tab (`workflow_dispatch`) once that is fixed.
@@ -113,33 +114,28 @@ swift packaging/linux/icons.swift assets/icon/linux/rubrique.svg assets/icon/lin
 
 ## Screenshots
 
-`docs/screenshots/themes.png` is remade by a script (macOS only):
+Build the release you are documenting. On a Mac with a 2x display,
+run the capture scripts one at a time from a terminal with Screen
+Recording access. The Compare and editor scripts also need Accessibility
+access. Leave the keyboard and mouse idle while they drive the sample window.
 
 ```sh
-cargo build && docs/screenshots/tools/themes.sh target/debug/rubrique
+cargo build --locked
+docs/screenshots/tools/ai.sh target/debug/rubrique
+docs/screenshots/tools/editor.sh target/debug/rubrique
+docs/screenshots/tools/themes.sh target/debug/rubrique
 ```
 
-It opens `docs/screenshots/sample/notes/todo.md` in a 1100 x 700 window
-once per theme, with its own settings folder and no tmux on the PATH,
-captures each window, and joins a vertical strip of each capture into one
-image with the theme name under it. Change the sample folder rather than
-the script when the picture should show something else.
+The scripts use isolated settings and copy `docs/screenshots/sample/notes/`
+into a temporary Git repository at `/tmp/field-notes`. Review the three
+PNGs in `docs/screenshots/` before copying them to the website.
 
-`docs/screenshots/ai.png` is a staged Compare run on the same sample
-folder, remade by another script (macOS only):
+- `ai.png` shows the Compare screen for the survey handoff. The Claude Code
+  and Codex stand-ins read the answers in `docs/screenshots/tools/ai/`.
+  Keep two distinct edits so the screen shows both choices.
+- `editor.png` shows Find highlighting `tide` in the rendered `survey.md`.
+- `themes.png` shows the same guide with its Structure panel open, in all
+  five built-in themes.
 
-```sh
-cargo build && docs/screenshots/tools/ai.sh target/debug/rubrique
-```
-
-Run it from a terminal with Accessibility and Screen Recording access, and
-leave the keyboard and mouse alone while it runs: it drives the window
-with synthetic clicks and keystrokes (`tools/drive.swift`). The app gets
-stand-in `claude`, `codex` and `ollama` programs that print the answers in
-`tools/ai`, so no agent runs. The script asks "make it shorter" with
-Compare set to Codex, captures the Ask bar with the hover summary of
-`ideas.md`, opens the merge screen, captures it, and pastes the bar and
-the card onto the merge screen with `tools/paste.swift` (the app does not
-open the Ask bar over the merge screen). Change the answers in `tools/ai`
-when the picture should show something else; keep them different from
-each other in two places so the merge screen has two changes to decide.
+When updating rubrique.dev, use these same PNGs. Follow the website
+README's screenshot instructions to regenerate its AVIF and WebP files.

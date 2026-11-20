@@ -5,7 +5,7 @@
 //! samples into shared buffers; the window writes the file and reads the
 //! level each frame.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -77,9 +77,8 @@ impl Recorder {
             other => return Err(format!("The microphone uses an unsupported sample format ({other})")),
         }
         .map_err(|error| format!("Cannot open the microphone: {error}"))?;
-        let mut file = File::create(path).map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
-        file.write_all(&wav::header(sample_rate, 1, 0)).map_err(|error| format!("Cannot write the memo: {error}"))?;
         stream.play().map_err(|error| format!("Cannot start recording: {error}"))?;
+        let file = new_recording_file(path, sample_rate)?;
         Ok(Recorder {
             stream,
             captured,
@@ -163,6 +162,24 @@ impl Recorder {
         self.file = None;
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// Create a private WAV file without overwriting another recording.
+fn new_recording_file(path: &Path, sample_rate: u32) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
+    if let Err(error) = file.write_all(&wav::header(sample_rate, 1, 0)) {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(format!("Cannot write the memo: {error}"));
+    }
+    Ok(file)
 }
 
 impl Drop for Recorder {
@@ -343,4 +360,18 @@ where
         |error| eprintln!("rubrique: audio output: {error}"),
         None,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempFolder;
+
+    #[test]
+    fn opening_a_recording_keeps_an_existing_file() {
+        let folder = TempFolder::new();
+        let path = folder.write("memo.wav", "an earlier recording");
+        assert!(new_recording_file(&path, 16_000).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"an earlier recording");
+    }
 }

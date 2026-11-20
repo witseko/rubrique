@@ -1,14 +1,29 @@
 [package]
 name = "rubrique"
-version = "1.1.0"
+version = "1.5.1"
 edition = "2024"
 description = "A fast editor, agentic on demand."
 license = "MIT"
 homepage = "https://rubrique.dev"
 repository = "https://github.com/witseko/rubrique"
-publish = false
+readme = "README.md"
+keywords = ["editor", "markdown", "ai", "agents", "egui"]
+categories = ["text-editors", "gui"]
 # Minimum supported Rust (MSRV), matching the README.
 rust-version = "1.95"
+# Files in the crates.io package: the sources, what they embed (window icons
+# and the built-in themes), and the docs crates.io shows. Packaging, CI,
+# screenshots and agent notes stay on GitHub.
+include = [
+    "/Cargo.toml",
+    "/src",
+    "/assets/icon/rubrique-256.png",
+    "/assets/icon/linux/rubrique-256.png",
+    "/themes",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [dependencies]
 # GUI toolkit. Default features trimmed to the OpenGL
@@ -28,6 +43,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Native "choose a folder" window for adding explorer folders. On Linux it
 # uses the desktop's XDG portal, so no GTK libraries are needed.
 rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
+# Atomic, no-overwrite moves on macOS and Linux.
+rustix = { version = "1.1.6", features = ["fs"] }
 # Microphone and speakers for voice memos: CoreAudio on macOS, ALSA on Linux
 # (which reaches PipeWire and PulseAudio through their ALSA plugins). macOS
 # has no built-in command-line recorder, so running one would mean asking
@@ -49,8 +66,18 @@ trash = "5.3"
 # expressions. This crate matches in linear time, so no pattern can hang the
 # editor on a long line.
 regex = "1.13.1"
-# "Import from Sublime Text" reads its session file, which is JSON.
+# "Import from Sublime Text" reads its session file, which is JSON; the
+# Chromium HTML preview talks JSON to the browser too.
 serde_json = "1.0.154"
+# Read-only previews of tables, PDF pages and Office documents.
+csv = "1.4"
+calamine = "0.38"
+hayro = "0.9"
+quick-xml = "0.42"
+zip = { version = "9.7", default-features = false, features = ["deflate"] }
+rclip-rtf = { version = "0.1", features = ["codepage"] }
+# The Chromium HTML preview gets the page's picture as base64 text.
+base64 = "0.23"
 
 # The menu bar at the top of the screen on macOS (File, View, Settings), in
 # place of the menu bar drawn inside the window on other systems.

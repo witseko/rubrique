@@ -12,9 +12,10 @@ use eframe::egui::{Context, KeyboardShortcut};
 
 use super::{
     ASK, NEW_ENCRYPTED_SCRATCH, NEW_SCRATCH, OPEN_PATH, PAGE_DEFAULT, PAGE_LARGER, PAGE_SMALLER, RubriqueApp, SAVE,
-    TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_SETTINGS,
+    TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_PREVIEW_EDITING, TOGGLE_SETTINGS,
 };
 use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, page_zoom_larger, page_zoom_smaller};
+use crate::settings::layout::PreviewMode;
 use crate::theme::catalog::ThemeChoice;
 use crate::theme::code_colors::CodeColors;
 
@@ -26,9 +27,11 @@ pub(super) enum MenuCommand {
     ImportFromSublime,
     AddFolder,
     OpenPath,
+    CloneRepository,
     Save,
     Ask,
     TogglePreview,
+    PreviewEditing,
     TextHighlights,
     TextSize(TextSize),
     PageZoomLarger,
@@ -90,6 +93,7 @@ impl RubriqueApp {
             MenuEntry::Separator,
             item("Add folder...", MenuCommand::AddFolder, None),
             item("Open path...", MenuCommand::OpenPath, Some(&OPEN_PATH)),
+            item("Clone repository...", MenuCommand::CloneRepository, None),
             MenuEntry::Separator,
             item("Save", MenuCommand::Save, Some(&SAVE)),
             item("Ask AI...", MenuCommand::Ask, Some(&ASK)),
@@ -116,6 +120,7 @@ impl RubriqueApp {
         ];
         let view = vec![
             item("Preview / source", MenuCommand::TogglePreview, Some(&TOGGLE_PREVIEW)),
+            item("Edit in preview", MenuCommand::PreviewEditing, Some(&TOGGLE_PREVIEW_EDITING)),
             item("Text highlights", MenuCommand::TextHighlights, Some(&TOGGLE_HIGHLIGHTS)),
             MenuEntry::Separator,
             MenuEntry::Submenu { label: "Text size", entries: text_sizes.collect() },
@@ -143,6 +148,7 @@ impl RubriqueApp {
         let filter = &self.settings.explorer_filter;
         let checked = match command {
             MenuCommand::TextSize(size) => accessibility.text_size == *size,
+            MenuCommand::PreviewEditing => self.settings.layout.preview_mode == PreviewMode::Edit,
             MenuCommand::TextHighlights => self.settings.text_highlight.enabled,
             MenuCommand::LineNumbers => accessibility.line_numbers,
             MenuCommand::WrapLines => accessibility.wrap_lines,
@@ -170,6 +176,7 @@ impl RubriqueApp {
             MenuCommand::ImportFromSublime => self.import_from_sublime(),
             MenuCommand::AddFolder => self.choose_folder_to_add(),
             MenuCommand::OpenPath => self.start_open_path(),
+            MenuCommand::CloneRepository => self.start_clone_repo(),
             MenuCommand::Save => {
                 self.save();
             }
@@ -179,6 +186,7 @@ impl RubriqueApp {
                 self.open_ask(ctx);
             }
             MenuCommand::TogglePreview => self.toggle_preview(),
+            MenuCommand::PreviewEditing => self.toggle_preview_editing(),
             MenuCommand::TextHighlights => self.toggle_text_highlights(ctx),
             MenuCommand::PageZoomLarger => self.change_page_zoom(ctx, page_zoom_larger(page_zoom)),
             MenuCommand::PageZoomSmaller => self.change_page_zoom(ctx, page_zoom_smaller(page_zoom)),
