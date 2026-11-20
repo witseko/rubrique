@@ -244,7 +244,11 @@ fn parse_comment(chars: &[char], index: usize, output: &mut Output) -> Option<us
     let close = (content_start..chars.len().saturating_sub(2))
         .find(|&at| chars[at] == '-' && chars[at + 1] == '-' && chars[at + 2] == '>')?;
     let inner: String = chars[content_start..close].iter().collect();
-    if let Some((quote, text)) = super::notes::parse_note(&inner) {
+    if let Some((quote, content)) = super::notes::parse_note(&inner) {
+        let text = match content {
+            super::notes::NoteContent::Text(text) => text,
+            super::notes::NoteContent::Voice(_) => "Voice recording in the Notes panel".to_string(),
+        };
         output.push(Inline::Note { quote, text });
     }
     Some(close + 3)

@@ -10,7 +10,7 @@ use eframe::egui::{self, Context, Key, KeyboardShortcut, Modifiers, Rect, Sense,
 use super::{NOTES_PANEL_WIDTH, OpenFile, RubriqueApp};
 use crate::explorer::tree::is_markdown_path;
 use crate::icons::{Icon, icon_button, paint_icon, small_icon_button};
-use crate::markdown::notes::find_notes;
+use crate::markdown::notes::{find_notes, has_notes};
 use crate::settings::layout::SideView;
 use crate::terminal::mentions::find_delegations;
 use crate::theme::style::page_fill;
@@ -69,8 +69,7 @@ impl RubriqueApp {
     pub(super) fn side_panel_toggle(&mut self, ui: &mut Ui, rect: Rect) {
         let open = self.settings.layout.side_panel_open;
         // A quick look for a note's opening; this runs every frame.
-        let has_notes =
-            matches!(&self.open_file, OpenFile::Text { document, .. } if document.text.contains("<!-- note on \""));
+        let has_notes = matches!(&self.open_file, OpenFile::Text { document, .. } if has_notes(&document.text));
         let tip = if open { "Hide the side panel" } else { "Show the structure and notes (Cmd+Shift+O)" };
         let toggle_rect = Rect::from_center_size(rect.center(), vec2(TOGGLE_WIDTH, TOGGLE_HEIGHT));
         let response = ui.scope_builder(egui::UiBuilder::new().max_rect(toggle_rect), |ui| {

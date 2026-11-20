@@ -218,6 +218,8 @@ pub enum RecordingChoice {
 /// What the recording bar shows.
 #[derive(Clone, Debug)]
 pub struct RecordingInfo {
+    /// The recording will be attached to a selected passage.
+    pub voice_note: bool,
     pub seconds: u64,
     /// Smoothed loudness, 0.0 to 1.0.
     pub level: f32,
@@ -243,7 +245,8 @@ pub fn recording_bar(ui: &mut Ui, info: &RecordingInfo) -> Option<RecordingChoic
             ui.horizontal_wrapped(|ui| {
                 let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                 ui.painter().circle_filled(dot.center(), 5.0, red);
-                ui.label(RichText::new(format!("Recording {}", format_elapsed(info.seconds))).strong());
+                let title = if info.voice_note { "Recording voice note" } else { "Recording" };
+                ui.label(RichText::new(format!("{title} {}", format_elapsed(info.seconds))).strong());
                 level_meter(ui, info.level, red);
                 if let Some(error) = &info.error {
                     ui.colored_label(ui.visuals().warn_fg_color, error);
@@ -259,9 +262,12 @@ pub fn recording_bar(ui: &mut Ui, info: &RecordingInfo) -> Option<RecordingChoic
                     if ui.button("Cancel").on_hover_text("Stop and delete this recording").clicked() {
                         choice = Some(RecordingChoice::Cancel);
                     }
-                    if icon_text_button(ui, Icon::Stop, "Stop", "Stop and add the memo here (Cmd+Shift+R)", false)
-                        .clicked()
-                    {
+                    let stop_tip = if info.voice_note {
+                        "Stop and attach the voice note (Cmd+Shift+R)"
+                    } else {
+                        "Stop and add the memo here (Cmd+Shift+R)"
+                    };
+                    if icon_text_button(ui, Icon::Stop, "Stop", stop_tip, false).clicked() {
                         choice = Some(RecordingChoice::Stop);
                     }
                 });

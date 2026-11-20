@@ -21,7 +21,7 @@ use crate::document::merge::MergeSession;
 use crate::document::preview_selection;
 use crate::document::view::editor_selection;
 use crate::explorer::tree::is_markdown_path;
-use crate::markdown::notes::{find_notes, locate};
+use crate::markdown::notes::{NoteContent, find_notes, locate};
 
 /// Space between the top of the page and the Ask bar.
 const ASK_TOP: f32 = 56.0;
@@ -433,10 +433,17 @@ impl RubriqueApp {
         let request = match &which {
             Resolving::All => ai::RESOLVE_ALL_REQUEST.to_string(),
             Resolving::One(quote) => {
-                let Some(note) = find_notes(&document.text).into_iter().find(|note| &note.quote == quote) else {
+                let Some(text) =
+                    find_notes(&document.text).into_iter().filter(|note| &note.quote == quote).find_map(|note| {
+                        match note.content {
+                            NoteContent::Text(text) => Some(text),
+                            NoteContent::Voice(_) => None,
+                        }
+                    })
+                else {
                     return;
                 };
-                ai::resolve_note_request(&note.quote, &note.text)
+                ai::resolve_note_request(quote, &text)
             }
         };
         let text = document.text.clone();

@@ -9,6 +9,8 @@ use std::ops::Range;
 
 /// Start of every note comment.
 const NOTE_START: &str = "<!-- note on \"";
+/// Start of a voice note comment.
+const VOICE_NOTE_START: &str = "<!-- voice note on \"";
 /// Separates the quoted text from the note.
 const QUOTE_END: &str = "\": ";
 const COMMENT_END: &str = "-->";
@@ -20,30 +22,51 @@ const MARKUP: [char; 4] = ['*', '_', '~', '`'];
 pub struct Note {
     /// The text the note is about.
     pub quote: String,
-    /// What the note says.
-    pub text: String,
+    /// What the note says or where its recording lives.
+    pub content: NoteContent,
     /// Byte range of the whole `<!-- ... -->` comment in the source.
     pub range: Range<usize>,
 }
 
-/// Read the inside of an HTML comment as a note: `note on "quote": text`.
-pub fn parse_note(inner: &str) -> Option<(String, String)> {
-    let rest = inner.trim().strip_prefix("note on \"")?;
+/// The contents of a text or voice note.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NoteContent {
+    Text(String),
+    Voice(String),
+}
+
+/// Read a text or voice note from the inside of an HTML comment.
+pub fn parse_note(inner: &str) -> Option<(String, NoteContent)> {
+    let inner = inner.trim();
+    let (rest, voice) = if let Some(rest) = inner.strip_prefix("voice note on \"") {
+        (rest, true)
+    } else {
+        (inner.strip_prefix("note on \"")?, false)
+    };
     let (quote, text) = rest.split_once(QUOTE_END)?;
-    Some((quote.to_string(), text.trim().to_string()))
+    let text = text.trim().to_string();
+    let content = if voice { NoteContent::Voice(text) } else { NoteContent::Text(text) };
+    Some((quote.to_string(), content))
+}
+
+/// A quick check for the opening of a note comment.
+pub fn has_notes(source: &str) -> bool {
+    source.contains(NOTE_START) || source.contains(VOICE_NOTE_START)
 }
 
 /// Every note in `source`, in order.
 pub fn find_notes(source: &str) -> Vec<Note> {
     let mut notes = Vec::new();
     let mut from = 0;
-    while let Some(start) = source[from..].find(NOTE_START).map(|offset| from + offset) {
+    while let Some(start) = source[from..].find("<!--").map(|offset| from + offset) {
         let Some(end) = source[start..].find(COMMENT_END).map(|offset| start + offset + COMMENT_END.len()) else {
             break;
         };
         let inner = &source[start + "<!--".len()..end - COMMENT_END.len()];
-        if let Some((quote, text)) = parse_note(inner) {
-            notes.push(Note { quote, text, range: start..end });
+        if (source[start..].starts_with(NOTE_START) || source[start..].starts_with(VOICE_NOTE_START))
+            && let Some((quote, content)) = parse_note(inner)
+        {
+            notes.push(Note { quote, content, range: start..end });
         }
         from = end;
     }
@@ -53,28 +76,40 @@ pub fn find_notes(source: &str) -> Vec<Note> {
 /// The comment for a note. Line breaks become spaces, and `-->` or `": ` in
 /// the text is broken up so the comment stays one valid, readable note.
 pub fn note_comment(quote: &str, text: &str) -> String {
+    comment(NOTE_START, quote, text)
+}
+
+/// A hidden note comment holding a recording's relative URL.
+pub fn voice_note_comment(quote: &str, url: &str) -> String {
+    comment(VOICE_NOTE_START, &quote.replace("--!>", "- -!>"), url)
+}
+
+/// Format a note without letting either field close the comment.
+fn comment(start: &str, quote: &str, text: &str) -> String {
     let clean = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ").replace(COMMENT_END, "- ->");
     let quote = clean(quote).replace(QUOTE_END, "\" : ");
-    format!("{NOTE_START}{quote}{QUOTE_END}{} {COMMENT_END}", clean(text))
+    format!("{start}{quote}{QUOTE_END}{} {COMMENT_END}", clean(text))
 }
 
 /// Find where the selected preview text sits in the source. The preview
 /// hides syntax such as `**` and `_`, so those are skipped in the source,
 /// and any run of whitespace matches any other. Returns the first match.
 pub fn locate(source: &str, selected: &str) -> Option<Range<usize>> {
+    locate_matches(source, selected).next()
+}
+
+/// All source ranges that match a selection, including overlaps.
+pub fn locate_matches(source: &str, selected: &str) -> impl Iterator<Item = Range<usize>> {
     let wanted: Vec<char> = selected.split_whitespace().collect::<Vec<_>>().join(" ").chars().collect();
-    let first = *wanted.first()?;
     let chars: Vec<(usize, char)> = source.char_indices().collect();
-    for start in 0..chars.len() {
-        if chars[start].1 != first {
-            continue;
+    (0..chars.len()).filter_map(move |start| {
+        if Some(&chars[start].1) != wanted.first() {
+            return None;
         }
-        if let Some(end) = match_from(&chars, start, &wanted) {
-            let end_byte = chars.get(end).map_or(source.len(), |(offset, _)| *offset);
-            return Some(chars[start].0..end_byte);
-        }
-    }
-    None
+        let end = match_from(&chars, start, &wanted)?;
+        let end_byte = chars.get(end).map_or(source.len(), |(offset, _)| *offset);
+        Some(chars[start].0..end_byte)
+    })
 }
 
 /// Match `wanted` against the source starting at `chars[start]`; returns the
@@ -177,13 +212,13 @@ mod tests {
         let notes = find_notes(&format!("We ship on the first Monday{comment} after."));
         assert_eq!(notes.len(), 1);
         assert_eq!(notes[0].quote, "the first Monday");
-        assert_eq!(notes[0].text, "check - -> with legal");
+        assert_eq!(notes[0].content, NoteContent::Text("check - -> with legal".to_string()));
     }
 
     #[test]
     fn plain_comments_are_not_notes() {
         assert_eq!(find_notes("a <!-- todo --> b <!-- note on \"b\": yes -->").len(), 1);
-        assert_eq!(parse_note(" note on \"x\": y "), Some(("x".to_string(), "y".to_string())));
+        assert_eq!(parse_note(" note on \"x\": y "), Some(("x".to_string(), NoteContent::Text("y".to_string()))));
         assert_eq!(parse_note("just a comment"), None);
     }
 
