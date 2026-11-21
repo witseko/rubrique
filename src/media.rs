@@ -80,7 +80,16 @@ pub fn size_text(bytes: u64) -> String {
 /// Open `path` with the program the system uses for its type (the video
 /// player for a video). Returns an error message for the status bar.
 pub fn open_with_system(path: &Path) -> Result<(), String> {
-    start_opener(Command::new(SYSTEM_OPENER).arg(path))
+    start_opener(&mut opener_command(path)?)
+}
+
+/// Build the opener command for `path`, made absolute so that a name such
+/// as `-a` can never be read as an option (`xdg-open` has no `--`).
+fn opener_command(path: &Path) -> Result<Command, String> {
+    let path = std::path::absolute(path).map_err(|error| format!("Cannot resolve path: {error}"))?;
+    let mut command = Command::new(SYSTEM_OPENER);
+    command.arg(path);
+    Ok(command)
 }
 
 /// Open a local folder in Finder or the default Linux file manager.
@@ -134,6 +143,16 @@ mod tests {
         } else {
             assert_eq!(args, [target]);
         }
+    }
+
+    #[test]
+    fn opener_never_gets_a_path_that_starts_with_a_dash() {
+        let command = opener_command(Path::new("-a Calculator")).unwrap();
+        assert_eq!(command.get_program(), SYSTEM_OPENER);
+        let args: Vec<_> = command.get_args().collect();
+        let expected = std::env::current_dir().unwrap().join("-a Calculator");
+        assert_eq!(args, [expected.as_os_str()]);
+        assert!(Path::new(args[0]).is_absolute());
     }
 
     #[test]

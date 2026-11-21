@@ -24,6 +24,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   from Settings is checked against a checksum built into the app before
   it is used. A damaged or altered download is deleted, with a message to
   try again.
+- **Safer opening with the system app.** A file whose name starts with
+  `-` now opens as that file in its default app, instead of being read
+  as an option by `open` or `xdg-open`.
 
 ## [1.9.0] - 2026-11-21
 
