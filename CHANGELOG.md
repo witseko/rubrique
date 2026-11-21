@@ -10,6 +10,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **File paths, file names and links in text highlights.** Settings →
+  Highlights has three more rules: File path (`/var/log/app.log`,
+  `~/notes/todo.txt`, `src/app/main.rs`, `C:\Users\me\notes.txt`), File
+  name (`report.csv`, `Cargo.toml`) and URL. They are added once to the
+  rules you already have, which keep their order; change, switch off or
+  delete them like any other rule.
 - **Terminal full screen.** Press `Cmd+Shift+Enter` in a terminal tab, or
   click the new button in its status bar (also View → Terminal full
   screen), and the terminal fills the screen with no explorer, tabs or

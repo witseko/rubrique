@@ -1,5 +1,5 @@
 //! Text highlight rules: regular expressions from Settings that color
-//! matches (IP addresses, numbers, UUIDs, hashes) in plain text files.
+//! matches (file paths, IP addresses, numbers, UUIDs, hashes) in plain text files.
 //!
 //! Rules are tried top to bottom and the first rule that matches a piece of
 //! text colors it, so a specific rule (a UUID) wins over a broad one (a
@@ -119,11 +119,42 @@ impl HighlightRule {
 /// Octet of an IPv4 address: 0 to 255, without leading zeros.
 const OCTET: &str = "(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
 
+/// One part of a file path, between two separators.
+const PATH_PART: &str = r"[\w.@+-]+";
+
+/// Extensions the File name rule knows. A name needs one of them, so
+/// `example.com`, `e.g` and `com.example.Foo` stay plain.
+const FILE_EXTENSIONS: &str = "txt|md|markdown|rst|log|csv|tsv|pdf|docx?|xlsx?|pptx?|rtf|tex|\
+    json|jsonl|ya?ml|toml|xml|ini|cfg|conf|env|lock|sql|sqlite|plist|\
+    html?|css|scss|m?js|cjs|jsx|tsx?|vue|svelte|\
+    rs|py|rb|go|java|kt|swift|c|h|cpp|hpp|cc|cs|php|sh|bash|zsh|ps1|bat|lua|\
+    png|jpe?g|gif|svg|webp|avif|ico|bmp|tiff?|heic|mp3|mp4|wav|mov|mkv|flac|ogg|webm|\
+    zip|tar|gz|tgz|bz2|xz|7z|rar|dmg|iso|deb|rpm|pkg|exe|dll|so|dylib|jar|\
+    bak|tmp|patch|diff|pem|crt";
+
+/// The File path pattern: paths with a separator, in three forms.
+fn file_path_pattern() -> String {
+    // `~/notes`, `./a`, `../a` and `/usr/bin`. A path from the root needs two
+    // parts, so `</div>` and `/help` stay plain.
+    let rooted = format!(r"\B(?:(?:~|\.\.?)/{PATH_PART}|/{PATH_PART}/{PATH_PART})(?:/{PATH_PART})*\b/?");
+    let windows = format!(r"\b[A-Za-z]:\\{PATH_PART}(?:\\{PATH_PART})*\b\\?");
+    // `src/app/main.rs`. It must end in an extension, so `and/or`,
+    // `11/21/2026` and `application/json` stay plain.
+    let relative = format!(r"\b\w[\w.@+-]*(?:/{PATH_PART})*/[\w.@+-]*\.[A-Za-z][A-Za-z0-9]*\b");
+    format!("{rooted}|{windows}|{relative}")
+}
+
 /// The rules a new install starts with. They are ordinary rules: the user can
 /// change, reorder, switch off or delete each one.
 pub fn default_rules() -> Vec<HighlightRule> {
     let ipv4 = format!(r"\b(?:{OCTET}\.){{3}}{OCTET}\b");
+    let file_name = format!(r"(?i)\b\w[\w.-]*\.(?:{FILE_EXTENSIONS})\b");
     vec![
+        // URL and File path go first: they hold dates, numbers, addresses and
+        // ids, and a rule above them would take those pieces and leave the
+        // rest plain. URL is above File path so a link's path stays its own.
+        HighlightRule::new("URL", r#"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s<>"']*[\w/]"#, RuleColor::String),
+        HighlightRule::new("File path", &file_path_pattern(), RuleColor::Name),
         HighlightRule::new(
             "UUID",
             r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
@@ -138,6 +169,9 @@ pub fn default_rules() -> Vec<HighlightRule> {
             RuleColor::Keyword,
         ),
         HighlightRule::new("Email", r"\b[\w.+-]+@[\w-]+(?:\.[\w-]+)+\b", RuleColor::String),
+        // A name without a folder (`notes.txt`). Below Email, whose host
+        // can end like a file (`ops@example.sh`).
+        HighlightRule::new("File name", &file_name, RuleColor::Name),
         HighlightRule::new("Date", r"\b[0-9]{4}-[0-9]{2}-[0-9]{2}\b", RuleColor::Key),
         // Whole words only, so the digits inside a hash or an id stay theirs.
         HighlightRule::new("Number", r"\b[0-9]+(?:\.[0-9]+)?\b", RuleColor::Number),
@@ -145,6 +179,40 @@ pub fn default_rules() -> Vec<HighlightRule> {
         // a long plain number stays a number.
         HighlightRule::new("Hash", r"\b[0-9a-f]{7,64}\b", RuleColor::Comment),
     ]
+}
+
+/// Number of the current set of default rules. Raise it when a release adds
+/// default rules, and name them in [`add_new_default_rules`].
+pub const DEFAULT_RULES_VERSION: u32 = 2;
+/// The default rules added in version 2.
+const ADDED_IN_VERSION_2: [&str; 3] = ["URL", "File path", "File name"];
+
+/// Add the default rules that came after `seen_version` to a saved list.
+/// Each goes right under the nearest default rule above it that the list
+/// still holds (else on top), so it keeps its place in the order. A rule
+/// whose name or pattern the list already has is left out, and an empty
+/// list stays empty: its user deleted every rule.
+pub fn add_new_default_rules(rules: &mut Vec<HighlightRule>, seen_version: u32) {
+    if seen_version >= DEFAULT_RULES_VERSION || rules.is_empty() {
+        return;
+    }
+    let defaults = default_rules();
+    for (place, new_rule) in defaults.iter().enumerate() {
+        let is_new = ADDED_IN_VERSION_2.contains(&new_rule.name.as_str());
+        if !is_new || rules.iter().any(|rule| is_same_rule(rule, new_rule)) {
+            continue;
+        }
+        let under = defaults[..place]
+            .iter()
+            .rev()
+            .find_map(|above| rules.iter().position(|rule| rule.pattern == above.pattern));
+        rules.insert(under.map_or(0, |position| position + 1), new_rule.clone());
+    }
+}
+
+/// Whether two rules have the same pattern or the same name (any letter case).
+fn is_same_rule(left: &HighlightRule, right: &HighlightRule) -> bool {
+    left.pattern == right.pattern || left.name.eq_ignore_ascii_case(&right.name)
 }
 
 /// Compile one pattern with Rubrique's limits. Matching is linear in the
@@ -298,6 +366,98 @@ mod tests {
         assert_eq!(default_matches("Number", "v2 has 42 and 3.14"), ["42", "3.14"]);
         assert_eq!(default_matches("Date", "due 2026-11-10."), ["2026-11-10"]);
         assert_eq!(default_matches("Email", "write to a.b+c@mail.example.org."), ["a.b+c@mail.example.org"]);
+    }
+
+    #[test]
+    fn file_path_rule_finds_paths() {
+        assert_eq!(
+            default_matches("File path", "open /usr/local/bin, ~/notes/todo.txt or ../docs/."),
+            ["/usr/local/bin", "~/notes/todo.txt", "../docs/"]
+        );
+        assert_eq!(
+            default_matches("File path", r"at src/app/main.rs:42 and C:\Users\me\notes.txt."),
+            ["src/app/main.rs", r"C:\Users\me\notes.txt"]
+        );
+        assert_eq!(default_matches("File path", "PATH=/usr/bin:/opt/tools/bin"), ["/usr/bin", "/opt/tools/bin"]);
+        assert_eq!(
+            default_matches("File path", "see node_modules/@types/node/index.d.ts"),
+            ["node_modules/@types/node/index.d.ts"]
+        );
+    }
+
+    #[test]
+    fn file_path_rule_leaves_other_slashes_plain() {
+        let plain = "and/or 11/21/2026 10.0.0.0/24 application/json </div> /help 1/2 // note";
+        assert_eq!(default_matches("File path", plain), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn file_name_rule_finds_names_with_a_known_extension() {
+        assert_eq!(
+            default_matches("File name", "see notes.txt, Cargo.TOML and my-archive.tar.gz."),
+            ["notes.txt", "Cargo.TOML", "my-archive.tar.gz"]
+        );
+        assert_eq!(default_matches("File name", "--config=app.yaml"), ["app.yaml"]);
+        let plain = "e.g. example.com, com.example.Foo, 9 a.m. and v1.2";
+        assert_eq!(default_matches("File name", plain), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn url_rule_finds_links_without_the_closing_punctuation() {
+        assert_eq!(
+            default_matches("URL", "see https://example.com/a/b.html, or (file:///tmp/x)."),
+            ["https://example.com/a/b.html", "file:///tmp/x"]
+        );
+        assert_eq!(default_matches("URL", "ratio 3://4"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn urls_and_paths_keep_the_pieces_inside_them() {
+        let rules = CompiledRules::new(&default_rules());
+        let text = "GET http://10.0.0.1:8080/v2/a.json saved /var/log/2026-11-10/app.log by ops@example.sh as out.csv";
+        assert_eq!(
+            pieces(&rules, text),
+            [
+                ("http://10.0.0.1:8080/v2/a.json", RuleColor::String),
+                ("/var/log/2026-11-10/app.log", RuleColor::Name),
+                ("ops@example.sh", RuleColor::String),
+                ("out.csv", RuleColor::Name),
+            ]
+        );
+    }
+
+    /// The default rules as they were before version 2.
+    fn version_1_rules() -> Vec<HighlightRule> {
+        default_rules().into_iter().filter(|rule| !ADDED_IN_VERSION_2.contains(&rule.name.as_str())).collect()
+    }
+
+    #[test]
+    fn new_defaults_take_their_place_in_an_old_list() {
+        let mut rules = version_1_rules();
+        add_new_default_rules(&mut rules, 1);
+        assert_eq!(rules, default_rules());
+    }
+
+    #[test]
+    fn new_defaults_keep_the_users_own_rules_and_order() {
+        let ticket = HighlightRule::new("Ticket", "PROJ-[0-9]+", RuleColor::Key);
+        let own_url = HighlightRule::new("url", "https?://[a-z./]+", RuleColor::Comment);
+        let email = default_rules().into_iter().find(|rule| rule.name == "Email").expect("a default rule");
+        let mut rules = vec![ticket.clone(), own_url.clone(), email.clone()];
+        add_new_default_rules(&mut rules, 1);
+        let names: Vec<&str> = rules.iter().map(|rule| rule.name.as_str()).collect();
+        // The user's own "url" rule stands in for the default one.
+        assert_eq!(names, ["File path", "Ticket", "url", "Email", "File name"]);
+    }
+
+    #[test]
+    fn new_defaults_skip_current_and_empty_lists() {
+        let mut current = version_1_rules();
+        add_new_default_rules(&mut current, DEFAULT_RULES_VERSION);
+        assert_eq!(current, version_1_rules());
+        let mut empty = Vec::new();
+        add_new_default_rules(&mut empty, 1);
+        assert_eq!(empty, Vec::new());
     }
 
     #[test]
