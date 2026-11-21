@@ -100,6 +100,8 @@ pub struct Recipe {
     /// A download goes to the first file and is renamed to the second when
     /// it finishes, so a broken download never looks like the real file.
     pub download: Option<(PathBuf, PathBuf)>,
+    /// The SHA-256 (lowercase hex) the downloaded file must have.
+    pub download_sha256: Option<&'static str>,
 }
 
 impl Recipe {
@@ -112,6 +114,7 @@ impl Recipe {
             after: None,
             provides: None,
             download: None,
+            download_sha256: None,
         }
     }
 
@@ -222,7 +225,7 @@ pub fn chromium_recipe(folder: &Path, platform: Platform, find: &dyn Fn(&str) ->
 }
 
 /// Download the whisper model `url` to `model` with curl.
-pub fn model_recipe(model: &Path, url: &str, find: &dyn Fn(&str) -> Option<PathBuf>) -> Recipe {
+pub fn model_recipe(model: &Path, url: &str, sha256: &'static str, find: &dyn Fn(&str) -> Option<PathBuf>) -> Recipe {
     let partial = PathBuf::from(format!("{}.part", model.display()));
     let partial_text = partial.display().to_string();
     let run = find("curl").map(|curl| {
@@ -232,7 +235,41 @@ pub fn model_recipe(model: &Path, url: &str, find: &dyn Fn(&str) -> Option<PathB
         )
     });
     let copy = Some(format!("curl -L --create-dirs -o {} {url}", model.display()));
-    Recipe { run, copy, download: Some((partial, model.to_path_buf())), ..Recipe::named("the whisper model (466 MB)") }
+    Recipe {
+        run,
+        copy,
+        download: Some((partial, model.to_path_buf())),
+        download_sha256: Some(sha256),
+        ..Recipe::named("the whisper model (466 MB)")
+    }
+}
+
+/// Check that the file at `path` has the SHA-256 `expected` (lowercase hex).
+pub fn check_sha256(path: &Path, expected: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    use std::io::Read;
+    let cannot_read = |error: std::io::Error| format!("Cannot read {}: {error}", path.display());
+    let mut file = std::fs::File::open(path).map_err(cannot_read)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0; 1 << 16];
+    loop {
+        let read = file.read(&mut buffer).map_err(cannot_read)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    let mut actual = String::new();
+    for byte in hasher.finalize() {
+        // Writing to a String cannot fail.
+        let _ = write!(actual, "{byte:02x}");
+    }
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("The download is damaged or not the expected file (SHA-256 {actual}); try again"))
+    }
 }
 
 /// The model in an `ollama run <model> …` command.
@@ -450,7 +487,7 @@ mod tests {
     #[test]
     fn model_download_goes_through_a_partial_file() {
         let model = Path::new("/home/a/.local/share/whisper/ggml-small.bin");
-        let recipe = model_recipe(model, "https://x/m.bin", &with(&["curl"]));
+        let recipe = model_recipe(model, "https://x/m.bin", "00", &with(&["curl"]));
         let run = recipe.run.unwrap();
         assert_eq!(run.program, "/bin/curl");
         assert_eq!(
@@ -458,10 +495,22 @@ mod tests {
             ["-o", "/home/a/.local/share/whisper/ggml-small.bin.part", "https://x/m.bin"]
         );
         assert!(run.args.contains(&"--fail".to_string()));
+        assert_eq!(recipe.download_sha256, Some("00"));
         assert_eq!(recipe.download.unwrap().1, model);
-        let no_curl = model_recipe(model, "https://x/m.bin", &with(&[]));
+        let no_curl = model_recipe(model, "https://x/m.bin", "00", &with(&[]));
         assert_eq!(no_curl.run, None);
         assert!(no_curl.copy.unwrap().starts_with("curl -L --create-dirs -o /home/a/"));
+    }
+
+    #[test]
+    fn checks_a_download_against_its_sha256() {
+        let folder = crate::test_support::TempFolder::new();
+        let file = folder.write("model.bin", "abc");
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        assert_eq!(check_sha256(&file, abc), Ok(()));
+        let wrong = check_sha256(&file, &"0".repeat(64)).unwrap_err();
+        assert!(wrong.contains("damaged"), "{wrong}");
+        assert!(check_sha256(&folder.path().join("missing"), abc).is_err());
     }
 
     #[test]

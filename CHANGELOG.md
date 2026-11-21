@@ -18,6 +18,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   file in it. Repositories you clone in Rubrique are trusted at once;
   trust each existing one with one click.
 
+### Fixed
+
+- **Checked whisper model download.** The voice memo model downloaded
+  from Settings is checked against a checksum built into the app before
+  it is used. A damaged or altered download is deleted, with a message to
+  try again.
+
 ## [1.9.0] - 2026-11-21
 
 ### Added
