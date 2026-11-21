@@ -1,7 +1,7 @@
-//! Groups of the explorer's Terminals list: a plain session belongs to the
-//! explorer folder it runs in, and an `OpenRig` seat (a session named
-//! `seat@rig`) to its rig, split into pods, with every rig under one
-//! `OpenRig` group. Sessions outside every folder go under "Other".
+//! Groups of the explorer's Terminals and `OpenRig` lists: a plain session
+//! belongs to the explorer folder it runs in (Terminals), and an `OpenRig`
+//! seat (a session named `seat@rig`) to its rig, split into pods (`OpenRig`).
+//! Sessions outside every folder go under "Other".
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -10,25 +10,29 @@ use super::monitor::TerminalRow;
 
 /// Title of the group for sessions outside every explorer folder.
 const OTHER_TITLE: &str = "Other";
-/// Key and title of the group that holds every rig.
-const OPENRIG_KEY: &str = "openrig";
-const OPENRIG_TITLE: &str = "OpenRig";
+
+/// The groups of both lists, by indexes into the same rows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionGroups {
+    /// The Terminals list: one group per explorer folder, then "Other".
+    pub terminals: Vec<TerminalGroup>,
+    /// The `OpenRig` list: one group per rig, with its pods.
+    pub rigs: Vec<TerminalGroup>,
+}
 
 /// One group of the Terminals list, as the explorer draws it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalGroup {
     /// What folding remembers the group by: `folder:<path>`, `other`,
-    /// `openrig`, `rig:<rig>` or `rig:<rig>/<pod>`.
+    /// `rig:<rig>` or `rig:<rig>/<pod>`.
     pub key: String,
-    /// The folder's name, "Other", `OpenRig`, the rig's name or the pod's
-    /// name.
+    /// The folder's name, "Other", the rig's name or the pod's name.
     pub title: String,
     /// The explorer folder's index, for the group color.
     pub root: Option<usize>,
     /// Indexes into the rows the groups were made from, in their order.
     pub rows: Vec<usize>,
-    /// The rigs of the `OpenRig` group or the pods of a rig (their own `rows`
-    /// stay empty); empty for other groups.
+    /// The pods of a rig (its own `rows` stay empty); empty for other groups.
     pub children: Vec<TerminalGroup>,
 }
 
@@ -36,11 +40,6 @@ impl TerminalGroup {
     /// How many sessions the group holds, its sub-groups' included.
     pub fn session_count(&self) -> usize {
         self.rows.len() + self.children.iter().map(TerminalGroup::session_count).sum::<usize>()
-    }
-
-    /// True for the group that holds every rig.
-    pub fn is_openrig(&self) -> bool {
-        self.key == OPENRIG_KEY
     }
 }
 
@@ -56,17 +55,18 @@ pub fn seat_of(session_name: &str) -> Option<(&str, &str)> {
     Some((rig, pod))
 }
 
-/// Sort `rows` into groups: one per explorer folder in `roots` (name and
-/// path, in explorer order) that has sessions, then "Other", then `OpenRig` with
-/// one group per rig by name and its pods by name. A session belongs to the deepest
-/// folder it runs in; a seat's session always to its rig. Rows keep their
-/// order inside a group, and groups without sessions are left out.
-pub fn group_terminals(rows: &[TerminalRow], roots: &[(&str, &Path)]) -> Vec<TerminalGroup> {
+/// Sort `rows` into groups: for Terminals one per explorer folder in `roots`
+/// (name and path, in explorer order) that has sessions, then "Other"; for
+/// `OpenRig` one group per rig by name with its pods by name. A session
+/// belongs to the deepest folder it runs in; a seat's session always to its
+/// rig. Rows keep their order inside a group, and groups without sessions are
+/// left out. Without `openrig` every session is a plain terminal.
+pub fn group_terminals(rows: &[TerminalRow], roots: &[(&str, &Path)], openrig: bool) -> SessionGroups {
     let mut folder_rows = vec![Vec::new(); roots.len()];
     let mut other_rows = Vec::new();
     let mut rigs: BTreeMap<&str, BTreeMap<&str, Vec<usize>>> = BTreeMap::new();
     for (index, row) in rows.iter().enumerate() {
-        if let Some((rig, pod)) = seat_of(&row.info.name) {
+        if let Some((rig, pod)) = seat_of(&row.info.name).filter(|_| openrig) {
             rigs.entry(rig).or_default().entry(pod).or_default().push(index);
         } else if let Some(root) = root_of(&row.info.folder, roots) {
             folder_rows[root].push(index);
@@ -90,17 +90,8 @@ pub fn group_terminals(rows: &[TerminalRow], roots: &[(&str, &Path)]) -> Vec<Ter
     if !other_rows.is_empty() {
         groups.push(plain_group("other".to_string(), OTHER_TITLE, other_rows));
     }
-    if !rigs.is_empty() {
-        let rigs = rigs.into_iter().map(|(rig, pods)| rig_group(rig, pods)).collect();
-        groups.push(TerminalGroup {
-            key: OPENRIG_KEY.to_string(),
-            title: OPENRIG_TITLE.to_string(),
-            root: None,
-            rows: Vec::new(),
-            children: rigs,
-        });
-    }
-    groups
+    let rigs = rigs.into_iter().map(|(rig, pods)| rig_group(rig, pods)).collect();
+    SessionGroups { terminals: groups, rigs }
 }
 
 /// The index of the deepest folder in `roots` that holds `folder`.
@@ -144,7 +135,7 @@ mod tests {
         TerminalRow { info, status: TerminalStatus::Shell }
     }
 
-    /// Each group as its path of titles (`OpenRig/rig/pod`) and the names of
+    /// Each group as its path of titles (`rig/pod`) and the names of
     /// its rows, sub-groups after their parent.
     fn summary(groups: &[TerminalGroup], rows: &[TerminalRow]) -> Vec<(String, Vec<String>)> {
         let mut lines = Vec::new();
@@ -175,6 +166,14 @@ mod tests {
         assert_eq!(seat_of("dev-impl-2@rig"), Some(("rig", "dev")));
     }
 
+    /// A remote seat (`seat@rig@host`) goes under its rig and host, apart
+    /// from the same rig on this computer.
+    #[test]
+    fn a_remote_seat_groups_by_rig_and_host() {
+        assert_eq!(seat_of("dev-impl@my-rig@gpu-box"), Some(("my-rig@gpu-box", "dev")));
+        assert_eq!(seat_of("lead@rig@me@gpu-box"), Some(("rig@me@gpu-box", "lead")));
+    }
+
     #[test]
     fn a_seat_without_a_dash_is_its_own_pod() {
         assert_eq!(seat_of("lead@rig"), Some(("rig", "lead")));
@@ -191,7 +190,7 @@ mod tests {
     fn the_deepest_folder_wins() {
         let rows = [row("outer", "/work"), row("inner", "/work/app/src")];
         let roots = [("work", Path::new("/work")), ("app", Path::new("/work/app"))];
-        let groups = group_terminals(&rows, &roots);
+        let groups = group_terminals(&rows, &roots, true).terminals;
         let expected =
             [("work".to_string(), vec!["outer".to_string()]), ("app".to_string(), vec!["inner".to_string()])];
         assert_eq!(summary(&groups, &rows), expected);
@@ -200,7 +199,7 @@ mod tests {
     }
 
     #[test]
-    fn folders_then_other_then_rigs_with_pods() {
+    fn folders_then_other_and_rigs_with_pods_apart() {
         let rows = [
             row("orch-lead@zeta", "/work"),
             row("stray", "/tmp"),
@@ -210,34 +209,33 @@ mod tests {
             row("orch-lead@alpha", "/work"),
         ];
         let roots = [("work", Path::new("/work"))];
-        let groups = group_terminals(&rows, &roots);
-        let titles: Vec<(String, Vec<String>)> = summary(&groups, &rows);
-        let expected = [
-            ("work", vec!["build"]),
-            ("Other", vec!["stray"]),
-            ("OpenRig", vec![]),
-            ("OpenRig/alpha", vec![]),
-            ("OpenRig/alpha/dev", vec!["dev-qa@alpha", "dev-impl@alpha"]),
-            ("OpenRig/alpha/orch", vec!["orch-lead@alpha"]),
-            ("OpenRig/zeta", vec![]),
-            ("OpenRig/zeta/orch", vec!["orch-lead@zeta"]),
-        ];
-        let expected: Vec<(String, Vec<String>)> = expected
-            .iter()
-            .map(|(title, names)| ((*title).to_string(), names.iter().map(ToString::to_string).collect()))
-            .collect();
-        assert_eq!(titles, expected);
-        assert!(groups[2].is_openrig());
-        assert_eq!(groups[2].session_count(), 4);
-        assert_eq!(groups[2].children[0].session_count(), 3);
-        assert_eq!(groups[2].children[1].children[0].key, "rig:zeta/orch");
+        let groups = group_terminals(&rows, &roots, true);
+        let lines = |expected: &[(&str, Vec<&str>)]| -> Vec<(String, Vec<String>)> {
+            expected
+                .iter()
+                .map(|(title, names)| ((*title).to_string(), names.iter().map(ToString::to_string).collect()))
+                .collect()
+        };
+        assert_eq!(summary(&groups.terminals, &rows), lines(&[("work", vec!["build"]), ("Other", vec!["stray"])]));
+        assert_eq!(
+            summary(&groups.rigs, &rows),
+            lines(&[
+                ("alpha", vec![]),
+                ("alpha/dev", vec!["dev-qa@alpha", "dev-impl@alpha"]),
+                ("alpha/orch", vec!["orch-lead@alpha"]),
+                ("zeta", vec![]),
+                ("zeta/orch", vec!["orch-lead@zeta"]),
+            ])
+        );
+        assert_eq!(groups.rigs[0].session_count(), 3);
+        assert_eq!(groups.rigs[1].children[0].key, "rig:zeta/orch");
     }
 
     #[test]
     fn order_inside_a_group_is_kept() {
         let rows = [row("c", "/work"), row("a", "/work"), row("b", "/work")];
         let roots = [("work", Path::new("/work"))];
-        let groups = group_terminals(&rows, &roots);
+        let groups = group_terminals(&rows, &roots, true).terminals;
         assert_eq!(groups[0].rows, [0, 1, 2]);
     }
 
@@ -245,9 +243,9 @@ mod tests {
     fn empty_groups_are_left_out() {
         let rows = [row("b", "/two")];
         let roots = [("one", Path::new("/one")), ("two", Path::new("/two"))];
-        let groups = group_terminals(&rows, &roots);
+        let groups = group_terminals(&rows, &roots, true).terminals;
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].title, "two");
-        assert_eq!(group_terminals(&[], &roots), []);
+        assert_eq!(group_terminals(&[], &roots, true), SessionGroups::default());
     }
 }

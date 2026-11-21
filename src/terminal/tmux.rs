@@ -3,14 +3,22 @@
 //! Every call runs one `tmux` process with its arguments as a list, never
 //! through a shell, so session names and typed text cannot run commands.
 //! Several tmux commands can share one process, separated by a `;` argument.
+//!
+//! A remote tmux runs on an `OpenRig` host over the shared SSH connection.
+//! It lists only the rig seats there, named `seat@rig@host`, so they never
+//! clash with local sessions and group by rig and host.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
+use super::groups::seat_of;
 use super::keys::KeyInput;
 use super::screen::{CAPTURE_FORMAT, Screen, parse_capture};
 use crate::ai::find_on_path;
+use crate::remote::connection;
 
 /// Where Homebrew puts programs; a Mac app opened from the Finder does not
 /// have these on its `PATH`.
@@ -19,6 +27,16 @@ const BREW_FOLDERS: [&str; 3] = ["/opt/homebrew/bin", "/usr/local/bin", "/home/l
 /// One line per pane from `list-panes -a`: session, times, program, folder,
 /// and whether it is the pane you see in that session.
 const LIST_FORMAT: &str = "#{session_name}:#{session_created}:#{window_activity}:#{window_active}#{pane_active}:#{pane_current_command}:#{pane_current_path}";
+
+/// Prints the path of tmux on a remote host: on its login shell's PATH, or
+/// in a Homebrew folder. Fails when tmux is not there.
+const FIND_REMOTE_TMUX: &str = "p=$(\"${SHELL:-/bin/sh}\" -lc 'command -v tmux' 2>/dev/null) && [ -x \"$p\" ] && echo \"$p\" && exit 0; \
+    for p in /opt/homebrew/bin/tmux /usr/local/bin/tmux /home/linuxbrew/.linuxbrew/bin/tmux; do \
+    [ -x \"$p\" ] && echo \"$p\" && exit 0; done; exit 1";
+/// Runs tmux on a remote host: `$1` is its path, the rest tmux's arguments.
+const RUN_REMOTE_TMUX: &str = "p=$1; shift; exec \"$p\" \"$@\"";
+/// Longest wait for one remote tmux call.
+const REMOTE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The tmux paste buffer Rubrique fills for [`Tmux::paste`] (deleted right
 /// after pasting).
@@ -31,6 +49,8 @@ pub struct Tmux {
     /// `-L <socket>`: a separate tmux server. `None` is the user's normal
     /// server, so Rubrique's sessions also show in `tmux ls`.
     socket: Option<String>,
+    /// The SSH host tmux runs on; `None` for this computer.
+    host: Option<String>,
 }
 
 /// A running session, as the explorer lists it.
@@ -51,7 +71,31 @@ impl Tmux {
     pub fn find() -> Option<Tmux> {
         let program = find_on_path("tmux")
             .or_else(|| BREW_FOLDERS.iter().map(|folder| Path::new(folder).join("tmux")).find(|path| path.is_file()))?;
-        Some(Tmux { program, socket: None })
+        Some(Tmux { program, socket: None, host: None })
+    }
+
+    /// tmux on the SSH host `host`, for its `OpenRig` seats.
+    ///
+    /// # Errors
+    ///
+    /// The host cannot be reached, or tmux is not installed there.
+    pub fn remote(host: &str) -> io::Result<Tmux> {
+        let output = connection::run(host, FIND_REMOTE_TMUX, &[], None, REMOTE_TIMEOUT)?;
+        let path = String::from_utf8_lossy(&output).trim().to_string();
+        if !path.starts_with('/') {
+            return Err(io::Error::other(format!("tmux is not installed on {host}")));
+        }
+        Ok(Tmux { program: PathBuf::from(path), socket: None, host: Some(host.to_string()) })
+    }
+
+    /// The SSH host tmux runs on; `None` for this computer.
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
+    /// The session's name in tmux: a remote seat's name without `@host`.
+    pub fn tmux_name<'a>(&self, name: &'a str) -> &'a str {
+        self.host.as_deref().and_then(|host| name.strip_suffix(host)?.strip_suffix('@')).unwrap_or(name)
     }
 
     /// Where the tmux program is, as shown in Settings.
@@ -67,6 +111,12 @@ impl Tmux {
 
     /// Run tmux with `args`; its output, or its error message as the error.
     fn run(&self, args: &[&str]) -> io::Result<String> {
+        if let Some(host) = &self.host {
+            let mut remote_args = vec![self.program.as_os_str()];
+            remote_args.extend(args.iter().map(OsStr::new));
+            let output = connection::run(host, RUN_REMOTE_TMUX, &remote_args, None, REMOTE_TIMEOUT)?;
+            return Ok(String::from_utf8_lossy(&output).into_owned());
+        }
         let mut command = Command::new(&self.program);
         if let Some(socket) = &self.socket {
             command.args(["-L", socket]);
@@ -83,11 +133,20 @@ impl Tmux {
     /// server runs (tmux reports that as an error).
     pub fn list_sessions(&self) -> Vec<SessionInfo> {
         let output = self.run(&["list-panes", "-a", "-F", LIST_FORMAT]).unwrap_or_default();
-        parse_session_list(&output)
+        let sessions = parse_session_list(&output);
+        match &self.host {
+            None => sessions,
+            Some(host) => sessions
+                .into_iter()
+                .filter(|session| seat_of(&session.name).is_some())
+                .map(|session| SessionInfo { name: format!("{}@{host}", session.name), ..session })
+                .collect(),
+        }
     }
 
     /// True when a session with exactly this name runs.
     pub fn has_session(&self, name: &str) -> bool {
+        let name = self.tmux_name(name);
         self.run(&["has-session", "-t", &format!("={name}")]).is_ok()
     }
 
@@ -100,6 +159,7 @@ impl Tmux {
         if self.has_session(name) {
             return Ok(());
         }
+        let name = self.tmux_name(name);
         let folder = folder.to_string_lossy();
         self.run(&["new-session", "-d", "-s", name, "-c", &folder]).map(|_| ())
     }
@@ -110,7 +170,7 @@ impl Tmux {
     ///
     /// The session is gone, or tmux failed.
     pub fn capture(&self, name: &str) -> io::Result<Screen> {
-        let target = target(name);
+        let target = target(self.tmux_name(name));
         let output = self.run(&[
             "display-message",
             "-p",
@@ -133,7 +193,7 @@ impl Tmux {
     ///
     /// The session is gone, or tmux failed.
     pub fn plain_screen(&self, name: &str) -> io::Result<String> {
-        self.run(&["capture-pane", "-p", "-t", &target(name)])
+        self.run(&["capture-pane", "-p", "-t", &target(self.tmux_name(name))])
     }
 
     /// Make the session's window `columns` by `rows` characters.
@@ -143,7 +203,7 @@ impl Tmux {
     /// The session is gone, or tmux failed.
     pub fn resize(&self, name: &str, columns: u16, rows: u16) -> io::Result<()> {
         let (columns, rows) = (columns.to_string(), rows.to_string());
-        self.run(&["resize-window", "-t", &target(name), "-x", &columns, "-y", &rows]).map(|_| ())
+        self.run(&["resize-window", "-t", &target(self.tmux_name(name)), "-x", &columns, "-y", &rows]).map(|_| ())
     }
 
     /// Type `keys` into the session, all in one tmux call.
@@ -155,7 +215,7 @@ impl Tmux {
         if keys.is_empty() {
             return Ok(());
         }
-        let target = target(name);
+        let target = target(self.tmux_name(name));
         let mut args: Vec<&str> = Vec::new();
         for (index, key) in keys.iter().enumerate() {
             if index > 0 {
@@ -179,7 +239,7 @@ impl Tmux {
     ///
     /// The session is gone, or tmux failed.
     pub fn paste(&self, name: &str, text: &str) -> io::Result<()> {
-        let target = target(name);
+        let target = target(self.tmux_name(name));
         let args = [
             "set-buffer",
             "-b",
@@ -209,7 +269,7 @@ impl Tmux {
     ///
     /// The session is gone, the name is taken, or tmux failed.
     pub fn rename(&self, from: &str, to: &str) -> io::Result<()> {
-        self.run(&["rename-session", "-t", &format!("={from}"), to]).map(|_| ())
+        self.run(&["rename-session", "-t", &format!("={}", self.tmux_name(from)), self.tmux_name(to)]).map(|_| ())
     }
 
     /// End session `name` and everything running in it.
@@ -218,7 +278,7 @@ impl Tmux {
     ///
     /// The session is gone, or tmux failed.
     pub fn kill_session(&self, name: &str) -> io::Result<()> {
-        self.run(&["kill-session", "-t", &format!("={name}")]).map(|_| ())
+        self.run(&["kill-session", "-t", &format!("={}", self.tmux_name(name))]).map(|_| ())
     }
 
     /// Stop the session and everything running in it (tests only: closing
@@ -343,6 +403,32 @@ mod tests {
         };
         assert_eq!(new_session_name(&[]), "term-1");
         assert_eq!(new_session_name(&[taken("term-1"), taken("term-3")]), "term-2");
+    }
+
+    /// A remote tmux lists only the rig seats, as `seat@rig@host`, and gets
+    /// the plain seat name back in every call.
+    #[test]
+    fn remote_tmux_lists_seats_with_their_host() {
+        use std::os::unix::fs::PermissionsExt;
+
+        crate::remote::testing::use_fake_ssh();
+        let temp = crate::test_support::TempFolder::new();
+        let program = temp.write(
+            "tmux",
+            "#!/bin/sh\ncd \"${0%/*}\"\nprintf '%s\\n' \"$*\" >> calls\n\
+             printf 'builder@demo:1:2:11:claude:/srv\\nshell:1:2:11:zsh:/srv\\n'\n",
+        );
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let tmux = Tmux { program, socket: None, host: Some("me@rig-host".to_string()) };
+
+        let names: Vec<String> = tmux.list_sessions().into_iter().map(|session| session.name).collect();
+        assert_eq!(names, ["builder@demo@me@rig-host"]);
+        tmux.paste("builder@demo@me@rig-host", "it's $(done)").unwrap();
+        tmux.kill_session("builder@demo@me@rig-host").unwrap();
+        let calls = std::fs::read_to_string(temp.path().join("calls")).unwrap();
+        assert!(calls.contains("set-buffer -b rubrique-send -- it's $(done) ; paste-buffer"), "{calls}");
+        assert!(calls.contains("-t =builder@demo: Enter"), "{calls}");
+        assert!(calls.contains("kill-session -t =builder@demo\n"), "{calls}");
     }
 
     /// Runs only where tmux is installed; uses its own tmux server.

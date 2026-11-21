@@ -8,6 +8,29 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **OpenRig switch.** Settings → OpenRig has a Use OpenRig switch, off
+  by default (on for settings that already list a remote rig). Off, the
+  OpenRig section, Send to OpenRig and remote rigs are hidden, and seats
+  show as plain terminals. The page shows the OpenRig mark and a link to
+  openrig.dev.
+- **Remote OpenRig rigs in Settings.** Settings → OpenRig lists your
+  remote rigs. Add one by SSH host (the hosts in `~/.ssh/config` are one
+  click away), remove one, or click Check to see its seats, or what is
+  missing: the SSH login, rig on that computer, or a running team.
+- **OpenRig section.** OpenRig seats have their own section in the
+  explorer, under Terminals, with a group per rig and its pods. Seats of
+  remote rigs show as `rig@host`; open one to watch and type into it over
+  SSH (tmux must be installed on that computer). Right-click a seat to send
+  it a step from the open document, copy its address or attach command,
+  open it in the Terminal app, or stop it. Terminals and OpenRig start
+  folded when they have nothing to show.
+- **Focus a list.** Double-click the Terminals or OpenRig header (or the
+  empty space under the list) to fold the file tree (and, for OpenRig,
+  Terminals) and give that list the whole explorer. Double-click again to
+  fold the sections back as they were.
+
 ## [1.8.0] - 2026-11-20
 
 ### Added

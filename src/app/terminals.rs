@@ -10,14 +10,59 @@ use super::{OpenFile, RubriqueApp};
 use crate::explorer::tree::path_under_root;
 use crate::explorer::view::{InlineRename, SessionEdit};
 use crate::remote;
-use crate::terminal::groups::{TerminalGroup, group_terminals};
+use crate::terminal::groups::{SessionGroups, group_terminals, seat_of};
 use crate::terminal::is_terminal_path;
 use crate::terminal::monitor::{TerminalRow, move_name};
 use crate::terminal::session::LiveTerminal;
 use crate::terminal::tmux::{file_for_session, new_session_name};
 use crate::terminal::{TERMINAL_EXTENSION, TERMINAL_FILE_TEXT};
 
+/// Which explorer sections were already looked at for folding at startup.
+#[derive(Debug, Default)]
+pub(super) struct StartupFolds {
+    terminals: bool,
+    openrig: bool,
+}
+
 impl RubriqueApp {
+    /// Keep the Terminals list checking the remote rigs (none with `OpenRig`
+    /// off), and fold empty sections at startup. Called every frame.
+    pub(super) fn poll_terminal_sources(&mut self, ctx: &eframe::egui::Context) {
+        if let Some(monitor) = &mut self.terminals {
+            let hosts: &[String] = if self.settings.openrig_enabled { &self.settings.openrig_rigs } else { &[] };
+            monitor.set_remote_hosts(hosts, ctx);
+        }
+        self.fold_empty_sections_at_startup();
+    }
+
+    /// At startup, fold Terminals when no plain tmux session runs and
+    /// `OpenRig` when no seat runs, each once its sessions were checked
+    /// (remote rigs included). Never unfolds a section.
+    fn fold_empty_sections_at_startup(&mut self) {
+        let Some(monitor) = &self.terminals else {
+            return;
+        };
+        let openrig = self.settings.openrig_enabled;
+        let is_seat = |name: &str| openrig && seat_of(name).is_some();
+        let folds = &mut self.startup_folds;
+        if folds.terminals && folds.openrig {
+            return;
+        }
+        let rows = monitor.rows();
+        if !folds.terminals && monitor.local_checked() {
+            folds.terminals = true;
+            if !rows.iter().any(|row| !is_seat(&row.info.name)) {
+                self.settings.layout.terminals_collapsed = true;
+            }
+        }
+        if !folds.openrig && monitor.all_checked() {
+            folds.openrig = true;
+            if !rows.iter().any(|row| is_seat(&row.info.name)) {
+                self.settings.layout.openrig_collapsed = true;
+            }
+        }
+    }
+
     /// A `.tmux` file as a tab: its session, started in the file's folder.
     /// `None` (with a status message) when it cannot be opened.
     pub(super) fn load_terminal(&mut self, path: &Path) -> Option<OpenFile> {
@@ -56,7 +101,7 @@ impl RubriqueApp {
             .into_iter()
             .find(|row| row.info.name == name)
             .map_or_else(|| self.new_terminal_folder(), |row| row.info.folder);
-        let terminal = LiveTerminal::new(monitor.tmux().clone(), name.to_string(), None, folder);
+        let terminal = LiveTerminal::new(monitor.tmux_for(name), name.to_string(), None, folder);
         self.add_tab(OpenFile::Terminal { terminal: Box::new(terminal) });
     }
 
@@ -93,7 +138,7 @@ impl RubriqueApp {
         let Some(monitor) = &self.terminals else {
             return;
         };
-        if let Err(error) = monitor.tmux().kill_session(name) {
+        if let Err(error) = monitor.tmux_for(name).kill_session(name) {
             self.show_status(format!("Cannot exit the terminal: {error}"));
             return;
         }
@@ -120,12 +165,13 @@ impl RubriqueApp {
         }
     }
 
-    /// The groups of the Terminals list for `rows` (as drawn): by explorer
-    /// folder, then "Other", then by rig.
-    pub(super) fn terminal_groups(&self, rows: Option<&[TerminalRow]>) -> Vec<TerminalGroup> {
+    /// The groups of the Terminals list for `rows` (as drawn), by explorer
+    /// folder then "Other", and of the `OpenRig` list, by rig. With `OpenRig`
+    /// off, its seats are plain terminals.
+    pub(super) fn terminal_groups(&self, rows: Option<&[TerminalRow]>) -> SessionGroups {
         let roots: Vec<(&str, &Path)> =
             self.roots.iter().map(|root| (root.name.as_str(), root.path.as_path())).collect();
-        rows.map(|rows| group_terminals(rows, &roots)).unwrap_or_default()
+        rows.map(|rows| group_terminals(rows, &roots, self.settings.openrig_enabled)).unwrap_or_default()
     }
 
     /// A terminal was dragged: save the list as it was drawn (`rows`), with
@@ -222,6 +268,9 @@ impl RubriqueApp {
         let Some(monitor) = &self.terminals else {
             return Err("tmux is not installed".to_string());
         };
+        if monitor.is_remote(from) {
+            return Err("A remote rig's terminal keeps its OpenRig name".to_string());
+        }
         if monitor.tmux().has_session(&to) {
             return Err(format!("A terminal called \u{201c}{to}\u{201d} is already running"));
         }

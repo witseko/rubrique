@@ -67,6 +67,9 @@ pub struct Settings {
     /// The order the user dragged the Terminals list into, by session name.
     /// Sessions not in it (new ones) show above, newest first.
     pub terminal_order: Vec<String>,
+    /// `OpenRig` is turned on: the `OpenRig` section, Send to `OpenRig` and
+    /// the remote rigs show. Off by default.
+    pub openrig_enabled: bool,
     /// SSH host names of the remote `OpenRig` rigs added in Send to `OpenRig`, in order.
     pub openrig_rigs: Vec<String>,
     /// Whether to check for new versions, and when it last did.
@@ -116,6 +119,7 @@ impl Settings {
         let mut height = None;
         // Files from before multiple folders have one `last_folder` line.
         let mut legacy_folder = None;
+        let mut openrig_enabled = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -142,6 +146,7 @@ impl Settings {
                 "openrig_rig" if is_valid_host(value) && !settings.openrig_rigs.iter().any(|host| host == value) => {
                     settings.openrig_rigs.push(value.to_string());
                 }
+                "openrig_enabled" => openrig_enabled = Some(value == "true"),
                 "note_marks" => settings.note_marks = value == "true",
                 "html_browser_preview" => settings.html_browser_preview = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
@@ -155,6 +160,8 @@ impl Settings {
         if settings.folders.is_empty() {
             settings.folders.extend(legacy_folder);
         }
+        // Files from before the switch keep OpenRig on when they added a remote rig.
+        settings.openrig_enabled = openrig_enabled.unwrap_or(!settings.openrig_rigs.is_empty());
         if let (Some(width), Some(height)) = (width, height) {
             settings.window_size = Some((width, height));
         }
@@ -182,10 +189,11 @@ impl Settings {
             let _ = writeln!(lines, "terminal_order={name}");
             lines
         });
-        let rig_lines = self.openrig_rigs.iter().fold(String::new(), |mut lines, host| {
-            let _ = writeln!(lines, "openrig_rig={host}");
-            lines
-        });
+        let rig_lines =
+            self.openrig_rigs.iter().fold(format!("openrig_enabled={}\n", self.openrig_enabled), |mut lines, host| {
+                let _ = writeln!(lines, "openrig_rig={host}");
+                lines
+            });
         format!(
             "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
             last_file,
@@ -375,11 +383,14 @@ mod tests {
                 side_view: layout::SideView::Notes,
                 files_collapsed: false,
                 terminals_collapsed: true,
+                openrig_collapsed: true,
                 tab_position: layout::TabPosition::Explorer,
                 explorer_view: layout::ExplorerView::Tabs,
                 preview_mode: layout::PreviewMode::Edit,
+                ..layout::LayoutSettings::default()
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
+            openrig_enabled: true,
             openrig_rigs: vec!["build-box".to_string(), "me@gpu.example.com".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {
                 enabled: false,
@@ -424,6 +435,16 @@ mod tests {
     fn old_preview_mode_line_is_ignored() {
         // Every file opens in preview now, so the old global mode is not read.
         assert_eq!(Settings::parse("preview_mode=false\n"), Settings::default());
+    }
+
+    /// `OpenRig` starts off, but a file from before the switch that added a
+    /// remote rig keeps it on; a saved choice always wins.
+    #[test]
+    fn openrig_is_off_unless_a_rig_was_added_or_it_was_turned_on() {
+        assert!(!Settings::parse("").openrig_enabled);
+        assert!(Settings::parse("openrig_rig=build-box\n").openrig_enabled);
+        assert!(!Settings::parse("openrig_rig=build-box\nopenrig_enabled=false\n").openrig_enabled);
+        assert!(Settings::parse("openrig_enabled=true\n").openrig_enabled);
     }
 
     #[test]
