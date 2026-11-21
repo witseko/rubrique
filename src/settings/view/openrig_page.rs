@@ -50,11 +50,13 @@ pub enum RigCheck<'a> {
 /// What the user did in the SSH host field.
 #[derive(Debug, Clone, Copy)]
 pub struct HostField {
-    /// The typed host is valid and not in the list yet.
-    pub addable: bool,
-    /// Enter was pressed in the field.
-    pub entered: bool,
+    /// Add the typed host: "Add rig" was clicked, or Enter pressed in the
+    /// field, with a valid host that is not in the list yet.
+    pub add: bool,
 }
+
+/// Height of the row with the host field and "Add rig".
+const FIELD_ROW_HEIGHT: f32 = 30.0;
 
 /// The `OpenRig` group: the About card with the logo and website, the
 /// switch, then (when on) each remote rig with Check and Remove, and a field
@@ -107,12 +109,10 @@ pub(super) fn openrig_section(ui: &mut Ui, info: OpenRigInfo) -> Option<Settings
         });
         check_line(ui, &row.check);
     }
-    ui.add_space(6.0);
-    ui.label("Add a remote rig");
+    ui.add_space(10.0);
+    ui.label(RichText::new("Add a remote rig").strong());
     let hosts: Vec<&str> = rigs.iter().map(|row| row.host).collect();
-    let field = rig_host_field(ui, new_host, known_hosts, &hosts);
-    let add = ui.add_enabled(field.addable, egui::Button::new("Add rig")).clicked();
-    if field.addable && (add || field.entered) {
+    if rig_host_field(ui, new_host, known_hosts, &hosts).add {
         action = Some(SettingsAction::AddRemoteRig(new_host.trim().to_owned()));
     }
     action
@@ -189,12 +189,26 @@ fn check_line(ui: &mut Ui, check: &RigCheck) {
     }
 }
 
-/// The SSH host field for a new remote rig, with a button for each host in
-/// `~/.ssh/config` that is not in `rigs` yet, and a hint when the typed host
-/// cannot be added. The caller draws its own Add button.
+/// The SSH host field for a new remote rig with "Add rig" beside it, then a
+/// button for each host in `~/.ssh/config` that is not in `rigs` yet, and a
+/// hint when the typed host cannot be added.
 pub fn rig_host_field(ui: &mut Ui, host: &mut String, known_hosts: &[String], rigs: &[&str]) -> HostField {
-    let field =
-        ui.add(egui::TextEdit::singleline(host).hint_text("server or user@server").desired_width(f32::INFINITY));
+    let addable = |host: &str| is_valid_host(host.trim()) && !rigs.contains(&host.trim());
+    let enabled = addable(host);
+    let row = vec2(ui.available_width(), FIELD_ROW_HEIGHT);
+    let (field, clicked) = ui
+        .allocate_ui_with_layout(row, Layout::right_to_left(Align::Center), |ui| {
+            let visuals = ui.visuals().clone();
+            let label = RichText::new("Add rig").strong().color(visuals.panel_fill);
+            let button = egui::Button::new(label).fill(visuals.hyperlink_color).min_size(vec2(0.0, FIELD_ROW_HEIGHT));
+            let clicked = ui.add_enabled(enabled, button).clicked();
+            let edit = egui::TextEdit::singleline(host)
+                .hint_text("server or user@server")
+                .font(egui::TextStyle::Monospace)
+                .desired_width(ui.available_width());
+            (ui.add(edit), clicked)
+        })
+        .inner;
     let offered: Vec<&String> = known_hosts.iter().filter(|name| !rigs.contains(&name.as_str())).collect();
     if !offered.is_empty() {
         ui.horizontal_wrapped(|ui| {
@@ -207,13 +221,11 @@ pub fn rig_host_field(ui: &mut Ui, host: &mut String, known_hosts: &[String], ri
         });
     }
     let typed = host.trim();
-    let valid = is_valid_host(typed);
-    let listed = rigs.contains(&typed);
-    if !typed.is_empty() && !valid {
+    if !typed.is_empty() && !is_valid_host(typed) {
         ui.weak("Use a host name, or user@host");
-    } else if listed {
+    } else if rigs.contains(&typed) {
         ui.weak("This rig is in the list already.");
     }
     let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-    HostField { addable: valid && !listed, entered }
+    HostField { add: addable(host) && (clicked || entered) }
 }

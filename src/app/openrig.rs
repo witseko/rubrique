@@ -460,22 +460,13 @@ fn rig_picker(ui: &mut Ui, draft: &mut Draft, rigs: &[String]) -> Option<RigEven
     event
 }
 
-/// The inline SSH host field for a new remote rig, with Add and Cancel.
+/// The inline SSH host field for a new remote rig (with "Add rig"), and Cancel.
 fn new_rig_fields(ui: &mut Ui, new_rig: &mut NewRig, rigs: &[String]) -> NewRigAction {
     ui.label("SSH host of the remote rig");
-    let field = rig_host_field(
-        ui,
-        &mut new_rig.host,
-        &new_rig.known_hosts,
-        &rigs.iter().map(String::as_str).collect::<Vec<_>>(),
-    );
-    let (add, cancel) = ui
-        .horizontal(|ui| {
-            let add = ui.add_enabled(field.addable, egui::Button::new("Add rig")).clicked();
-            (add, ui.button("Cancel").clicked())
-        })
-        .inner;
-    if field.addable && (add || field.entered) {
+    let known: Vec<&str> = rigs.iter().map(String::as_str).collect();
+    let field = rig_host_field(ui, &mut new_rig.host, &new_rig.known_hosts, &known);
+    let cancel = ui.button("Cancel").clicked();
+    if field.add {
         NewRigAction::Add
     } else if cancel {
         NewRigAction::Cancel
