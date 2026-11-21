@@ -30,6 +30,7 @@ mod openrig;
 mod privacy;
 mod remote;
 mod scratch_paths;
+mod seats;
 mod side_panel;
 mod structure;
 mod sublime_import;
@@ -38,6 +39,7 @@ mod tab_groups;
 mod tab_list;
 mod tabs;
 mod terminals;
+use terminals::StartupFolds;
 mod text_highlight;
 mod update;
 mod voice;
@@ -91,7 +93,7 @@ use crate::settings::view::{
 use crate::settings::{Settings, default_agents_folder, default_scratch_folder, default_skills_folder, themes_folder};
 use crate::terminal::agent_sessions::SessionHistory;
 use crate::terminal::is_terminal_path;
-use crate::terminal::monitor::{TerminalMonitor, in_saved_order};
+use crate::terminal::monitor::{TerminalMonitor, TerminalRow, in_saved_order};
 use crate::terminal::session::LiveTerminal;
 use crate::terminal::tmux::Tmux;
 use crate::terminal::view::show_terminal;
@@ -412,6 +414,11 @@ pub struct RubriqueApp {
     scroll_to_revealed: bool,
     /// The files or folder the "Delete" dialog asks about, while it is open.
     deleting: Option<Vec<PathBuf>>,
+    /// The `OpenRig` seat whose "Stop seat" dialog is open.
+    stopping_seat: Option<String>,
+    /// Terminals and `OpenRig` were folded at startup if they had nothing to
+    /// show (each once its first check finished).
+    startup_folds: StartupFolds,
     /// The range selected in the file tree.
     file_selection: FileSelection,
     /// The "Open path" dialog, while it is open.
@@ -537,6 +544,8 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            stopping_seat: None,
+            startup_folds: StartupFolds::default(),
             file_selection: FileSelection::default(),
             open_path: None,
             clone_repo: None,
@@ -1335,6 +1344,9 @@ impl RubriqueApp {
         if response.should_close() {
             self.settings_open = false;
         }
+        if !self.settings_open {
+            self.openrig.settings_closed();
+        }
     }
 
     /// The settings window's content. Theme picks apply at once.
@@ -1371,6 +1383,7 @@ impl RubriqueApp {
         };
         let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
         let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
+        let openrig = self.openrig.settings_info(&mut self.settings.openrig_enabled, &self.settings.openrig_rigs);
         let highlight = self.rule_writer.highlight_info(&mut self.settings.text_highlight, ask_tool_name);
         let html_preview =
             html_snapshot::html_preview_info(&mut self.settings.html_browser_preview, &self.html_snapshots, &install);
@@ -1392,6 +1405,7 @@ impl RubriqueApp {
             ai,
             voice,
             terminals,
+            openrig,
             html_preview,
             self.update.settings_info(&mut self.settings.updates),
         );
@@ -1446,6 +1460,17 @@ impl RubriqueApp {
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
+            SettingsAction::AddRemoteRig(host) => {
+                if self.openrig.add_remote_rig(ctx, host, &mut self.settings.openrig_rigs) {
+                    self.write_settings();
+                }
+            }
+            SettingsAction::RemoveRemoteRig(host) => {
+                self.openrig.remove_remote_rig(&host, &mut self.settings.openrig_rigs);
+                self.write_settings();
+            }
+            SettingsAction::CheckRemoteRig(host) => self.openrig.check_remote_rig(ctx, host),
+            SettingsAction::OpenRigToggled => self.write_settings(),
             SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
             SettingsAction::Copy(text) => self.install_action(ctx, InstallAction::Copy(text)),
             SettingsAction::Install(action) => self.install_action(ctx, action),
@@ -1883,7 +1908,10 @@ impl RubriqueApp {
             note_marks: self.settings.note_marks.then_some(&self.note_marks),
             remote_enabled: self.settings.remote.enabled,
             terminals: terminal_rows.as_deref(),
-            terminal_groups: &terminal_groups,
+            terminal_groups: &terminal_groups.terminals,
+            rig_groups: &terminal_groups.rigs,
+            remote_rigs: !self.settings.openrig_rigs.is_empty(),
+            openrig: self.settings.openrig_enabled,
             folded_terminal_groups: &self.folded_terminal_groups,
             open_terminal: match &self.open_file {
                 OpenFile::Terminal { terminal } => Some(terminal.name.as_str()),
@@ -1916,55 +1944,67 @@ impl RubriqueApp {
         if action.is_some() {
             self.revealed = None;
         }
+        if let Some(action) = action {
+            self.apply_explorer_action(ui.ctx(), action, terminal_rows.as_deref());
+        }
+    }
+
+    /// Carry out a click in the explorer. `terminal_rows` is the Terminals
+    /// list as it was drawn, for a dragged terminal.
+    fn apply_explorer_action(&mut self, ctx: &Context, action: ExplorerAction, terminal_rows: Option<&[TerminalRow]>) {
         match action {
             // Opens a tab, or switches to the file's tab when it is open.
-            Some(ExplorerAction::OpenFile(path)) => self.open_in_tab(path),
-            Some(ExplorerAction::OpenInFileManager(path)) => {
+            ExplorerAction::OpenFile(path) => self.open_in_tab(path),
+            ExplorerAction::OpenInFileManager(path) => {
                 if let Err(error) = crate::media::open_in_file_manager(&path) {
                     self.show_status(error);
                 }
             }
-            Some(ExplorerAction::Copy(text)) => self.copy_to_clipboard(ui.ctx(), text),
-            Some(ExplorerAction::Refresh) => {
+            ExplorerAction::Copy(text) => self.copy_to_clipboard(ctx, text),
+            ExplorerAction::Refresh => {
                 self.roots.iter_mut().for_each(FsNode::refresh);
                 self.note_marks.clear();
                 if let Some(monitor) = &self.terminals {
                     monitor.refresh();
                 }
             }
-            Some(ExplorerAction::OpenTerminal(name)) => self.open_terminal_session(&name),
-            Some(ExplorerAction::NewTerminal) => self.request_new_terminal(),
-            Some(ExplorerAction::New(folder, kind)) => self.start_new_entry(folder, kind),
-            Some(ExplorerAction::ShowTerminalInFiles(name)) => self.show_terminal_in_files(&name),
-            Some(ExplorerAction::RenameTerminal(name)) => self.start_terminal_rename(name),
-            Some(ExplorerAction::ExitTerminal(name)) => self.exit_terminal(&name),
-            Some(ExplorerAction::ToggleAgentSessions(name)) => self.toggle_agent_sessions(name),
-            Some(ExplorerAction::ResumeAgentSession { terminal, id, new_terminal }) => {
+            ExplorerAction::OpenTerminal(name) => self.open_terminal_session(&name),
+            ExplorerAction::NewTerminal => self.request_new_terminal(),
+            ExplorerAction::ShowTerminalInFiles(name) => self.show_terminal_in_files(&name),
+            ExplorerAction::RenameTerminal(name) => self.start_terminal_rename(name),
+            ExplorerAction::ExitTerminal(name) => self.exit_terminal(&name),
+            ExplorerAction::Seat(name, command) => self.seat_command(ctx, name, command),
+            ExplorerAction::OpenRigSettings => {
+                self.settings_group = SettingsGroup::OpenRig;
+                self.settings_open = true;
+            }
+            ExplorerAction::New(folder, kind) => self.start_new_entry(folder, kind),
+            ExplorerAction::ToggleAgentSessions(name) => self.toggle_agent_sessions(name),
+            ExplorerAction::ResumeAgentSession { terminal, id, new_terminal } => {
                 self.resume_agent_session(&terminal, &id, new_terminal);
             }
-            Some(ExplorerAction::RemoveRoot(path)) => self.request_remove_root(path),
-            Some(ExplorerAction::MoveRoot { from, to }) => self.move_root(from, to),
-            Some(ExplorerAction::ToggleTerminalGroup(key)) => self.toggle_terminal_group(key),
-            Some(ExplorerAction::MoveTerminal { name, anchor, after }) => {
-                self.move_terminal(terminal_rows.as_deref(), &name, &anchor, after);
+            ExplorerAction::RemoveRoot(path) => self.request_remove_root(path),
+            ExplorerAction::MoveRoot { from, to } => self.move_root(from, to),
+            ExplorerAction::ToggleTerminalGroup(key) => self.toggle_terminal_group(key),
+            ExplorerAction::MoveTerminal { name, anchor, after } => {
+                self.move_terminal(terminal_rows, &name, &anchor, after);
             }
-            Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
-            Some(ExplorerAction::OpenPath) => self.start_open_path(),
-            Some(ExplorerAction::CloneRepository) => self.start_clone_repo(),
-            Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
-            Some(ExplorerAction::NewScratch { encrypted }) => {
+            ExplorerAction::AddFolder => self.choose_folder_to_add(),
+            ExplorerAction::OpenPath => self.start_open_path(),
+            ExplorerAction::CloneRepository => self.start_clone_repo(),
+            ExplorerAction::AddRemoteFolder => self.open_add_remote(),
+            ExplorerAction::NewScratch { encrypted } => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
-                self.new_scratch(ui.ctx(), encrypted);
+                self.new_scratch(ctx, encrypted);
             }
-            Some(ExplorerAction::Rename(path)) => self.start_rename(path),
-            Some(ExplorerAction::SetEncrypted { path, encrypt }) => self.set_scratch_encrypted(&path, encrypt),
-            Some(ExplorerAction::RenameInTree(path)) => {
+            ExplorerAction::Rename(path) => self.start_rename(path),
+            ExplorerAction::SetEncrypted { path, encrypt } => self.set_scratch_encrypted(&path, encrypt),
+            ExplorerAction::RenameInTree(path) => {
                 self.clear_name_fields();
                 self.tree_rename = Some(InlineRename::new(path));
             }
-            Some(ExplorerAction::MoveFiles(paths)) => self.choose_move_folder(&paths),
-            Some(ExplorerAction::Delete(paths)) => self.request_delete(paths),
-            None => {}
+            ExplorerAction::MoveFiles(paths) => self.choose_move_folder(&paths),
+            ExplorerAction::Delete(paths) => self.request_delete(paths),
         }
     }
 
@@ -3322,6 +3362,7 @@ impl eframe::App for RubriqueApp {
         self.poll_remote();
         self.poll_remote_saves();
         self.poll_pending_sends();
+        self.poll_terminal_sources(&ctx);
         self.poll_agent_sessions(&ctx);
         self.poll_update(&ctx);
         self.poll_git(&ctx);
@@ -3394,6 +3435,7 @@ impl eframe::App for RubriqueApp {
         self.note_dialog(&ctx);
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
+        self.stop_seat_dialog(&ctx);
         self.open_path_dialog(&ctx);
         self.clone_repo_dialog(&ctx);
         self.add_remote_dialog(&ctx);

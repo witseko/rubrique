@@ -14,6 +14,19 @@ const ARROW_ROOM: f32 = 18.0;
 /// Width and height of a fold arrow, in points.
 const ARROW_SIZE: f32 = 7.0;
 
+/// True when the empty space under a section's rows was double-clicked:
+/// from the end of the rows to the bottom of what is visible. Takes no
+/// layout space, so the list does not grow.
+pub fn empty_space_double_clicked(ui: &Ui, id: &str) -> bool {
+    let visible = ui.clip_rect();
+    let top = ui.cursor().top().max(visible.top());
+    if top >= visible.bottom() {
+        return false;
+    }
+    let rect = egui::Rect::from_min_max(egui::pos2(visible.left(), top), visible.max);
+    ui.interact(rect, ui.scope_id().with(id), Sense::click()).double_clicked()
+}
+
 /// How much room a section header has for its buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonRoom {
@@ -27,24 +40,34 @@ pub enum ButtonRoom {
 /// One section header. `title` is drawn as given (callers pass it in
 /// capitals). `after_title` adds small details next to the title (a count,
 /// status dots); `buttons` adds the section's buttons, right-aligned, and
-/// is told whether the whole row fits. Returns true when the title was
-/// clicked (the caller folds or unfolds the section).
+/// is told whether the whole row fits.
 pub fn section_header(
     ui: &mut Ui,
     title: &str,
     expanded: bool,
     after_title: impl FnOnce(&mut Ui),
     buttons: impl FnOnce(&mut Ui, ButtonRoom),
-) -> bool {
+) -> HeaderClicks {
     let layout = egui::Layout::left_to_right(egui::Align::Center);
     let size = vec2(ui.available_width(), SECTION_HEADER_HEIGHT);
     ui.allocate_ui_with_layout(size, layout, |ui| {
-        let clicked = section_title(ui, title, expanded);
+        // Registered before the title and buttons, so they stay on top of it.
+        let background = ui.interact(ui.max_rect(), ui.scope_id().with(("section-background", title)), Sense::click());
+        let title_clicked = section_title(ui, title, expanded);
         after_title(ui);
         section_buttons(ui, title, buttons);
-        clicked
+        HeaderClicks { title: title_clicked, background_double: background.double_clicked() }
     })
     .inner
+}
+
+/// What was clicked in a section header.
+#[derive(Clone, Copy, Debug)]
+pub struct HeaderClicks {
+    /// The title was clicked: the caller folds or unfolds the section.
+    pub title: bool,
+    /// The empty part of the header was double-clicked.
+    pub background_double: bool,
 }
 
 /// The section's buttons, right-aligned in the room left after the title.

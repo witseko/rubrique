@@ -120,8 +120,10 @@ impl RubriqueApp {
         let mut send = None;
         egui::Frame::new().inner_margin(egui::Margin::same(12)).show(ui, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                self.openrig_tasks(ui);
-                ui.separator();
+                if self.settings.openrig_enabled {
+                    self.openrig_tasks(ui);
+                    ui.separator();
+                }
                 if delegations.is_empty() {
                     let hint = "Hand a step to a terminal: write @tmux-<terminal>: what to do, in that step. \
                                 Send pastes it there with the step as context.";
@@ -186,7 +188,7 @@ impl RubriqueApp {
     /// Paste a message into its terminal and mark its mention sent.
     fn deliver(&mut self, pending: &PendingSend) {
         let pasted = match &self.terminals {
-            Some(monitor) => monitor.tmux().paste(&pending.session, &pending.text),
+            Some(monitor) => monitor.tmux_for(&pending.session).paste(&pending.session, &pending.text),
             None => return,
         };
         match pasted {

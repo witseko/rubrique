@@ -6,6 +6,7 @@ use eframe::egui::{self, Key, RichText, Ui};
 use egui::text::{CCursor, CCursorRange};
 
 use super::note_marks::NoteMarks;
+use super::openrig::{show_docked_openrig, show_openrig_section};
 use super::reorder::{ListDrag, draggable};
 use super::section::{ButtonRoom, paint_fold_arrow, section_header};
 use super::selection::{FileRows, FileSelection};
@@ -88,6 +89,25 @@ pub enum ExplorerAction {
     /// before session `anchor`, or after it when `after` is true (a drop at
     /// the end of the group).
     MoveTerminal { name: String, anchor: String, after: bool },
+    /// Something from an `OpenRig` seat's menu, for the seat's session.
+    Seat(String, SeatCommand),
+    /// Open Settings at the remote `OpenRig` rigs.
+    OpenRigSettings,
+}
+
+/// The items of an `OpenRig` seat's menu in the Terminals list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SeatCommand {
+    /// Open Send to `OpenRig` for the open document, with this seat chosen.
+    SendStep,
+    /// Copy the seat's `OpenRig` address (`seat@rig`).
+    CopyAddress,
+    /// Copy the shell command that attaches to the seat's tmux session.
+    CopyAttach,
+    /// Attach to the seat in the system's terminal app.
+    OpenInTerminalApp,
+    /// Ask, then end the seat's tmux session.
+    Stop,
 }
 
 /// What "New" in a folder's menu creates.
@@ -207,6 +227,7 @@ fn hovered_id() -> egui::Id {
 
 /// Read-only facts the tree needs while drawing.
 #[derive(Clone, Copy, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "independent facts about what the explorer may show")]
 pub struct TreeContext<'a> {
     /// Root folder of the entry being drawn, for "Copy relative path".
     pub root: &'a Path,
@@ -228,6 +249,12 @@ pub struct TreeContext<'a> {
     pub terminals: Option<&'a [TerminalRow]>,
     /// The groups of the Terminals list, by indexes into `terminals`.
     pub terminal_groups: &'a [TerminalGroup],
+    /// The rigs of the `OpenRig` list with their pods, by indexes into `terminals`.
+    pub rig_groups: &'a [TerminalGroup],
+    /// Remote rigs were added, so the `OpenRig` section shows even without seats.
+    pub remote_rigs: bool,
+    /// `OpenRig` is turned on: seats get their own section and menu.
+    pub openrig: bool,
     /// The keys of the folded groups of the Terminals list.
     pub folded_terminal_groups: &'a [String],
     /// The session shown in the active tab, highlighted in the list.
@@ -273,17 +300,26 @@ pub fn show_explorer(
     let mut action = None;
     let files_open = !layout.files_collapsed;
     let mut files = FileRows::new(ui, selection, context.open_file);
-    // With Files open, Terminals is a panel docked at the bottom (drawn
-    // first so it claims its height); with Files folded it follows the
-    // Files header and gets the rest of the height.
+    // OpenRig is a panel docked at the very bottom. With Files open,
+    // Terminals is a panel docked above it (each drawn before the space
+    // above it, so it claims its height); with Files folded Terminals
+    // follows the Files header and gets the rest of the height. With Files
+    // and Terminals both folded, OpenRig follows their headers instead.
+    let openrig_fills = !files_open && layout.terminals_collapsed;
+    if !openrig_fills {
+        show_docked_openrig(ui, context, layout, edits.session, &mut action);
+    }
     if files_open {
-        show_docked_terminals(ui, context, &mut layout.terminals_collapsed, edits.session, &mut action);
+        show_docked_terminals(ui, context, layout, edits.session, &mut action);
     }
     if files_header(ui, roots, context, files_open, filter, &mut action) {
         layout.files_collapsed = files_open;
     }
     if !files_open {
-        show_terminals_section(ui, context, &mut layout.terminals_collapsed, edits.session, &mut action);
+        show_terminals_section(ui, context, layout, edits.session, &mut action);
+        if openrig_fills {
+            show_openrig_section(ui, context, layout, edits.session, &mut action);
+        }
         return action;
     }
     // The filter button in the header may have just changed the filter.
@@ -381,6 +417,7 @@ fn files_header(
             fold_all_button(ui, roots);
         },
     )
+    .title
 }
 
 /// The one button the Files header shows when its row of buttons does not
@@ -1208,6 +1245,9 @@ mod tests {
                         remote_enabled: false,
                         terminals: None,
                         terminal_groups: &[],
+                        rig_groups: &[],
+                        remote_rigs: false,
+                        openrig: false,
                         folded_terminal_groups: &[],
                         open_terminal: None,
                         revealed: None,
@@ -1525,5 +1565,120 @@ mod tests {
         assert!(!tree.dialog_open);
         tree.frame(Vec::new());
         assert_eq!(tree.highlighted, FILE_NAMES.map(PathBuf::from));
+    }
+
+    /// Draw the whole explorer with one terminal and two seats, sending
+    /// `events`, and return where the `OpenRig` section's header is.
+    fn explorer_frame(
+        ctx: &Context,
+        layout: &mut crate::settings::layout::LayoutSettings,
+        events: Vec<Event>,
+        time: f64,
+    ) -> Vec<(String, f32)> {
+        use crate::terminal::groups::group_terminals;
+        use crate::terminal::monitor::TerminalRow;
+        use crate::terminal::status::TerminalStatus;
+        use crate::terminal::tmux::SessionInfo;
+        let row = |name: &str| TerminalRow {
+            info: SessionInfo {
+                name: name.to_string(),
+                created: 0,
+                last_output: 0,
+                command: "zsh".to_string(),
+                folder: PathBuf::from("/work"),
+            },
+            status: TerminalStatus::Shell,
+        };
+        let rows = [row("build"), row("dev-impl@demo"), row("lead@demo")];
+        let groups = group_terminals(&rows, &[], true);
+        let input = RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 800.0))),
+            time: Some(time),
+            events,
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let context = super::TreeContext {
+                    root: Path::new(""),
+                    can_remove_roots: false,
+                    filter: super::ExplorerFilter::default(),
+                    open_file: None,
+                    dirty_files: &[],
+                    note_marks: None,
+                    remote_enabled: false,
+                    terminals: Some(&rows),
+                    terminal_groups: &groups.terminals,
+                    rig_groups: &groups.rigs,
+                    remote_rigs: false,
+                    openrig: true,
+                    folded_terminal_groups: &[],
+                    open_terminal: None,
+                    revealed: None,
+                    root_color: None,
+                    agent_history: None,
+                    expanded_terminals: &[],
+                    scratch_folder: None,
+                };
+                let mut filter = super::ExplorerFilter::default();
+                let (mut rename, mut new_entry, mut session) = (None, None, None);
+                let mut edits =
+                    super::ExplorerEdits { rename: &mut rename, new_entry: &mut new_entry, session: &mut session };
+                let mut selection = FileSelection::default();
+                super::show_explorer(ui, &mut [], layout, &mut filter, &context, &mut edits, &mut selection);
+            });
+        });
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            if let egui::Shape::Text(text) = &clipped.shape
+                && clipped.clip_rect.contains(text.pos)
+            {
+                texts.push((text.galley.text().to_string(), text.pos.y));
+            }
+        }
+        texts
+    }
+
+    /// Two quick clicks at `pos`, one frame each, starting at `time`.
+    fn double_click(ctx: &Context, layout: &mut crate::settings::layout::LayoutSettings, pos: egui::Pos2, time: f64) {
+        let button = |pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::default(),
+        };
+        let _ = explorer_frame(ctx, layout, vec![Event::PointerMoved(pos)], time);
+        for (step, pressed) in [(1.0, true), (2.0, false), (3.0, true), (4.0, false)] {
+            let _ = explorer_frame(ctx, layout, vec![button(pressed)], time + 0.05 * step);
+        }
+    }
+
+    /// With Terminals open, a double click in the empty space under the
+    /// `OpenRig` seats (at the very bottom of the explorer) gives `OpenRig`
+    /// the explorer.
+    #[test]
+    fn double_click_under_the_seats_focuses_openrig() {
+        for (files_collapsed, openrig_collapsed) in [(false, false), (true, false), (false, true), (true, true)] {
+            let ctx = Context::default();
+            let mut layout =
+                crate::settings::layout::LayoutSettings { files_collapsed, openrig_collapsed, ..Default::default() };
+            let _ = explorer_frame(&ctx, &mut layout, Vec::new(), 0.0);
+            // Folded, the section is only its header, at the very bottom.
+            double_click(&ctx, &mut layout, egui::pos2(250.0, 790.0), 1.0);
+            let _ = explorer_frame(&ctx, &mut layout, Vec::new(), 2.0);
+            let texts = explorer_frame(&ctx, &mut layout, Vec::new(), 2.1);
+            let seat_shown = texts.iter().any(|(text, _)| text.contains("lead@demo"));
+            assert!(seat_shown, "the seats are drawn: {texts:?}");
+            assert!(layout.files_collapsed, "start: files {files_collapsed}, openrig {openrig_collapsed}; {layout:?}");
+            assert!(
+                layout.terminals_collapsed,
+                "start: files {files_collapsed}, openrig {openrig_collapsed}; {layout:?}"
+            );
+            assert!(
+                !layout.openrig_collapsed,
+                "start: files {files_collapsed}, openrig {openrig_collapsed}; {layout:?}"
+            );
+        }
     }
 }

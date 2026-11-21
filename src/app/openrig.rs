@@ -10,8 +10,8 @@ use super::{OpenFile, RubriqueApp, char_to_byte};
 use crate::document::{preview_selection, view::editor_selection};
 use crate::openrig::{Inventory, MAX_BODY_BYTES, Rig, RigHost, TaskLink, TaskStatus, store};
 use crate::remote;
-use crate::remote::mirror::is_valid_host;
 use crate::settings::openrig_tasks_folder;
+use crate::settings::view::{OpenRigInfo, RemoteRigRow, RigCheck, rig_host_field};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(8);
 
@@ -25,6 +25,8 @@ struct Draft {
     new_rig: Option<NewRig>,
     inventory: Option<Result<Inventory, String>>,
     seat: Option<usize>,
+    /// The seat address to choose once the seats arrive (from a seat's menu).
+    wanted_seat: Option<String>,
     error: Option<String>,
 }
 
@@ -52,6 +54,14 @@ enum NewRigAction {
     Add,
     /// Close the field without adding.
     Cancel,
+}
+
+/// A remote rig's check started from Settings, and its answer.
+struct RigCheckRun {
+    host: String,
+    request: Option<Receiver<Result<Inventory, String>>>,
+    /// The seats found, or what is missing.
+    result: Option<Result<String, String>>,
 }
 
 /// A saved link and its latest observed state.
@@ -94,6 +104,12 @@ pub(super) struct OpenRigPanel {
     discover: Option<Receiver<Result<Inventory, String>>>,
     submit: Option<QueueRequest>,
     refresh: Option<QueueRequest>,
+    /// The Settings window's "Add a remote rig" field.
+    settings_host: String,
+    /// The host names in `~/.ssh/config`, read once each time Settings opens.
+    known_hosts: Option<Vec<String>>,
+    /// The remote rig checks started from Settings in this session.
+    checks: Vec<RigCheckRun>,
 }
 
 impl std::fmt::Debug for OpenRigPanel {
@@ -135,6 +151,25 @@ impl RubriqueApp {
         self.openrig.show_tasks(ui, &path);
     }
 
+    /// "Send step to this seat": open Send to `OpenRig` in the Tasks panel
+    /// for the open document, on `rig`, choosing seat `address`. The
+    /// selected text fills the step.
+    pub(super) fn send_step_to_seat(&mut self, ctx: &Context, rig: RigHost, address: String) -> Result<(), String> {
+        let OpenFile::Text { document, .. } = &self.open_file else {
+            return Err("Open a document first, then send a step from it".into());
+        };
+        if document.is_encrypted() || crate::remote::is_mirror(&document.path) {
+            return Err("Send to OpenRig works with plain local documents".into());
+        }
+        let path = document.path.clone();
+        let body = self.selected_openrig_step(ctx).unwrap_or_default();
+        self.openrig.rig = rig.clone();
+        self.openrig.start_draft(ctx, path, body, rig, Some(address));
+        self.settings.layout.side_panel_open = true;
+        self.settings.layout.side_view = crate::settings::layout::SideView::Tasks;
+        Ok(())
+    }
+
     /// Capture only the current editor or document preview selection.
     fn selected_openrig_step(&self, ctx: &Context) -> Option<String> {
         let OpenFile::Text { document, .. } = &self.open_file else { return None };
@@ -161,6 +196,12 @@ impl OpenRigPanel {
         if let Some(reply) = poll(&mut self.discover)
             && let Some(draft) = &mut self.draft
         {
+            if let (Ok(inventory), Some(wanted)) = (&reply, draft.wanted_seat.take()) {
+                draft.seat = inventory.seats.iter().position(|seat| seat.address == wanted);
+                if draft.seat.is_none() {
+                    draft.error = Some(format!("OpenRig does not list {wanted} on this rig. Choose a seat."));
+                }
+            }
             draft.inventory = Some(reply);
         }
         let tasks = self.tasks.get_or_insert_with(load_tasks);
@@ -181,8 +222,28 @@ impl OpenRigPanel {
             self.rig = RigHost::Local;
         }
         let rig = self.rig.clone();
-        self.draft =
-            Some(Draft { document, body, rig: rig.clone(), new_rig: None, inventory: None, seat: None, error: None });
+        self.start_draft(ctx, document, body, rig, None);
+    }
+
+    /// Show the composer for `rig` and list its seats, choosing `wanted_seat` when it is there.
+    fn start_draft(
+        &mut self,
+        ctx: &Context,
+        document: PathBuf,
+        body: String,
+        rig: RigHost,
+        wanted_seat: Option<String>,
+    ) {
+        self.draft = Some(Draft {
+            document,
+            body,
+            rig: rig.clone(),
+            new_rig: None,
+            inventory: None,
+            seat: None,
+            wanted_seat,
+            error: None,
+        });
         self.discover = Some(find_seats(ctx, rig));
     }
 
@@ -253,11 +314,67 @@ impl OpenRigPanel {
         if let Some(draft) = &mut self.draft {
             draft.rig = rig.clone();
             draft.seat = None;
+            draft.wanted_seat = None;
             draft.inventory = None;
             draft.error = None;
             self.discover = Some(find_seats(ctx, rig));
         }
         changed
+    }
+
+    /// The remote rigs for the Settings window, with the answers of finished checks.
+    pub(super) fn settings_info<'a>(&'a mut self, enabled: &'a mut bool, rigs: &'a [String]) -> OpenRigInfo<'a> {
+        for run in &mut self.checks {
+            if let Some(reply) = poll(&mut run.request) {
+                run.result = Some(reply.and_then(|inventory| check_message(&inventory)));
+            }
+        }
+        let checks = &self.checks;
+        let rows = rigs
+            .iter()
+            .map(|host| {
+                let run = checks.iter().find(|run| run.host == *host);
+                let check = match run {
+                    Some(RigCheckRun { request: Some(_), .. }) => RigCheck::Checking,
+                    Some(RigCheckRun { result: Some(Ok(text)), .. }) => RigCheck::Ready(text),
+                    Some(RigCheckRun { result: Some(Err(text)), .. }) => RigCheck::Problem(text),
+                    _ => RigCheck::NotChecked,
+                };
+                RemoteRigRow { host, check }
+            })
+            .collect();
+        let known_hosts = self.known_hosts.get_or_insert_with(remote::ssh_config::user_host_names);
+        OpenRigInfo { enabled, rigs: rows, new_host: &mut self.settings_host, known_hosts }
+    }
+
+    /// Add a remote rig from Settings, clear the field and check the rig.
+    /// Returns true when the list changed.
+    pub(super) fn add_remote_rig(&mut self, ctx: &Context, host: String, rigs: &mut Vec<String>) -> bool {
+        self.settings_host.clear();
+        self.check_remote_rig(ctx, host.clone());
+        if rigs.contains(&host) {
+            return false;
+        }
+        rigs.push(host);
+        true
+    }
+
+    /// Remove a remote rig from Settings and forget its check.
+    pub(super) fn remove_remote_rig(&mut self, host: &str, rigs: &mut Vec<String>) {
+        rigs.retain(|known| known != host);
+        self.checks.retain(|run| run.host != host);
+    }
+
+    /// Log in to a remote rig and list its seats in the background.
+    pub(super) fn check_remote_rig(&mut self, ctx: &Context, host: String) {
+        let request = Some(find_seats(ctx, RigHost::Ssh(host.clone())));
+        self.checks.retain(|run| run.host != host);
+        self.checks.push(RigCheckRun { host, request, result: None });
+    }
+
+    /// Read `~/.ssh/config` again the next time Settings opens.
+    pub(super) fn settings_closed(&mut self) {
+        self.known_hosts = None;
     }
 
     /// Save the task link before launching the one queue create request.
@@ -343,38 +460,13 @@ fn rig_picker(ui: &mut Ui, draft: &mut Draft, rigs: &[String]) -> Option<RigEven
     event
 }
 
-/// The inline SSH host field for a new remote rig, offering the hosts from `~/.ssh/config`.
+/// The inline SSH host field for a new remote rig (with "Add rig"), and Cancel.
 fn new_rig_fields(ui: &mut Ui, new_rig: &mut NewRig, rigs: &[String]) -> NewRigAction {
     ui.label("SSH host of the remote rig");
-    let field = ui.add(
-        egui::TextEdit::singleline(&mut new_rig.host).hint_text("server or user@server").desired_width(f32::INFINITY),
-    );
-    let offered: Vec<&String> = new_rig.known_hosts.iter().filter(|name| !rigs.contains(name)).collect();
-    if !offered.is_empty() {
-        ui.horizontal_wrapped(|ui| {
-            for name in offered {
-                if ui.small_button(name).clicked() {
-                    new_rig.host.clone_from(name);
-                }
-            }
-        });
-    }
-    let host = new_rig.host.trim();
-    let valid = is_valid_host(host);
-    let listed = rigs.iter().any(|known| known == host);
-    if !host.is_empty() && !valid {
-        ui.weak("Use a host name, or user@host");
-    } else if listed {
-        ui.weak("This rig is in the list already.");
-    }
-    let entered = field.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-    let (add, cancel) = ui
-        .horizontal(|ui| {
-            let add = ui.add_enabled(valid && !listed, egui::Button::new("Add rig")).clicked();
-            (add, ui.button("Cancel").clicked())
-        })
-        .inner;
-    if valid && !listed && (add || entered) {
+    let known: Vec<&str> = rigs.iter().map(String::as_str).collect();
+    let field = rig_host_field(ui, &mut new_rig.host, &new_rig.known_hosts, &known);
+    let cancel = ui.button("Cancel").clicked();
+    if field.add {
         NewRigAction::Add
     } else if cancel {
         NewRigAction::Cancel
@@ -469,6 +561,27 @@ fn refresh_task(
     Some(QueueRequest { id: link.id.clone(), response: work(ctx, move || Rig::open(&link.host)?.read(&link)) })
 }
 
+/// Most seat names a Settings check lists before "and N more".
+const CHECK_SEAT_NAMES: usize = 3;
+
+/// What a Settings check found: the seats, or that no team runs there yet.
+fn check_message(inventory: &Inventory) -> Result<String, String> {
+    let seats: Vec<&str> = inventory.seats.iter().map(|seat| seat.address.as_str()).collect();
+    if seats.is_empty() {
+        return Err("Connected, but no OpenRig team is running there. Start one, then check again.".into());
+    }
+    let mut names = seats[..seats.len().min(CHECK_SEAT_NAMES)].join(", ");
+    if seats.len() > CHECK_SEAT_NAMES {
+        names = format!("{names} and {} more", seats.len() - CHECK_SEAT_NAMES);
+    }
+    let count = if seats.len() == 1 { "1 seat".to_owned() } else { format!("{} seats", seats.len()) };
+    let mut message = format!("Ready: {count} ({names}).");
+    if inventory.partial {
+        message.push_str(" The list may be incomplete.");
+    }
+    Ok(message)
+}
+
 /// List the seats of `rig` in the background. The user asked for it, so a
 /// remote host that failed a moment ago is tried again at once.
 fn find_seats(ctx: &Context, rig: RigHost) -> Receiver<Result<Inventory, String>> {
@@ -561,5 +674,49 @@ fn show_status(ui: &mut Ui, status: &TaskStatus, link: &TaskLink) {
     }
     if let Some(note) = &status.handoff_note {
         ui.weak(note);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::openrig::Seat;
+
+    fn inventory(addresses: &[&str], partial: bool) -> Inventory {
+        let seats = addresses
+            .iter()
+            .map(|address| Seat { address: (*address).to_owned(), rig_id: "demo-id".to_owned() })
+            .collect();
+        Inventory { host: RigHost::Ssh("rig-host".into()), endpoint: "127.0.0.1:7433".parse().unwrap(), seats, partial }
+    }
+
+    /// A Settings check names the seats it found and says when there is no team yet.
+    #[test]
+    fn check_message_names_seats_or_asks_for_a_team() {
+        assert_eq!(check_message(&inventory(&["builder@demo"], false)).unwrap(), "Ready: 1 seat (builder@demo).");
+        let many = inventory(&["a@demo", "b@demo", "c@demo", "d@demo", "e@demo"], true);
+        assert_eq!(
+            check_message(&many).unwrap(),
+            "Ready: 5 seats (a@demo, b@demo, c@demo and 2 more). The list may be incomplete."
+        );
+        assert!(check_message(&inventory(&[], false)).unwrap_err().contains("no OpenRig team"));
+    }
+
+    /// Adding from Settings saves the host once, clears the field and starts a check;
+    /// removing forgets the check.
+    #[test]
+    fn settings_add_and_remove_a_remote_rig() {
+        crate::remote::testing::use_fake_ssh();
+        let ctx = Context::default();
+        let mut panel = OpenRigPanel { settings_host: "rig-host".into(), ..OpenRigPanel::default() };
+        let mut rigs = Vec::new();
+        assert!(panel.add_remote_rig(&ctx, "rig-host".into(), &mut rigs));
+        assert!(!panel.add_remote_rig(&ctx, "rig-host".into(), &mut rigs));
+        assert_eq!(rigs, ["rig-host"]);
+        assert_eq!(panel.settings_host, "");
+        assert_eq!(panel.checks.len(), 1);
+        panel.remove_remote_rig("rig-host", &mut rigs);
+        assert_eq!(rigs, Vec::<String>::new());
+        assert_eq!(panel.checks.len(), 0);
     }
 }
