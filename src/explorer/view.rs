@@ -91,6 +91,8 @@ pub enum ExplorerAction {
     MoveTerminal { name: String, anchor: String, after: bool },
     /// Something from an `OpenRig` seat's menu, for the seat's session.
     Seat(String, SeatCommand),
+    /// Open the "Add seat" dialog for the rig of these seats (session names).
+    AddSeat { seats: Vec<String> },
     /// Open Settings at the remote `OpenRig` rigs.
     OpenRigSettings,
 }
@@ -106,6 +108,8 @@ pub enum SeatCommand {
     CopyAttach,
     /// Attach to the seat in the system's terminal app.
     OpenInTerminalApp,
+    /// Open the "Seat setup" dialog: model, effort, permissions, folder.
+    Setup,
     /// Ask, then end the seat's tmux session.
     Stop,
 }

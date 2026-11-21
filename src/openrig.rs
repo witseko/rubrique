@@ -16,6 +16,7 @@ use crate::ai::run::{AiRun, RunEnd};
 use crate::remote::connection;
 use crate::remote::mirror::is_valid_host;
 
+pub mod seat_setup;
 pub mod store;
 
 const TIMEOUT: Duration = Duration::from_secs(12);
@@ -132,6 +133,12 @@ impl Rig {
 
     /// Read the configured daemon and list its local agent seats.
     pub fn inventory(&self) -> Result<Inventory, String> {
+        let endpoint = self.endpoint()?;
+        self.inventory_at(endpoint)
+    }
+
+    /// The configured daemon's loopback address on the rig's machine.
+    fn endpoint(&self) -> Result<SocketAddr, String> {
         // The URL override describes this computer's daemon, not a remote one.
         let override_url = (self.host == RigHost::Local)
             .then(|| {
@@ -141,18 +148,16 @@ impl Rig {
                     .or_else(|| std::env::var("RIGGED_URL").ok().filter(|url| !url.is_empty()))
             })
             .flatten();
-        let endpoint = if let Some(url) = override_url {
-            local_origin(&url).ok_or("OpenRig needs a local HTTP daemon on a loopback port.")?
-        } else {
-            let status = self.status(None)?;
-            let port = status["daemon"]["port"]
-                .as_u64()
-                .and_then(|port| u16::try_from(port).ok())
-                .filter(|port| *port != 0)
-                .ok_or("OpenRig did not report a daemon port.")?;
-            SocketAddr::from(([127, 0, 0, 1], port))
-        };
-        self.inventory_at(endpoint)
+        if let Some(url) = override_url {
+            return local_origin(&url).ok_or_else(|| "OpenRig needs a local HTTP daemon on a loopback port.".into());
+        }
+        let status = self.status(None)?;
+        let port = status["daemon"]["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+            .ok_or("OpenRig did not report a daemon port.")?;
+        Ok(SocketAddr::from(([127, 0, 0, 1], port)))
     }
 
     /// Read local agent seats and match them to teams on the selected daemon.
@@ -252,19 +257,33 @@ impl Rig {
 
     /// Run a bounded CLI call off the UI thread, on the daemon's machine. Queue data goes through stdin.
     fn json(&self, endpoint: Option<SocketAddr>, args: &[&str], body: Option<String>) -> Result<(Value, bool), String> {
-        match &self.host {
-            RigHost::Local => self.local_json(endpoint, args, body),
-            RigHost::Ssh(host) => self.remote_json(host, endpoint, args, body.as_deref()),
-        }
+        let reply = self.run(endpoint, args, body, TIMEOUT)?;
+        parse_reply(reply.success, &reply.stdout, reply.partial)
     }
 
-    /// Run rig on this computer.
-    fn local_json(
+    /// Run rig with `args` on the daemon's machine and wait up to `timeout`
+    /// for it to end. rig's stderr is never part of the reply.
+    fn run(
         &self,
         endpoint: Option<SocketAddr>,
         args: &[&str],
         body: Option<String>,
-    ) -> Result<(Value, bool), String> {
+        timeout: Duration,
+    ) -> Result<CliReply, String> {
+        match &self.host {
+            RigHost::Local => self.local_run(endpoint, args, body, timeout),
+            RigHost::Ssh(host) => self.remote_run(host, endpoint, args, body.as_deref(), timeout),
+        }
+    }
+
+    /// Run rig on this computer.
+    fn local_run(
+        &self,
+        endpoint: Option<SocketAddr>,
+        args: &[&str],
+        body: Option<String>,
+        timeout: Duration,
+    ) -> Result<CliReply, String> {
         let mut command = Command::new(&self.program);
         command
             .args(args)
@@ -283,11 +302,14 @@ impl Rig {
         }
         let mut run =
             AiRun::start_command(&mut command, body, Some(MAX_CLI_OUTPUT), || {}).map_err(|_| "Cannot start rig.")?;
-        let deadline = Instant::now() + TIMEOUT;
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if let Some(end) = run.poll().cloned() {
-                let success = matches!(end, RunEnd::Exited { success: true, .. });
-                return parse_reply(success, &run.output_text(), run.error_text().contains(PARTIAL_MARKER));
+                return Ok(CliReply {
+                    success: matches!(end, RunEnd::Exited { success: true, .. }),
+                    stdout: run.output_text(),
+                    partial: run.error_text().contains(PARTIAL_MARKER),
+                });
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -296,17 +318,18 @@ impl Rig {
 
     /// Run rig on `host` over the shared SSH connection (see [`REMOTE_RIG`]).
     /// On the host, the endpoint is that host's own loopback address.
-    fn remote_json(
+    fn remote_run(
         &self,
         host: &str,
         endpoint: Option<SocketAddr>,
         args: &[&str],
         body: Option<&str>,
-    ) -> Result<(Value, bool), String> {
+        timeout: Duration,
+    ) -> Result<CliReply, String> {
         let url = endpoint.map(|endpoint| format!("http://{endpoint}")).unwrap_or_default();
         let mut script_args = vec![OsStr::new(&url), self.program.as_os_str()];
         script_args.extend(args.iter().map(OsStr::new));
-        let output = connection::run(host, REMOTE_RIG, &script_args, body.map(str::as_bytes), TIMEOUT)
+        let output = connection::run(host, REMOTE_RIG, &script_args, body.map(str::as_bytes), timeout)
             .map_err(|error| remote_error(host, &error))?;
         if output.len() > MAX_CLI_OUTPUT {
             return Err("OpenRig CLI returned too much output.".into());
@@ -317,8 +340,16 @@ impl Rig {
         if status == EXIT_COMMAND_NOT_FOUND {
             return Err(format!("OpenRig CLI missing on {host}. Install @openrig/cli there and put rig on PATH."));
         }
-        parse_reply(status == 0, stdout, partial)
+        Ok(CliReply { success: status == 0, stdout: stdout.to_owned(), partial })
     }
+}
+
+/// How a rig call ended: its exit, its stdout and whether rig warned that
+/// the seat list is incomplete. Holds no stderr.
+struct CliReply {
+    success: bool,
+    stdout: String,
+    partial: bool,
 }
 
 /// Split the remote script's output into rig's exit status, the partial flag and rig's stdout.

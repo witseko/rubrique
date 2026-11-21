@@ -30,6 +30,7 @@ mod openrig;
 mod privacy;
 mod remote;
 mod scratch_paths;
+mod seat_setup;
 mod seats;
 mod side_panel;
 mod structure;
@@ -420,6 +421,8 @@ pub struct RubriqueApp {
     deleting: Option<Vec<PathBuf>>,
     /// The `OpenRig` seat whose "Stop seat" dialog is open.
     stopping_seat: Option<String>,
+    /// The "Add seat" or "Seat setup" dialog, while it is open.
+    seat_setup: Option<seat_setup::SeatSetupDialog>,
     /// Terminals and `OpenRig` were folded at startup if they had nothing to
     /// show (each once its first check finished).
     startup_folds: StartupFolds,
@@ -550,6 +553,7 @@ impl RubriqueApp {
             scroll_to_revealed: false,
             deleting: None,
             stopping_seat: None,
+            seat_setup: None,
             startup_folds: StartupFolds::default(),
             file_selection: FileSelection::default(),
             open_path: None,
@@ -1981,6 +1985,7 @@ impl RubriqueApp {
             ExplorerAction::RenameTerminal(name) => self.start_terminal_rename(name),
             ExplorerAction::ExitTerminal(name) => self.exit_terminal(&name),
             ExplorerAction::Seat(name, command) => self.seat_command(ctx, name, command),
+            ExplorerAction::AddSeat { seats } => self.start_add_seat(&seats),
             ExplorerAction::OpenRigSettings => {
                 self.settings_group = SettingsGroup::OpenRig;
                 self.settings_open = true;
@@ -3464,6 +3469,7 @@ impl eframe::App for RubriqueApp {
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
         self.stop_seat_dialog(&ctx);
+        self.seat_setup_dialog(&ctx);
         self.open_path_dialog(&ctx);
         self.clone_repo_dialog(&ctx);
         self.add_remote_dialog(&ctx);

@@ -1,5 +1,6 @@
 //! The menu of an `OpenRig` seat in the Terminals list: send it a step,
-//! copy its address or attach command, attach in the terminal app, or stop it.
+//! copy its address or attach command, attach in the terminal app, change
+//! its setup, or stop it.
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -15,13 +16,13 @@ use crate::openrig::RigHost;
 const DIALOG_WIDTH: f32 = 380.0;
 
 /// Where a seat's session runs and how tmux knows it there.
-struct SeatPlace {
+pub(super) struct SeatPlace {
     /// The SSH host; `None` for this computer.
-    host: Option<String>,
+    pub(super) host: Option<String>,
     /// The tmux program on that machine.
     program: std::path::PathBuf,
     /// The session name in tmux, which is also the `OpenRig` address (`seat@rig`).
-    address: String,
+    pub(super) address: String,
 }
 
 impl RubriqueApp {
@@ -49,12 +50,13 @@ impl RubriqueApp {
                     Err(error) => self.show_status(format!("Cannot open the terminal app: {error}")),
                 }
             }
+            SeatCommand::Setup => self.start_seat_setup(ctx, place),
             SeatCommand::Stop => self.stopping_seat = Some(name),
         }
     }
 
     /// Where seat `name` runs, from the Terminals list's tmux.
-    fn seat_place(&self, name: &str) -> Option<SeatPlace> {
+    pub(super) fn seat_place(&self, name: &str) -> Option<SeatPlace> {
         let tmux = self.terminals.as_ref()?.tmux_for(name);
         Some(SeatPlace {
             host: tmux.host().map(str::to_owned),
