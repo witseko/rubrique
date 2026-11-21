@@ -27,6 +27,8 @@ pub const DEFAULT_COMMAND: &str = "whisper-cli -m ~/.local/share/whisper/ggml-sm
 
 /// Where to download the built-in command's model.
 pub const MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin";
+/// SHA-256 of the file at [`MODEL_URL`], from the Hugging Face LFS metadata.
+pub const MODEL_SHA256: &str = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b";
 
 /// File types treated as audio.
 const AUDIO_EXTENSIONS: [&str; 9] = ["wav", "m4a", "mp3", "ogg", "oga", "opus", "flac", "webm", "aac"];
