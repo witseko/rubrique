@@ -48,7 +48,7 @@ pub struct Settings {
     pub code_colors: CodeColors,
     /// Rules that color matches in plain text files.
     pub text_highlight: TextHighlightSettings,
-    /// Text size, editor font size, reduced motion and focus outlines.
+    /// Text size, text area zoom, reduced motion and focus outlines.
     pub accessibility: AccessibilitySettings,
     /// Where new scratch files go; `None` means the default folder.
     pub scratch_folder: Option<PathBuf>,
@@ -339,8 +339,7 @@ mod tests {
             theme: ThemeChoice::Named("dark".to_string()),
             code_colors: CodeColors::VsCode,
             accessibility: AccessibilitySettings {
-                text_size: accessibility::TextSize::Larger,
-                editor_font_size: 15,
+                text_size: 130,
                 page_zoom: 120,
                 show_menu_bar: false,
                 reduce_motion: true,
