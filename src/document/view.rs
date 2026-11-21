@@ -28,8 +28,15 @@ use crate::voice::view::{MemoAction, take_memo_action};
 const EDITOR_MARGIN: (i8, i8) = (16, 12);
 /// Space (x, y) between the page edge and the preview text.
 const PREVIEW_MARGIN: (i8, i8) = (32, 24);
-/// Space between the line numbers and the editor text.
-const GUTTER_GAP: f32 = 12.0;
+/// Space between the page edge and the line numbers.
+const GUTTER_LEAD: f32 = 8.0;
+/// Space between the line numbers and the gutter's divider line.
+const GUTTER_NUMBER_GAP: f32 = 8.0;
+/// Space between the gutter's divider line and the editor text.
+const GUTTER_TEXT_GAP: f32 = 10.0;
+/// Opacity of the surface color behind the line numbers, so the gutter
+/// reads as its own column without competing with the text.
+const GUTTER_TINT: f32 = 0.3;
 /// Widest the line-number gutter gets (an egui margin is at most 127).
 const GUTTER_MAX_WIDTH: f32 = 100.0;
 /// Opacity of the warning color behind a find match, and of the accent
@@ -97,7 +104,8 @@ pub fn show_editor(
     let style = HighlightStyle::from_ui(ui);
     let gutter = line_numbers.then(|| Gutter::measure(ui, &document.text));
     let margin = egui::Margin {
-        left: EDITOR_MARGIN.0 + gutter.as_ref().map_or(0, |gutter| gutter.width),
+        // The gutter brings its own space from the page edge.
+        left: gutter.as_ref().map_or(EDITOR_MARGIN.0, |gutter| gutter.width),
         right: EDITOR_MARGIN.0,
         top: EDITOR_MARGIN.1,
         bottom: EDITOR_MARGIN.1,
@@ -124,9 +132,15 @@ pub fn show_editor(
                 job.wrap.max_width = if wrap_lines { wrap_width } else { f32::INFINITY };
                 ui.ctx().fonts_mut(|fonts| fonts.layout_job(job))
             };
+            // Reserved before the editor, so the gutter's background is painted under it.
+            let gutter_background = ui.painter().add(egui::Shape::Noop);
             let output = editor.layouter(&mut layouter).show(ui);
             if let Some(gutter) = &gutter {
-                gutter.paint(ui, &output);
+                gutter.paint(ui, &output, &document.text, gutter_background);
+                if let Some(line) = clicked_gutter_line(ui, &output, &document.text) {
+                    select_editor_range(ui.ctx(), line.start, line.end);
+                    ui.ctx().request_repaint();
+                }
             }
             if let Some(find) = find {
                 paint_matches(ui, &output, &document.text, find);
@@ -227,12 +241,17 @@ fn match_rects(galley: &egui::Galley, start: usize, end: usize) -> Vec<egui::Rec
     rects
 }
 
-/// Line numbers to the left of the editor text, one per line of the file.
-/// A wrapped line is numbered once, on its first row.
+/// Line numbers to the left of the editor text, one per line of the file,
+/// in a tinted column with a divider line between it and the text.
+/// A wrapped line is numbered once, on its first row; the cursor's line
+/// number is drawn in the text color.
 struct Gutter {
     font: FontId,
     color: Color32,
-    /// Extra left margin for the numbers and the gap after them.
+    current_color: Color32,
+    background: Color32,
+    divider: egui::Stroke,
+    /// Left margin of the text: the numbers, the divider and the space around them.
     width: i8,
 }
 
@@ -244,24 +263,41 @@ impl Gutter {
         // Clamped to 0..=100 first, so the cast cannot truncate.
         #[expect(clippy::cast_possible_truncation, reason = "clamped to the range")]
         let width = width.clamp(0.0, GUTTER_MAX_WIDTH) as i8;
-        Gutter { font, color: ui.visuals().weak_text_color(), width }
+        let visuals = ui.visuals();
+        Gutter {
+            font,
+            color: visuals.weak_text_color(),
+            current_color: visuals.text_color(),
+            background: visuals.faint_bg_color.gamma_multiply(GUTTER_TINT),
+            divider: visuals.widgets.noninteractive.bg_stroke,
+            width,
+        }
     }
 
-    /// Paint the numbers next to the rows that start a line.
-    fn paint(&self, ui: &Ui, output: &TextEditOutput) {
-        let right = output.galley_pos.x - GUTTER_GAP;
+    /// Paint the column behind the numbers (into the reserved `background`
+    /// shape), the divider, and the numbers next to the rows that start a line.
+    fn paint(&self, ui: &Ui, output: &TextEditOutput, text: &str, background: egui::layers::ShapeIdx) {
+        let divider_x = output.galley_pos.x - GUTTER_TEXT_GAP;
+        let right = divider_x - GUTTER_NUMBER_GAP;
         let clip = ui.clip_rect();
+        let page = output.response.response.rect;
+        let column = egui::Rect::from_x_y_ranges(page.left()..=divider_x, page.y_range()).intersect(clip);
         let painter = ui.painter();
+        painter.set(background, egui::Shape::rect_filled(column, 0.0, self.background));
+        painter.vline(divider_x, column.y_range(), self.divider);
+
+        let current_line = output.cursor_range.map(|range| cursor_line(text, range.primary.index.0));
         let mut number = 1_usize;
         let mut starts_line = true;
         for row in &output.galley.rows {
             let top = output.galley_pos.y + row.pos.y;
             let height = row.row.size.y;
             if starts_line && top <= clip.bottom() && top + height >= clip.top() {
+                let color = if current_line == Some(number) { self.current_color } else { self.color };
                 // Rows are taller than the font, with the text in the middle:
                 // center the number on the row so it lines up with the text.
                 let middle = pos2(right, top + height / 2.0);
-                painter.text(middle, Align2::RIGHT_CENTER, number, self.font.clone(), self.color);
+                painter.text(middle, Align2::RIGHT_CENTER, number, self.font.clone(), color);
             }
             starts_line = row.ends_with_newline;
             if row.ends_with_newline {
@@ -271,17 +307,55 @@ impl Gutter {
     }
 }
 
+/// The characters of the line whose number was clicked, so the click
+/// selects the whole line with the cursor at its end. Over the numbers the
+/// pointer is an arrow, as the click does not place a text cursor.
+fn clicked_gutter_line(ui: &Ui, output: &TextEditOutput, text: &str) -> Option<Range<usize>> {
+    let divider_x = output.galley_pos.x - GUTTER_TEXT_GAP;
+    let pointer = output.response.response.hover_pos()?;
+    if pointer.x > divider_x {
+        return None;
+    }
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+    if !output.response.response.clicked() {
+        return None;
+    }
+    let row_start = output.galley.cursor_from_pos(egui::vec2(0.0, pointer.y - output.galley_pos.y));
+    Some(line_char_range(text, row_start.index.0))
+}
+
+/// Characters of the line holding character `index` in `text`, from its
+/// first character up to its line break (or the end of the text).
+fn line_char_range(text: &str, index: usize) -> Range<usize> {
+    let mut start = 0;
+    for (position, character) in text.chars().enumerate() {
+        if character == '\n' {
+            if position >= index {
+                return start..position;
+            }
+            start = position + 1;
+        }
+    }
+    start..text.chars().count()
+}
+
+/// 1-based line of the character at `cursor` in `text`.
+fn cursor_line(text: &str, cursor: usize) -> usize {
+    text.chars().take(cursor).filter(|&character| character == '\n').count() + 1
+}
+
 /// Lines in `text`: one more than its line breaks.
 fn line_count(text: &str) -> usize {
     text.bytes().filter(|byte| *byte == b'\n').count() + 1
 }
 
-/// Width of the numbers (at least two digits) and the gap after them.
+/// Width of the numbers (as many digits as the last line number has),
+/// the divider and the space around them.
 fn gutter_width(digit_width: f32, lines: usize) -> f32 {
-    let digits = lines.to_string().len().max(2);
+    let digits = lines.to_string().len();
     #[expect(clippy::cast_precision_loss, reason = "a handful of digits")]
     let numbers = digit_width * digits as f32;
-    (numbers + GUTTER_GAP).ceil()
+    (GUTTER_LEAD + numbers + GUTTER_NUMBER_GAP + GUTTER_TEXT_GAP).ceil()
 }
 
 /// A top-level block, or one table cell of it, being edited as Markdown
@@ -1405,5 +1479,39 @@ mod preview_tests {
             .collect();
         assert!(!actions.contains(&TableAction::RemoveRow), "{actions:?}");
         assert!(actions.contains(&TableAction::AddRow), "{actions:?}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_line_counts_line_breaks_before_the_cursor() {
+        let text = "één\ntwee\n\ndrie";
+        assert_eq!(cursor_line(text, 0), 1);
+        assert_eq!(cursor_line(text, 3), 1);
+        assert_eq!(cursor_line(text, 4), 2);
+        assert_eq!(cursor_line(text, 9), 3);
+        assert_eq!(cursor_line(text, text.chars().count()), 4);
+    }
+
+    #[test]
+    fn line_char_range_stops_before_the_line_break() {
+        let text = "één\ntwee\n\ndrie";
+        assert_eq!(line_char_range(text, 0), 0..3);
+        assert_eq!(line_char_range(text, 3), 0..3);
+        assert_eq!(line_char_range(text, 4), 4..8);
+        assert_eq!(line_char_range(text, 9), 9..9);
+        assert_eq!(line_char_range(text, 12), 10..14);
+        assert_eq!(line_char_range(text, 14), 10..14);
+    }
+
+    #[test]
+    fn gutter_fits_the_digits_of_the_last_line_number() {
+        let gaps = GUTTER_LEAD + GUTTER_NUMBER_GAP + GUTTER_TEXT_GAP;
+        assert_eq!(gutter_width(8.0, 5), 8.0 + gaps);
+        assert_eq!(gutter_width(8.0, 14), 16.0 + gaps);
+        assert_eq!(gutter_width(8.0, 1200), 32.0 + gaps);
     }
 }
