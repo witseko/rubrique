@@ -11,7 +11,7 @@ use eframe::egui::cache::{ComputerMut, FrameCache};
 use super::blocks::{Block, ColumnAlign, List, Table, parse_blocks};
 use super::front_matter_view::{CardSizes, render_front_matter};
 use super::inlines::{HtmlStyle, ImageSize, Inline, Script, is_openable_url, parse_inlines};
-use super::local_links::{bundle_root, link_target};
+use super::local_links::{bundle_root, inside, link_target, preview_root};
 use super::preview_find::{self, Match};
 use super::preview_highlights;
 use super::table_edit::TableCell;
@@ -1200,22 +1200,41 @@ fn image_folder_id() -> egui::Id {
     egui::Id::unique("rubrique-image-folder")
 }
 
+/// Set the explorer's root folders, which bound the files the preview's
+/// links and images may reach (see [`preview_root`]). Call each frame.
+pub fn set_explorer_folders(ctx: &egui::Context, folders: &[PathBuf]) {
+    ctx.data_mut(|data| data.insert_temp(explorer_folders_id(), folders.to_vec()));
+}
+
+fn explorer_folders_id() -> egui::Id {
+    egui::Id::unique("rubrique-explorer-folders")
+}
+
+/// The [`preview_root`] for a file in `folder`.
+fn cached_preview_root(ctx: &egui::Context, folder: &Path) -> PathBuf {
+    let explorer_folders = ctx.data(|data| data.get_temp::<Vec<PathBuf>>(explorer_folders_id())).unwrap_or_default();
+    preview_root(folder, &explorer_folders, cached_bundle_root(ctx, folder).as_deref())
+}
+
 /// The local file an image url points at: relative paths resolve against
 /// the open file's folder, `file://` and absolute paths are used as they
 /// are. Web and other addresses give `None`: the preview never loads
-/// anything from the network.
-fn local_media_path(ctx: &egui::Context, url: &str) -> Option<PathBuf> {
+/// anything from the network. The second value says whether the file is
+/// inside the open file's [`preview_root`], the only place the preview
+/// loads media from.
+fn local_media_path(ctx: &egui::Context, url: &str) -> Option<(PathBuf, bool)> {
     let path = url.split(['?', '#']).next().unwrap_or(url);
     let path = path.strip_prefix("file://").unwrap_or(path);
     if path.is_empty() || (path.contains(':') && !path.starts_with('/')) {
         return None;
     }
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return Some(path.to_path_buf());
-    }
     let folder = ctx.data(|data| data.get_temp::<PathBuf>(image_folder_id()))?;
-    Some(folder.join(path))
+    let path = folder.join(path);
+    let root = cached_preview_root(ctx, &folder);
+    Some(match inside(&path, &root) {
+        Some(inside) => (inside, true),
+        None => (path, false),
+    })
 }
 
 /// Seconds a bundle root found by [`cached_bundle_root`] is trusted before
@@ -1229,11 +1248,12 @@ const BUNDLE_ROOT_CHECK_SECONDS: f64 = 2.0;
 pub(super) fn local_markdown_link(ctx: &egui::Context, url: &str, bundle_fallback: bool) -> Option<PathBuf> {
     let folder = ctx.data(|data| data.get_temp::<PathBuf>(image_folder_id()))?;
     let root = if url.starts_with('/') || bundle_fallback { cached_bundle_root(ctx, &folder) } else { None };
-    let target = link_target(url, &folder, root.as_deref())?;
+    let limit = cached_preview_root(ctx, &folder);
+    let target = link_target(url, &folder, root.as_deref(), &limit)?;
     if bundle_fallback
         && !url.starts_with('/')
         && !target.is_file()
-        && let Some(in_root) = link_target(&format!("/{url}"), &folder, root.as_deref())
+        && let Some(in_root) = link_target(&format!("/{url}"), &folder, root.as_deref(), &limit)
         && in_root.is_file()
     {
         return Some(in_root);
@@ -1339,7 +1359,7 @@ fn play_request_id() -> egui::Id {
 /// An image from a local file, as wide as the text column at most; a video
 /// as a card with Play. Web images and missing files show their alt text.
 fn render_image(ui: &mut Ui, alt: &str, url: &str, size: ImageSize, link: Option<&str>) {
-    let Some(path) = local_media_path(ui.ctx(), url) else {
+    let Some((path, in_root)) = local_media_path(ui.ctx(), url) else {
         image_fallback(
             ui,
             alt,
@@ -1347,6 +1367,10 @@ fn render_image(ui: &mut Ui, alt: &str, url: &str, size: ImageSize, link: Option
         );
         return;
     };
+    if !in_root {
+        image_fallback(ui, alt, &format!("{}\nOutside the folder that holds this note", path.display()));
+        return;
+    }
     if media_kind_of_url(url) == Some(MediaKind::Video) {
         video_card(ui, alt, &path);
         return;
@@ -1521,6 +1545,21 @@ mod tests {
         parse_blocks, readable_color, split_long_words,
     };
     use crate::test_support::TempFolder;
+
+    #[test]
+    fn images_load_only_from_the_explorer_folder_that_holds_the_note() {
+        let ctx = egui::Context::default();
+        let notes = std::path::PathBuf::from("/home/a/notes");
+        super::set_explorer_folders(&ctx, std::slice::from_ref(&notes));
+        super::set_image_folder(&ctx, Some(notes.join("work")));
+        let media = |url| super::local_media_path(&ctx, url);
+        assert_eq!(media("../img/a.png"), Some((notes.join("img/a.png"), true)));
+        assert_eq!(media("/home/a/notes/img/a.png"), Some((notes.join("img/a.png"), true)));
+        assert_eq!(media("file:///home/a/notes/b.png"), Some((notes.join("b.png"), true)));
+        assert!(media("../../.ssh/id.png").is_some_and(|(_, in_root)| !in_root));
+        assert!(media("/etc/a.png").is_some_and(|(_, in_root)| !in_root));
+        assert_eq!(media("https://a.io/a.png"), None);
+    }
 
     #[test]
     fn only_regular_image_files_up_to_the_limit_are_loaded() {
