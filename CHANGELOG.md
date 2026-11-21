@@ -18,6 +18,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   from Settings → Accessibility: Text area zoom now sets the size of the
   source editor and the preview together. A saved editor font size is no
   longer used, so set the zoom again if the editor looks different.
+- **Git only in repositories you trust.** Rubrique no longer runs git in
+  a repository until you trust it: the status bar shows "Not trusted",
+  and a click on it explains why and offers Trust this repository. A
+  repository's own settings can start programs when git runs, so a folder
+  from a zip or a shared drive could run code as soon as you opened a
+  file in it. Repositories you clone in Rubrique are trusted at once;
+  trust each existing one with one click.
 
 ### Fixed
 
