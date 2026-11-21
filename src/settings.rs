@@ -74,6 +74,10 @@ pub struct Settings {
     pub openrig_rigs: Vec<String>,
     /// Whether to check for new versions, and when it last did.
     pub updates: UpdateSettings,
+    /// Top folders of the git repositories the user trusts. Rubrique runs
+    /// git only in these: a repository's own config and hooks can start
+    /// programs, so one from an unknown source must not run git unasked.
+    pub trusted_repositories: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -147,6 +151,7 @@ impl Settings {
                     settings.openrig_rigs.push(value.to_string());
                 }
                 "openrig_enabled" => openrig_enabled = Some(value == "true"),
+                "trusted_repository" if !value.is_empty() => settings.trust_repository(PathBuf::from(value)),
                 "note_marks" => settings.note_marks = value == "true",
                 "html_browser_preview" => settings.html_browser_preview = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
@@ -194,8 +199,9 @@ impl Settings {
                 let _ = writeln!(lines, "openrig_rig={host}");
                 lines
             });
+        let trusted_lines = path_lines("trusted_repository", &self.trusted_repositories);
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}{trusted_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
             last_file,
             self.note_marks,
             self.html_browser_preview,
@@ -230,6 +236,18 @@ impl Settings {
     /// The folder for new scratch files: the chosen one, else the default.
     pub fn scratch_folder_or_default(&self) -> Option<PathBuf> {
         self.scratch_folder.clone().or_else(default_scratch_folder)
+    }
+
+    /// Whether the user trusts the git repository whose top folder is `repo`.
+    pub fn trusts_repository(&self, repo: &Path) -> bool {
+        self.trusted_repositories.iter().any(|trusted| trusted == repo)
+    }
+
+    /// Trust the git repository whose top folder is `repo`; once is enough.
+    pub fn trust_repository(&mut self, repo: PathBuf) {
+        if !self.trusts_repository(&repo) {
+            self.trusted_repositories.push(repo);
+        }
     }
 }
 
@@ -404,6 +422,7 @@ mod tests {
                 last_check: Some(1_800_000_000),
                 skipped_version: crate::update::Version::parse("1.7.0"),
             },
+            trusted_repositories: vec![PathBuf::from("/home/a/code/rubrique"), PathBuf::from("/work/my repo")],
         };
         let text = settings.to_text();
         assert!(text.contains("folder=ssh://server/srv/notes\n"), "{text}");
@@ -413,6 +432,20 @@ mod tests {
         let with_tab = Settings { open_tabs: vec![remote_folder.join("a.md")], ..Settings::default() };
         assert!(with_tab.to_text().contains("tab=ssh://server/srv/notes/a.md\n"));
         assert_eq!(Settings::parse(&with_tab.to_text()), with_tab);
+    }
+
+    #[test]
+    fn repositories_are_trusted_only_once_trusted() {
+        let mut settings =
+            Settings::parse("trusted_repository=\ntrusted_repository=/code/a\ntrusted_repository=/code/a\n");
+        assert_eq!(settings.trusted_repositories, [PathBuf::from("/code/a")]);
+        assert!(settings.trusts_repository(Path::new("/code/a")));
+        // A folder inside a trusted repository is a different repository.
+        assert!(!settings.trusts_repository(Path::new("/code/a/vendor/b")));
+        assert!(!Settings::default().trusts_repository(Path::new("/code/a")));
+        settings.trust_repository(PathBuf::from("/code/b"));
+        settings.trust_repository(PathBuf::from("/code/b"));
+        assert_eq!(settings.trusted_repositories, [PathBuf::from("/code/a"), PathBuf::from("/code/b")]);
     }
 
     #[test]
