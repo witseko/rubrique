@@ -82,7 +82,10 @@ use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::rst::{is_rst_path, parse_rst, rst_source_blocks};
 use crate::scratch::{create_scratch, rename_target};
-use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
+use crate::settings::accessibility::{
+    DEFAULT_PAGE_ZOOM, DEFAULT_TEXT_SIZE, ZoomGesture, page_zoom_larger, page_zoom_smaller, text_size_larger,
+    text_size_smaller,
+};
 use crate::settings::layout::{ExplorerView, PreviewMode, TabPosition};
 use crate::settings::view::{
     AiInfo, AppearanceInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
@@ -1121,11 +1124,11 @@ impl RubriqueApp {
         }
         let current = self.settings.accessibility.text_size;
         let size = if ctx.input_mut(|input| input.consume_shortcut(&TEXT_DEFAULT)) {
-            TextSize::Default
+            DEFAULT_TEXT_SIZE
         } else if ctx.input_mut(|input| TEXT_LARGER.iter().any(|keys| input.consume_shortcut(keys))) {
-            current.larger()
+            text_size_larger(current)
         } else if ctx.input_mut(|input| input.consume_shortcut(&TEXT_SMALLER)) {
-            current.smaller()
+            text_size_smaller(current)
         } else {
             // A modified wheel and a pinch both arrive as a zoom factor.
             let factor = ctx.input(egui::InputState::zoom_delta);
@@ -1145,12 +1148,16 @@ impl RubriqueApp {
                 }
                 return;
             }
-            self.zoom_gesture.step(current, factor)
+            match self.zoom_gesture.direction(factor) {
+                1 => text_size_larger(current),
+                -1 => text_size_smaller(current),
+                _ => current,
+            }
         };
         if size != current {
             self.settings.accessibility.text_size = size;
             apply_accessibility(ctx, &self.settings.accessibility);
-            self.show_status(format!("Text size: {} ({}%)", size.name(), (size.scale() * 100.0).round()));
+            self.show_status(format!("Text size: {size}%"));
         }
     }
 
@@ -3459,7 +3466,7 @@ mod tests {
 
         let ctx = Context::default();
         let mut gesture = super::ZoomGesture::default();
-        let mut size = super::TextSize::Default;
+        let mut steps = 0;
         let modifiers = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
         let wheel = |unit, delta, phase, modifiers| Event::MouseWheel {
             unit,
@@ -3474,29 +3481,21 @@ mod tests {
                     wheel(MouseWheelUnit::Point, vec2(0.0, 15.0), TouchPhase::Start, modifiers),
                     wheel(MouseWheelUnit::Point, vec2(0.0, 0.0), TouchPhase::End, modifiers),
                 ],
-                super::TextSize::Large,
+                1,
                 false,
             ),
-            (
-                vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), TouchPhase::Move, modifiers)],
-                super::TextSize::Default,
-                false,
-            ),
-            (
-                vec![wheel(MouseWheelUnit::Line, vec2(0.0, 1.0), TouchPhase::Move, Modifiers::NONE)],
-                super::TextSize::Default,
-                true,
-            ),
+            (vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), TouchPhase::Move, modifiers)], 0, false),
+            (vec![wheel(MouseWheelUnit::Line, vec2(0.0, 1.0), TouchPhase::Move, Modifiers::NONE)], 0, true),
         ];
-        for (events, expected_size, scrolls) in frames {
+        for (events, expected_steps, scrolls) in frames {
             let mut input = RawInput { events, ..Default::default() };
             super::linux_wheel_zoom(&mut input, 700.0);
             ctx.run_ui(input, |ui| {
-                size = gesture.step(size, ui.input(InputState::zoom_delta));
+                steps += gesture.direction(ui.input(InputState::zoom_delta));
                 assert_eq!(ui.input(|input| input.smooth_scroll_delta.y > 0.0), scrolls);
             })
             .drop_without_applying_deltas();
-            assert_eq!(size, expected_size);
+            assert_eq!(steps, expected_steps);
         }
     }
 

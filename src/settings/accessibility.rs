@@ -1,71 +1,31 @@
-//! Text size (and the zoom gesture that steps it), editor font size,
+//! Text size (and the zoom gesture that steps it), text area zoom,
 //! line wrapping, reduced motion and focus outlines.
 
 use std::ops::RangeInclusive;
 
-/// How large everything in the window is drawn.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum TextSize {
-    Small,
-    #[default]
-    Default,
-    Large,
-    Larger,
-    Largest,
+/// Text size (the zoom of the whole window) in percent, smallest and largest.
+pub const TEXT_SIZE_PERCENTS: RangeInclusive<u16> = 80..=200;
+/// Text size when nothing is set, and the percent the reset shortcut returns to.
+pub const DEFAULT_TEXT_SIZE: u16 = 100;
+/// How many percent one step of the text size adds or takes away.
+pub const TEXT_SIZE_STEP: u16 = 5;
+
+/// One step larger text, up to the largest.
+pub fn text_size_larger(percent: u16) -> u16 {
+    (percent + TEXT_SIZE_STEP).min(*TEXT_SIZE_PERCENTS.end())
 }
 
-impl TextSize {
-    pub const ALL: [TextSize; 5] = [Self::Small, Self::Default, Self::Large, Self::Larger, Self::Largest];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Small => "Small",
-            Self::Default => "Default",
-            Self::Large => "Large",
-            Self::Larger => "Larger",
-            Self::Largest => "Largest",
-        }
-    }
-
-    /// The zoom factor of the whole window.
-    pub fn scale(self) -> f32 {
-        match self {
-            Self::Small => 0.9,
-            Self::Default => 1.0,
-            Self::Large => 1.15,
-            Self::Larger => 1.3,
-            Self::Largest => 1.5,
-        }
-    }
-
-    /// The size whose scale is closest to `scale`.
-    pub fn nearest(scale: f32) -> Self {
-        let distance = |size: &TextSize| (size.scale() - scale).abs();
-        Self::ALL.into_iter().min_by(|a, b| distance(a).total_cmp(&distance(b))).unwrap_or_default()
-    }
-
-    /// The next larger size, or the largest.
-    pub fn larger(self) -> Self {
-        Self::ALL[(self.index() + 1).min(Self::ALL.len() - 1)]
-    }
-
-    /// The next smaller size, or the smallest.
-    pub fn smaller(self) -> Self {
-        Self::ALL[self.index().saturating_sub(1)]
-    }
-
-    fn index(self) -> usize {
-        Self::ALL.iter().position(|size| *size == self).unwrap_or_default()
-    }
+/// One step smaller text, down to the smallest.
+pub fn text_size_smaller(percent: u16) -> u16 {
+    percent.saturating_sub(TEXT_SIZE_STEP).max(*TEXT_SIZE_PERCENTS.start())
 }
 
 /// How far a Cmd/Ctrl + wheel or pinch gesture has to zoom before the text
-/// size moves one step: about one wheel notch, and close to the ratio
-/// between neighboring sizes.
+/// size moves one step: about one wheel notch.
 pub const ZOOM_GESTURE_STEP: f32 = 1.15;
 
 /// Gathers the zoom of Cmd/Ctrl + mouse wheel and trackpad pinch, which
-/// arrives as a small factor every frame, into whole [`TextSize`] steps.
+/// arrives as a small factor every frame, into whole steps.
 #[derive(Debug)]
 pub struct ZoomGesture {
     /// Product of the frames' zoom factors since the last step.
@@ -79,18 +39,7 @@ impl Default for ZoomGesture {
 }
 
 impl ZoomGesture {
-    /// Add one frame's zoom `factor` (1.0 for none) and return the size to
-    /// show: one step larger or smaller than `size` once enough zoom has
-    /// gathered, otherwise `size` itself.
-    pub fn step(&mut self, size: TextSize, factor: f32) -> TextSize {
-        match self.direction(factor) {
-            1 => size.larger(),
-            -1 => size.smaller(),
-            _ => size,
-        }
-    }
-
-    /// Add one frame's zoom `factor` and say whether a whole step has
+    /// Add one frame's zoom `factor` (1.0 for none) and say whether a whole step has
     /// gathered: 1 for a step larger, -1 for a step smaller, 0 for none yet.
     pub fn direction(&mut self, factor: f32) -> i8 {
         // A broken factor from the platform must not poison the running product.
@@ -127,20 +76,17 @@ pub fn page_zoom_smaller(percent: u16) -> u16 {
     percent.saturating_sub(PAGE_ZOOM_STEP).max(*PAGE_ZOOM_PERCENTS.start())
 }
 
-/// Editor font size when nothing is set.
-pub const DEFAULT_EDITOR_FONT_SIZE: u8 = 14;
-/// Smallest and largest editor font size.
-pub const EDITOR_FONT_SIZES: RangeInclusive<u8> = 9..=28;
+/// Size of the editor's monospace font in points at 100% text area zoom.
+pub const EDITOR_FONT_SIZE: u8 = 14;
 
 /// Settings that make Rubrique easier to read and use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[expect(clippy::struct_excessive_bools, reason = "each flag is an independent on/off setting")]
 pub struct AccessibilitySettings {
-    /// Zoom of the whole window.
-    pub text_size: TextSize,
-    /// Size of the editor's monospace font in points, before the text size.
-    pub editor_font_size: u8,
-    /// Zoom of the text area only (editor and preview), in percent. The
+    /// Zoom of the whole window, in percent.
+    pub text_size: u16,
+    /// Zoom of the text area only (editor and preview), in percent: it
+    /// scales the editor's font from [`EDITOR_FONT_SIZE`]. The
     /// explorer, tabs and bars keep their size.
     pub page_zoom: u16,
     /// The menu bar along the top of the window; turn it off to give the
@@ -160,8 +106,7 @@ pub struct AccessibilitySettings {
 impl Default for AccessibilitySettings {
     fn default() -> Self {
         AccessibilitySettings {
-            text_size: TextSize::Default,
-            editor_font_size: DEFAULT_EDITOR_FONT_SIZE,
+            text_size: DEFAULT_TEXT_SIZE,
             page_zoom: DEFAULT_PAGE_ZOOM,
             show_menu_bar: true,
             reduce_motion: false,
@@ -173,6 +118,11 @@ impl Default for AccessibilitySettings {
 }
 
 impl AccessibilitySettings {
+    /// The text size as the zoom factor of the whole window (1.0 for 100%).
+    pub fn text_scale(&self) -> f32 {
+        f32::from(self.text_size) / 100.0
+    }
+
     /// The text area zoom as a factor (1.0 for 100%).
     pub fn page_scale(&self) -> f32 {
         f32::from(self.page_zoom) / 100.0
@@ -182,11 +132,8 @@ impl AccessibilitySettings {
     pub fn parse_line(&mut self, key: &str, value: &str) -> bool {
         match key {
             "text_scale" => {
-                if let Ok(scale) = value.parse::<f32>() {
-                    self.text_size = TextSize::nearest(scale);
-                }
+                self.text_size = parse_text_size(value).unwrap_or(self.text_size);
             }
-            "editor_font_size" => self.editor_font_size = parse_font_size(value).unwrap_or(self.editor_font_size),
             "page_zoom" => {
                 if let Ok(percent) = value.parse::<u16>() {
                     self.page_zoom = percent.clamp(*PAGE_ZOOM_PERCENTS.start(), *PAGE_ZOOM_PERCENTS.end());
@@ -207,9 +154,8 @@ impl AccessibilitySettings {
     /// Settings lines for [`AccessibilitySettings::parse_line`].
     pub fn to_lines(&self) -> String {
         format!(
-            "text_scale={}\neditor_font_size={}\npage_zoom={}\nshow_menu_bar={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
-            self.text_size.scale(),
-            self.editor_font_size,
+            "text_scale={}\npage_zoom={}\nshow_menu_bar={}\nreduce_motion={}\nstrong_focus={}\nline_numbers={}\nwrap_lines={}\n",
+            self.text_scale(),
             self.page_zoom,
             self.show_menu_bar,
             self.reduce_motion,
@@ -220,13 +166,12 @@ impl AccessibilitySettings {
     }
 }
 
-/// A whole number of points inside [`EDITOR_FONT_SIZES`].
-fn parse_font_size(value: &str) -> Option<u8> {
-    let size = value.parse::<f32>().ok().filter(|size| size.is_finite())?;
-    let (min, max) = (*EDITOR_FONT_SIZES.start(), *EDITOR_FONT_SIZES.end());
-    // Clamped to 9..=28 first, so the cast cannot truncate.
+/// A saved zoom factor (1.15) as a percent inside [`TEXT_SIZE_PERCENTS`].
+fn parse_text_size(value: &str) -> Option<u16> {
+    let scale = value.parse::<f32>().ok().filter(|scale| scale.is_finite())?;
+    let (min, max) = (*TEXT_SIZE_PERCENTS.start(), *TEXT_SIZE_PERCENTS.end());
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "clamped to the range")]
-    Some(size.round().clamp(f32::from(min), f32::from(max)) as u8)
+    Some((scale * 100.0).round().clamp(f32::from(min), f32::from(max)) as u16)
 }
 
 #[cfg(test)]
@@ -244,10 +189,9 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        for text_size in TextSize::ALL {
+        for text_size in [80, 100, 115, 125, 200] {
             let settings = AccessibilitySettings {
                 text_size,
-                editor_font_size: 16,
                 page_zoom: 130,
                 show_menu_bar: false,
                 reduce_motion: true,
@@ -273,12 +217,10 @@ mod tests {
 
     #[test]
     fn odd_values_snap_or_are_ignored() {
-        let settings = parse("text_scale=1.2\neditor_font_size=99\nreduce_motion=yes\n");
-        assert_eq!(settings.text_size, TextSize::Large);
-        assert_eq!(settings.editor_font_size, 28);
+        let settings = parse("text_scale=1.2\nreduce_motion=yes\n");
+        assert_eq!(settings.text_size, 120);
         assert!(!settings.reduce_motion);
-        assert_eq!(parse("editor_font_size=14.4\n").editor_font_size, 14);
-        let settings = parse("text_scale=big\neditor_font_size=NaN\n");
+        let settings = parse("text_scale=big\n");
         assert_eq!(settings, AccessibilitySettings::default());
     }
 
@@ -294,38 +236,37 @@ mod tests {
     }
 
     #[test]
-    fn steps_stop_at_the_ends() {
-        assert_eq!(TextSize::Default.larger(), TextSize::Large);
-        assert_eq!(TextSize::Largest.larger(), TextSize::Largest);
-        assert_eq!(TextSize::Default.smaller(), TextSize::Small);
-        assert_eq!(TextSize::Small.smaller(), TextSize::Small);
-        assert_eq!(TextSize::nearest(5.0), TextSize::Largest);
-        assert_eq!(TextSize::nearest(0.1), TextSize::Small);
+    fn text_size_steps_stay_in_range() {
+        assert_eq!(text_size_larger(100), 105);
+        assert_eq!(text_size_larger(198), 200);
+        assert_eq!(text_size_smaller(100), 95);
+        assert_eq!(text_size_smaller(82), 80);
+        assert_eq!(parse("text_scale=5.0\n").text_size, 200);
+        assert_eq!(parse("text_scale=0.1\n").text_size, 80);
+        assert_eq!(parse("text_scale=-1\n").text_size, 80);
     }
 
     #[test]
     fn zoom_gesture_steps_once_enough_has_gathered() {
         let mut gesture = ZoomGesture::default();
-        // Small frames add up before the size moves.
-        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Default);
-        assert_eq!(gesture.step(TextSize::Default, 1.1), TextSize::Large);
+        // Small frames add up before a step.
+        assert_eq!(gesture.direction(1.1), 0);
+        assert_eq!(gesture.direction(1.1), 1);
         // The gathered zoom starts over after a step.
-        assert_eq!(gesture.step(TextSize::Large, 1.1), TextSize::Large);
-        assert_eq!(gesture.step(TextSize::Large, 1.0 / 1.1), TextSize::Large);
-        assert_eq!(gesture.step(TextSize::Large, 0.8), TextSize::Default);
+        assert_eq!(gesture.direction(1.1), 0);
+        assert_eq!(gesture.direction(1.0 / 1.1), 0);
+        assert_eq!(gesture.direction(0.8), -1);
         // One big frame moves a single step, not several.
-        assert_eq!(gesture.step(TextSize::Default, 10.0), TextSize::Large);
+        assert_eq!(gesture.direction(10.0), 1);
     }
 
     #[test]
-    fn zoom_gesture_stops_at_the_ends_and_ignores_bad_factors() {
+    fn zoom_gesture_ignores_bad_factors() {
         let mut gesture = ZoomGesture::default();
-        assert_eq!(gesture.step(TextSize::Largest, 2.0), TextSize::Largest);
-        assert_eq!(gesture.step(TextSize::Small, 0.5), TextSize::Small);
         for factor in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
-            assert_eq!(gesture.step(TextSize::Default, factor), TextSize::Default);
+            assert_eq!(gesture.direction(factor), 0);
         }
         // Still gathering normally afterwards.
-        assert_eq!(gesture.step(TextSize::Default, 1.2), TextSize::Large);
+        assert_eq!(gesture.direction(1.2), 1);
     }
 }
