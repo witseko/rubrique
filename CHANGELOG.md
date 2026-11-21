@@ -20,7 +20,7 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   longer used, so set the zoom again if the editor looks different.
 - **Line numbers in their own column.** The line numbers sit on a tinted
   strip with a thin line between them and the text, and the number of the
-  line with the cursor stands out.
+  line with the cursor stands out. Click a number to select its line.
 
 ### Fixed
 
