@@ -3352,6 +3352,7 @@ impl eframe::App for RubriqueApp {
         self.native_menu(&ctx);
         // The preview reads the text area zoom while it draws.
         crate::markdown::render::set_page_zoom(self.settings.accessibility.page_scale());
+        crate::markdown::render::set_explorer_folders(&ctx, &self.settings.folders);
         self.poll_disk(&ctx);
         self.poll_drafts(&ctx);
         self.poll_naming();

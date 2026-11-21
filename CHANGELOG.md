@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Preview stays in your folder.** Images and links to Markdown files in
+  the preview reach only files inside the explorer folder that holds the
+  note (or its bundle, or the note's own folder when it is in neither).
+  An image outside shows its alt text, with the reason on hover.
+
 ## [1.9.0] - 2026-11-21
 
 ### Added
