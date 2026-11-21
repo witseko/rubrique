@@ -162,6 +162,7 @@ impl Settings {
                 _ => {}
             }
         }
+        settings.text_highlight.add_new_defaults();
         if settings.folders.is_empty() {
             settings.folders.extend(legacy_folder);
         }
@@ -416,6 +417,7 @@ mod tests {
                     r"\bPROJ-[0-9]+\b",
                     crate::highlight::text_rules::RuleColor::Key,
                 )],
+                ..text_highlight::TextHighlightSettings::default()
             },
             updates: updates::UpdateSettings {
                 auto_check: updates::AutoCheck::On,

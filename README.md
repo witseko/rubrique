@@ -152,7 +152,7 @@ suggestions with Codex run only in folders where you allowed AI.
 
 Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Code in Python,
 JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, JSON, XML and YAML is colored with the
-theme's colors or VS Code's (Settings → Appearance → Code colors). Highlight IP addresses, UUIDs,
+theme's colors or VS Code's (Settings → Appearance → Code colors). Highlight file paths, links, IP addresses, UUIDs,
 hashes, numbers and your own patterns in plain text and Markdown (Settings → Highlights).
 Toggle those highlights with `Cmd+Shift+H`. Text size, line numbers and other options are in
 Settings → Accessibility.

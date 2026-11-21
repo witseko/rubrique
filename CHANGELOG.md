@@ -10,6 +10,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Added
 
+- **File paths, file names and links in text highlights.** Settings →
+  Highlights has three more rules: File path (`/var/log/app.log`,
+  `~/notes/todo.txt`, `src/app/main.rs`, `C:\Users\me\notes.txt`), File
+  name (`report.csv`, `Cargo.toml`) and URL. They are added once to the
+  rules you already have, which keep their order; change, switch off or
+  delete them like any other rule.
 - **OpenRig team editor.** A rig spec (`rig.yaml`) opens as a form: pods
   and their seats, a seat inspector, the links between seats ("build
   delegates to review") and the team settings, with Form / Source at the
