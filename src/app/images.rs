@@ -123,6 +123,7 @@ mod tests {
             disk_notice: None,
             editor: None,
             source: false,
+            team: None,
         };
         app.add_image_file(&ctx, &photo);
         // No plain copy of the image lands next to the scratch.

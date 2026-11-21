@@ -228,10 +228,10 @@ impl Rig {
     fn run_steps(&self, endpoint: SocketAddr, steps: &[Step]) -> Result<(), String> {
         for (index, step) in steps.iter().enumerate() {
             let args: Vec<&str> = step.args.iter().map(String::as_str).collect();
-            let detail = match self.run(Some(endpoint), &args, None, SETUP_TIMEOUT) {
+            let detail = match self.call(Some(endpoint), &args, None, SETUP_TIMEOUT) {
                 Ok(reply) if reply.success => continue,
                 Ok(reply) => rig_message(&reply.stdout),
-                Err(error) => Some(error),
+                Err(error) => Some(error.into()),
             };
             return Err(step_failure(step, &steps[..index], detail.as_deref()));
         }

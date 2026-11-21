@@ -39,6 +39,7 @@ mod summary;
 mod tab_groups;
 mod tab_list;
 mod tabs;
+mod team_editor;
 mod terminal_full_screen;
 use terminal_full_screen::TerminalFullScreen;
 mod terminals;
@@ -130,6 +131,9 @@ const NOTE_CARD_TINT: f32 = 0.18;
 const RENAME_DIALOG_WIDTH: f32 = 380.0;
 /// Width of the "unsaved changes" dialog.
 const UNSAVED_DIALOG_WIDTH: f32 = 440.0;
+/// What the "unsaved changes" dialog says about a file.
+const UNSAVED_BODY: &str =
+    "Your edits are not saved yet. Keep for later closes the file and brings them back when you open it again.";
 /// Inner margin (x, y) of the status bar.
 const BAR_MARGIN: (i8, i8) = (10, 6);
 /// Opacity of the warning color behind the "changed on disk" bar.
@@ -199,8 +203,11 @@ enum OpenFile {
         /// Cursor and undo history while the tab is hidden.
         editor: Option<EditorState>,
         /// A Markdown or HTML file shows its source instead of the
-        /// preview. Every file opens in preview; this lasts only for its tab.
+        /// preview, and a rig spec its YAML instead of the team form. Every
+        /// file opens in preview; this lasts only for its tab.
         source: bool,
+        /// The team form of an `OpenRig` rig spec (when `OpenRig` is on).
+        team: Option<Box<team_editor::common::TeamEditor>>,
     },
     /// An image (shown in the page) or a video (shown as a card).
     Media {
@@ -295,6 +302,8 @@ enum PageMode {
     Edit,
     /// The raw text in the editor.
     Source,
+    /// The team form of a rig spec.
+    Form,
 }
 
 /// An action that closes files, so it may need the "unsaved changes"
@@ -432,6 +441,8 @@ pub struct RubriqueApp {
     open_path: Option<open_path::OpenPathDialog>,
     /// The "Clone repository" dialog, while it is open.
     clone_repo: Option<clone_repo::CloneDialog>,
+    /// The `OpenRig` "New team" dialog, while it is open.
+    new_team: Option<team_editor::states::NewTeamDialog>,
     /// Watches the tmux sessions for the explorer; `None` when tmux is not installed.
     terminals: Option<TerminalMonitor>,
     /// The merge screen for the open file, while it is open.
@@ -558,6 +569,7 @@ impl RubriqueApp {
             file_selection: FileSelection::default(),
             open_path: None,
             clone_repo: None,
+            new_team: None,
             terminals: Tmux::find().map(|tmux| TerminalMonitor::start(tmux, ctx)),
             merging: None,
             last_disk_check: 0.0,
@@ -667,6 +679,10 @@ impl RubriqueApp {
                 if crate::remote::is_mirror(&document.path) {
                     self.fetch_remote_images(&document.path, &document.text);
                 }
+                let is_team = self.settings.openrig_enabled
+                    && team_editor::is_yaml_path(&document.path)
+                    && crate::openrig::spec::is_rig_spec(&document.text);
+                let team = is_team.then(|| Box::new(team_editor::common::TeamEditor::new(&document)));
                 Some(OpenFile::Text {
                     document,
                     preview: None,
@@ -674,6 +690,7 @@ impl RubriqueApp {
                     disk_notice: None,
                     editor: None,
                     source: false,
+                    team,
                 })
             }
             Ok(Opened::Unsupported(reason)) => Some(OpenFile::Unsupported { path, reason }),
@@ -796,7 +813,7 @@ impl RubriqueApp {
     /// Switch a supported text file between source and preview.
     fn toggle_preview(&mut self) {
         self.finish_block_edit();
-        let has_preview = self.open_file.path().is_some_and(has_preview);
+        let has_preview = self.open_file.path().is_some_and(has_preview) || self.showing_team_file();
         if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = !*source;
         }
@@ -820,11 +837,11 @@ impl RubriqueApp {
     /// mode and show the preview, Source shows the editor.
     fn set_page_mode(&mut self, mode: PageMode) {
         self.finish_block_edit();
-        let has_preview = self.open_file.path().is_some_and(has_preview);
+        let has_preview = self.open_file.path().is_some_and(has_preview) || self.showing_team_file();
         match mode {
             PageMode::Read => self.settings.layout.preview_mode = PreviewMode::Read,
             PageMode::Edit => self.settings.layout.preview_mode = PreviewMode::Edit,
-            PageMode::Source => {}
+            PageMode::Source | PageMode::Form => {}
         }
         if has_preview && let OpenFile::Text { source, .. } = &mut self.open_file {
             *source = mode == PageMode::Source;
@@ -833,13 +850,24 @@ impl RubriqueApp {
 
     /// How the open file is shown, for the Read | Edit | Source switch.
     fn page_mode(&self) -> PageMode {
-        if !self.showing_any_preview() {
+        if self.showing_team_file() {
+            if matches!(self.open_file, OpenFile::Text { source: true, .. }) {
+                PageMode::Source
+            } else {
+                PageMode::Form
+            }
+        } else if !self.showing_any_preview() {
             PageMode::Source
         } else if self.showing_preview() && self.settings.layout.preview_mode == PreviewMode::Edit {
             PageMode::Edit
         } else {
             PageMode::Read
         }
+    }
+
+    /// True when the open tab is a rig spec with a team form (shown or not).
+    fn showing_team_file(&self) -> bool {
+        matches!(self.open_file, OpenFile::Text { team: Some(_), .. })
     }
 
     /// True when the right panel shows the Markdown preview (Read or Edit).
@@ -1990,6 +2018,7 @@ impl RubriqueApp {
                 self.settings_group = SettingsGroup::OpenRig;
                 self.settings_open = true;
             }
+            ExplorerAction::NewOpenRigTeam => self.new_team = Some(team_editor::states::NewTeamDialog::default()),
             ExplorerAction::New(folder, kind) => self.start_new_entry(folder, kind),
             ExplorerAction::ToggleAgentSessions(name) => self.toggle_agent_sessions(name),
             ExplorerAction::ResumeAgentSession { terminal, id, new_terminal } => {
@@ -2132,7 +2161,7 @@ impl RubriqueApp {
             }
             OpenFile::Preview { path, preview } => preview_status = preview.show(ui, path),
             OpenFile::Unsupported { path, reason } => unsupported_notice(ui, path, reason),
-            OpenFile::Text { document, preview, delimited, disk_notice, source, .. } => {
+            OpenFile::Text { document, preview, delimited, disk_notice, source, team, .. } => {
                 if let Some(session) = &mut self.merging {
                     merge_action = show_merge(ui, session, &name_text(&document.path));
                 } else if let Some(state) = disk_notice {
@@ -2163,6 +2192,8 @@ impl RubriqueApp {
                     });
                     preview_event = output.event;
                     self.voice.preview_hover = output.hovered;
+                } else if !*source && let Some(team) = team {
+                    team_editor::show(ui, team, document);
                 } else if !*source && let Some(kind) = Delimited::of_path(&document.path) {
                     DelimitedPreview::show(delimited, ui, kind, document);
                 } else if !*source && has_preview(&document.path) {
@@ -2204,6 +2235,7 @@ impl RubriqueApp {
         if let Some(status) = preview_status {
             self.show_status(status);
         }
+        self.team_events(ui.ctx());
     }
 
     /// Act on what the user did in the preview.
@@ -2964,7 +2996,11 @@ impl RubriqueApp {
             return;
         }
         let name = self.open_file.path().map(name_text).unwrap_or_default();
-        let Some(choice) = ask_about_unsaved_changes(ctx, &name) else {
+        let body = match &self.open_file {
+            OpenFile::Text { team: Some(team), .. } => team_editor::states::unsaved_changes_text(team),
+            _ => UNSAVED_BODY.to_owned(),
+        };
+        let Some(choice) = ask_about_unsaved_changes(ctx, &name, &body) else {
             return;
         };
         // The question is answered: whatever happens next, stop asking.
@@ -3329,13 +3365,10 @@ fn rename_suggest_button(ui: &mut Ui, waiting: bool) -> bool {
 /// Draw the "unsaved changes" modal for the file `name`. Returns the
 /// answer once the user gives one; Esc, a click outside or Cancel cancel,
 /// and Enter saves.
-fn ask_about_unsaved_changes(ctx: &Context, name: &str) -> Option<UnsavedChoice> {
+fn ask_about_unsaved_changes(ctx: &Context, name: &str, body: &str) -> Option<UnsavedChoice> {
     let modal = alert::show(ctx, "unsaved-changes", UNSAVED_DIALOG_WIDTH, |ui| {
         alert::title(ui, &format!("Save changes to \u{201c}{name}\u{201d}?"));
-        alert::body(
-            ui,
-            "Your edits are not saved yet. Keep for later closes the file and brings them back when you open it again.",
-        );
+        alert::body(ui, body);
         unsaved_choice_buttons(ui)
     });
     let closed = modal.should_close();
@@ -3472,6 +3505,7 @@ impl eframe::App for RubriqueApp {
         self.seat_setup_dialog(&ctx);
         self.open_path_dialog(&ctx);
         self.clone_repo_dialog(&ctx);
+        self.new_team_dialog(&ctx);
         self.add_remote_dialog(&ctx);
         self.secret_dialog(&ctx);
         self.update_title(&ctx);
@@ -3551,6 +3585,7 @@ mod tests {
             disk_notice: None,
             editor: None,
             source: false,
+            team: None,
         });
         #[cfg(target_os = "macos")]
         {
@@ -3617,7 +3652,7 @@ mod tests {
             .collect();
         let mut answer = None;
         let mut output = ctx.run_ui(RawInput { events, ..Default::default() }, |ui| {
-            answer = ask_about_unsaved_changes(ui.ctx(), "todo.md");
+            answer = ask_about_unsaved_changes(ui.ctx(), "todo.md", crate::app::UNSAVED_BODY);
         });
         // Fonts are uploaded as textures; a test has no painter to take them.
         output.textures_delta.clear();

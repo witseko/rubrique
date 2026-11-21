@@ -16,6 +16,18 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   name (`report.csv`, `Cargo.toml`) and URL. They are added once to the
   rules you already have, which keep their order; change, switch off or
   delete them like any other rule.
+- **OpenRig team editor.** A rig spec (`rig.yaml`) opens as a form: pods
+  and their seats, a seat inspector, the links between seats ("build
+  delegates to review") and the team settings, with Form / Source at the
+  top right to see the same file as YAML. Saving changes only what you
+  edited, so comments and the fields the form does not show stay as
+  written. Validate checks the team with `rig spec validate` and preflight
+  and marks the fields with problems; Launch shows the seats `rig up
+  --plan` would start, and starts them only when you press Launch under
+  that plan. The plus button in the Explorer's OpenRig section creates a
+  team from the starter, the factory or a blank one, and a built-in team
+  opens read-only with Duplicate to edit. Needs Settings > OpenRig > Use
+  OpenRig.
 - **Terminal full screen.** Press `Cmd+Shift+Enter` in a terminal tab, or
   click the new button in its status bar (also View → Terminal full
   screen), and the terminal fills the screen with no explorer, tabs or

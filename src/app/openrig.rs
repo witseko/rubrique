@@ -592,10 +592,10 @@ fn find_seats(ctx: &Context, rig: RigHost) -> Receiver<Result<Inventory, String>
 }
 
 /// Run a CLI operation away from the UI and redraw when it returns.
-fn work<T: Send + 'static>(
+pub(super) fn work<T: Send + 'static, E: Send + 'static>(
     ctx: &Context,
-    operation: impl FnOnce() -> Result<T, String> + Send + 'static,
-) -> Receiver<Result<T, String>> {
+    operation: impl FnOnce() -> Result<T, E> + Send + 'static,
+) -> Receiver<Result<T, E>> {
     let (sender, receiver) = mpsc::channel();
     let ctx = ctx.clone();
     std::thread::spawn(move || {
@@ -606,7 +606,7 @@ fn work<T: Send + 'static>(
 }
 
 /// Read a worker response without blocking.
-fn receive<T>(receiver: &Receiver<Result<T, String>>) -> Option<Result<T, String>> {
+fn receive<T, E: From<&'static str>>(receiver: &Receiver<Result<T, E>>) -> Option<Result<T, E>> {
     match receiver.try_recv() {
         Ok(result) => Some(result),
         Err(TryRecvError::Empty) => None,
@@ -615,7 +615,7 @@ fn receive<T>(receiver: &Receiver<Result<T, String>>) -> Option<Result<T, String
 }
 
 /// Consume a completed one-off request.
-fn poll<T>(request: &mut Option<Receiver<Result<T, String>>>) -> Option<Result<T, String>> {
+pub(super) fn poll<T, E: From<&'static str>>(request: &mut Option<Receiver<Result<T, E>>>) -> Option<Result<T, E>> {
     let reply = receive(request.as_ref()?)?;
     *request = None;
     Some(reply)

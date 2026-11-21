@@ -95,6 +95,8 @@ pub enum ExplorerAction {
     AddSeat { seats: Vec<String> },
     /// Open Settings at the remote `OpenRig` rigs.
     OpenRigSettings,
+    /// Show the `OpenRig` "New team" dialog.
+    NewOpenRigTeam,
 }
 
 /// The items of an `OpenRig` seat's menu in the Terminals list.
@@ -1669,7 +1671,7 @@ mod tests {
                 crate::settings::layout::LayoutSettings { files_collapsed, openrig_collapsed, ..Default::default() };
             let _ = explorer_frame(&ctx, &mut layout, Vec::new(), 0.0);
             // Folded, the section is only its header, at the very bottom.
-            double_click(&ctx, &mut layout, egui::pos2(250.0, 790.0), 1.0);
+            double_click(&ctx, &mut layout, egui::pos2(200.0, 790.0), 1.0);
             let _ = explorer_frame(&ctx, &mut layout, Vec::new(), 2.0);
             let texts = explorer_frame(&ctx, &mut layout, Vec::new(), 2.1);
             let seat_shown = texts.iter().any(|(text, _)| text.contains("lead@demo"));

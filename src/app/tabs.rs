@@ -317,7 +317,9 @@ impl RubriqueApp {
     fn preview_controls(&mut self, ui: &mut Ui, strip: egui::Rect) -> egui::Rect {
         let has_toggle = self.can_show_side_panel();
         let is_markdown = self.open_file.path().is_some_and(is_markdown_path);
-        let modes: &[PageMode] = if is_markdown {
+        let modes: &[PageMode] = if self.showing_team_file() {
+            &[PageMode::Form, PageMode::Source]
+        } else if is_markdown {
             &[PageMode::Read, PageMode::Edit, PageMode::Source]
         } else if matches!(self.open_file, OpenFile::Text { .. })
             && self.open_file.path().is_some_and(super::has_preview)
@@ -565,6 +567,7 @@ fn mode_switch(ui: &mut Ui, rect: egui::Rect, modes: &[PageMode], current: PageM
             PageMode::Read => ("Read", Icon::Eye, "Read the preview (Cmd+E)"),
             PageMode::Edit => ("Edit", Icon::Pencil, "Edit blocks in the preview (Cmd+Shift+E)"),
             PageMode::Source => ("Source", Icon::Code, "Show the source (Cmd+E)"),
+            PageMode::Form => ("Form", Icon::Checklist, "Edit the team in a form (Cmd+E)"),
         };
         let segment = egui::Rect::from_min_size(
             pos2(left, rect.top() + SWITCH_INSET),
