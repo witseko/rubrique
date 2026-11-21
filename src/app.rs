@@ -30,6 +30,7 @@ mod openrig;
 mod privacy;
 mod remote;
 mod scratch_paths;
+mod seats;
 mod side_panel;
 mod structure;
 mod sublime_import;
@@ -37,7 +38,10 @@ mod summary;
 mod tab_groups;
 mod tab_list;
 mod tabs;
+mod terminal_full_screen;
+use terminal_full_screen::TerminalFullScreen;
 mod terminals;
+use terminals::StartupFolds;
 mod text_highlight;
 mod update;
 mod voice;
@@ -80,7 +84,10 @@ use crate::markdown::table_edit::{self, TableAction, TableCell};
 use crate::media::{MediaKind, format_name, image_uri, media_kind, open_with_system, size_text};
 use crate::rst::{is_rst_path, parse_rst, rst_source_blocks};
 use crate::scratch::{create_scratch, rename_target};
-use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, ZoomGesture, page_zoom_larger, page_zoom_smaller};
+use crate::settings::accessibility::{
+    DEFAULT_PAGE_ZOOM, DEFAULT_TEXT_SIZE, ZoomGesture, page_zoom_larger, page_zoom_smaller, text_size_larger,
+    text_size_smaller,
+};
 use crate::settings::layout::{ExplorerView, PreviewMode, TabPosition};
 use crate::settings::view::{
     AiInfo, AppearanceInfo, ScratchInfo, SettingsAction, SettingsGroup, TerminalsInfo, VoiceInfo, show_settings,
@@ -88,7 +95,7 @@ use crate::settings::view::{
 use crate::settings::{Settings, default_agents_folder, default_scratch_folder, default_skills_folder, themes_folder};
 use crate::terminal::agent_sessions::SessionHistory;
 use crate::terminal::is_terminal_path;
-use crate::terminal::monitor::{TerminalMonitor, in_saved_order};
+use crate::terminal::monitor::{TerminalMonitor, TerminalRow, in_saved_order};
 use crate::terminal::session::LiveTerminal;
 use crate::terminal::tmux::Tmux;
 use crate::terminal::view::show_terminal;
@@ -336,6 +343,8 @@ pub struct RubriqueApp {
     zoom_gesture: ZoomGesture,
     /// The same for the text area, when the pointer is over it.
     page_zoom_gesture: ZoomGesture,
+    /// A terminal tab filling the screen (see `terminal_full_screen.rs`).
+    terminal_full_screen: TerminalFullScreen,
     /// The menus in the macOS menu bar, installed on the first frame.
     #[cfg(target_os = "macos")]
     native_menu: native_menu::NativeMenuState,
@@ -409,6 +418,11 @@ pub struct RubriqueApp {
     scroll_to_revealed: bool,
     /// The files or folder the "Delete" dialog asks about, while it is open.
     deleting: Option<Vec<PathBuf>>,
+    /// The `OpenRig` seat whose "Stop seat" dialog is open.
+    stopping_seat: Option<String>,
+    /// Terminals and `OpenRig` were folded at startup if they had nothing to
+    /// show (each once its first check finished).
+    startup_folds: StartupFolds,
     /// The range selected in the file tree.
     file_selection: FileSelection,
     /// The "Open path" dialog, while it is open.
@@ -500,6 +514,7 @@ impl RubriqueApp {
             quit_confirmed: false,
             zoom_gesture: ZoomGesture::default(),
             page_zoom_gesture: ZoomGesture::default(),
+            terminal_full_screen: TerminalFullScreen::default(),
             #[cfg(target_os = "macos")]
             native_menu: native_menu::NativeMenuState::NotYet,
             status_message: None,
@@ -534,6 +549,8 @@ impl RubriqueApp {
             revealed: None,
             scroll_to_revealed: false,
             deleting: None,
+            stopping_seat: None,
+            startup_folds: StartupFolds::default(),
             file_selection: FileSelection::default(),
             open_path: None,
             clone_repo: None,
@@ -1112,11 +1129,11 @@ impl RubriqueApp {
         }
         let current = self.settings.accessibility.text_size;
         let size = if ctx.input_mut(|input| input.consume_shortcut(&TEXT_DEFAULT)) {
-            TextSize::Default
+            DEFAULT_TEXT_SIZE
         } else if ctx.input_mut(|input| TEXT_LARGER.iter().any(|keys| input.consume_shortcut(keys))) {
-            current.larger()
+            text_size_larger(current)
         } else if ctx.input_mut(|input| input.consume_shortcut(&TEXT_SMALLER)) {
-            current.smaller()
+            text_size_smaller(current)
         } else {
             // A modified wheel and a pinch both arrive as a zoom factor.
             let factor = ctx.input(egui::InputState::zoom_delta);
@@ -1136,12 +1153,16 @@ impl RubriqueApp {
                 }
                 return;
             }
-            self.zoom_gesture.step(current, factor)
+            match self.zoom_gesture.direction(factor) {
+                1 => text_size_larger(current),
+                -1 => text_size_smaller(current),
+                _ => current,
+            }
         };
         if size != current {
             self.settings.accessibility.text_size = size;
             apply_accessibility(ctx, &self.settings.accessibility);
-            self.show_status(format!("Text size: {} ({}%)", size.name(), (size.scale() * 100.0).round()));
+            self.show_status(format!("Text size: {size}%"));
         }
     }
 
@@ -1170,7 +1191,9 @@ impl RubriqueApp {
 
     /// Remember the window size and the open tabs, then write the settings file.
     fn save_settings(&mut self, ctx: &Context) {
-        if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
+        let full_screen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        // A full screen window keeps the size it had before.
+        if !full_screen && let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
             // In points of the native scale, as the window was opened with, not zoomed ones.
             let zoom = ctx.zoom_factor();
             self.settings.window_size = Some((rect.width() * zoom, rect.height() * zoom));
@@ -1328,6 +1351,9 @@ impl RubriqueApp {
         if response.should_close() {
             self.settings_open = false;
         }
+        if !self.settings_open {
+            self.openrig.settings_closed();
+        }
     }
 
     /// The settings window's content. Theme picks apply at once.
@@ -1364,6 +1390,7 @@ impl RubriqueApp {
         };
         let tmux = self.terminals.as_ref().map(|monitor| monitor.tmux().program());
         let terminals = TerminalsInfo { found: tmux, recipe: self.install.tmux.as_ref(), install: &install };
+        let openrig = self.openrig.settings_info(&mut self.settings.openrig_enabled, &self.settings.openrig_rigs);
         let highlight = self.rule_writer.highlight_info(&mut self.settings.text_highlight, ask_tool_name);
         let html_preview =
             html_snapshot::html_preview_info(&mut self.settings.html_browser_preview, &self.html_snapshots, &install);
@@ -1385,6 +1412,7 @@ impl RubriqueApp {
             ai,
             voice,
             terminals,
+            openrig,
             html_preview,
             self.update.settings_info(&mut self.settings.updates),
         );
@@ -1439,6 +1467,17 @@ impl RubriqueApp {
             }
             SettingsAction::VoiceCommandChanged => self.check_voice_tool(),
             SettingsAction::CheckTerminals => self.check_terminals_again(),
+            SettingsAction::AddRemoteRig(host) => {
+                if self.openrig.add_remote_rig(ctx, host, &mut self.settings.openrig_rigs) {
+                    self.write_settings();
+                }
+            }
+            SettingsAction::RemoveRemoteRig(host) => {
+                self.openrig.remove_remote_rig(&host, &mut self.settings.openrig_rigs);
+                self.write_settings();
+            }
+            SettingsAction::CheckRemoteRig(host) => self.openrig.check_remote_rig(ctx, host),
+            SettingsAction::OpenRigToggled => self.write_settings(),
             SettingsAction::CheckHtmlBrowser => self.check_html_browser(),
             SettingsAction::Copy(text) => self.install_action(ctx, InstallAction::Copy(text)),
             SettingsAction::Install(action) => self.install_action(ctx, action),
@@ -1876,7 +1915,10 @@ impl RubriqueApp {
             note_marks: self.settings.note_marks.then_some(&self.note_marks),
             remote_enabled: self.settings.remote.enabled,
             terminals: terminal_rows.as_deref(),
-            terminal_groups: &terminal_groups,
+            terminal_groups: &terminal_groups.terminals,
+            rig_groups: &terminal_groups.rigs,
+            remote_rigs: !self.settings.openrig_rigs.is_empty(),
+            openrig: self.settings.openrig_enabled,
             folded_terminal_groups: &self.folded_terminal_groups,
             open_terminal: match &self.open_file {
                 OpenFile::Terminal { terminal } => Some(terminal.name.as_str()),
@@ -1909,62 +1951,128 @@ impl RubriqueApp {
         if action.is_some() {
             self.revealed = None;
         }
+        if let Some(action) = action {
+            self.apply_explorer_action(ui.ctx(), action, terminal_rows.as_deref());
+        }
+    }
+
+    /// Carry out a click in the explorer. `terminal_rows` is the Terminals
+    /// list as it was drawn, for a dragged terminal.
+    fn apply_explorer_action(&mut self, ctx: &Context, action: ExplorerAction, terminal_rows: Option<&[TerminalRow]>) {
         match action {
             // Opens a tab, or switches to the file's tab when it is open.
-            Some(ExplorerAction::OpenFile(path)) => self.open_in_tab(path),
-            Some(ExplorerAction::OpenInFileManager(path)) => {
+            ExplorerAction::OpenFile(path) => self.open_in_tab(path),
+            ExplorerAction::OpenInFileManager(path) => {
                 if let Err(error) = crate::media::open_in_file_manager(&path) {
                     self.show_status(error);
                 }
             }
-            Some(ExplorerAction::Copy(text)) => self.copy_to_clipboard(ui.ctx(), text),
-            Some(ExplorerAction::Refresh) => {
+            ExplorerAction::Copy(text) => self.copy_to_clipboard(ctx, text),
+            ExplorerAction::Refresh => {
                 self.roots.iter_mut().for_each(FsNode::refresh);
                 self.note_marks.clear();
                 if let Some(monitor) = &self.terminals {
                     monitor.refresh();
                 }
             }
-            Some(ExplorerAction::OpenTerminal(name)) => self.open_terminal_session(&name),
-            Some(ExplorerAction::NewTerminal) => self.request_new_terminal(),
-            Some(ExplorerAction::New(folder, kind)) => self.start_new_entry(folder, kind),
-            Some(ExplorerAction::ShowTerminalInFiles(name)) => self.show_terminal_in_files(&name),
-            Some(ExplorerAction::RenameTerminal(name)) => self.start_terminal_rename(name),
-            Some(ExplorerAction::ExitTerminal(name)) => self.exit_terminal(&name),
-            Some(ExplorerAction::ToggleAgentSessions(name)) => self.toggle_agent_sessions(name),
-            Some(ExplorerAction::ResumeAgentSession { terminal, id, new_terminal }) => {
+            ExplorerAction::OpenTerminal(name) => self.open_terminal_session(&name),
+            ExplorerAction::NewTerminal => self.request_new_terminal(),
+            ExplorerAction::ShowTerminalInFiles(name) => self.show_terminal_in_files(&name),
+            ExplorerAction::RenameTerminal(name) => self.start_terminal_rename(name),
+            ExplorerAction::ExitTerminal(name) => self.exit_terminal(&name),
+            ExplorerAction::Seat(name, command) => self.seat_command(ctx, name, command),
+            ExplorerAction::OpenRigSettings => {
+                self.settings_group = SettingsGroup::OpenRig;
+                self.settings_open = true;
+            }
+            ExplorerAction::New(folder, kind) => self.start_new_entry(folder, kind),
+            ExplorerAction::ToggleAgentSessions(name) => self.toggle_agent_sessions(name),
+            ExplorerAction::ResumeAgentSession { terminal, id, new_terminal } => {
                 self.resume_agent_session(&terminal, &id, new_terminal);
             }
-            Some(ExplorerAction::RemoveRoot(path)) => self.request_remove_root(path),
-            Some(ExplorerAction::MoveRoot { from, to }) => self.move_root(from, to),
-            Some(ExplorerAction::ToggleTerminalGroup(key)) => self.toggle_terminal_group(key),
-            Some(ExplorerAction::MoveTerminal { name, anchor, after }) => {
-                self.move_terminal(terminal_rows.as_deref(), &name, &anchor, after);
+            ExplorerAction::RemoveRoot(path) => self.request_remove_root(path),
+            ExplorerAction::MoveRoot { from, to } => self.move_root(from, to),
+            ExplorerAction::ToggleTerminalGroup(key) => self.toggle_terminal_group(key),
+            ExplorerAction::MoveTerminal { name, anchor, after } => {
+                self.move_terminal(terminal_rows, &name, &anchor, after);
             }
-            Some(ExplorerAction::AddFolder) => self.choose_folder_to_add(),
-            Some(ExplorerAction::OpenPath) => self.start_open_path(),
-            Some(ExplorerAction::CloneRepository) => self.start_clone_repo(),
-            Some(ExplorerAction::AddRemoteFolder) => self.open_add_remote(),
-            Some(ExplorerAction::NewScratch { encrypted }) => {
+            ExplorerAction::AddFolder => self.choose_folder_to_add(),
+            ExplorerAction::OpenPath => self.start_open_path(),
+            ExplorerAction::CloneRepository => self.start_clone_repo(),
+            ExplorerAction::AddRemoteFolder => self.open_add_remote(),
+            ExplorerAction::NewScratch { encrypted } => {
                 let encrypted = encrypted.unwrap_or_else(|| self.encrypt_new_scratches());
-                self.new_scratch(ui.ctx(), encrypted);
+                self.new_scratch(ctx, encrypted);
             }
-            Some(ExplorerAction::Rename(path)) => self.start_rename(path),
-            Some(ExplorerAction::SetEncrypted { path, encrypt }) => self.set_scratch_encrypted(&path, encrypt),
-            Some(ExplorerAction::RenameInTree(path)) => {
+            ExplorerAction::Rename(path) => self.start_rename(path),
+            ExplorerAction::SetEncrypted { path, encrypt } => self.set_scratch_encrypted(&path, encrypt),
+            ExplorerAction::RenameInTree(path) => {
                 self.clear_name_fields();
                 self.tree_rename = Some(InlineRename::new(path));
             }
-            Some(ExplorerAction::MoveFiles(paths)) => self.choose_move_folder(&paths),
-            Some(ExplorerAction::Delete(paths)) => self.request_delete(paths),
-            None => {}
+            ExplorerAction::MoveFiles(paths) => self.choose_move_folder(&paths),
+            ExplorerAction::Delete(paths) => self.request_delete(paths),
+        }
+    }
+
+    /// The bars and panels around the page: menu and status bars, the
+    /// explorer, the side panel and the AI and Helm output.
+    fn panels_around_page(&mut self, ui: &mut Ui, bar_frame: egui::Frame) {
+        let style = ui.ctx().global_style();
+        // macOS has the menus in its own bar at the top of the screen.
+        #[cfg(not(target_os = "macos"))]
+        if self.settings.accessibility.show_menu_bar {
+            egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
+        }
+        egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
+        // Settings open from the menus (the macOS menu bar, or the bar in the
+        // window). Only where that bar is switched off does a gear at the
+        // bottom of the explorer stay, so Settings can still be found.
+        let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
+        let update_card = self.update_card_wanted();
+        egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
+            if menu_hidden || update_card {
+                egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
+                    ui.add_space(4.0);
+                    if update_card {
+                        self.update_card(ui);
+                        ui.add_space(4.0);
+                    }
+                    if menu_hidden {
+                        ui.horizontal(|ui| {
+                            let tip = "Settings (Ctrl+,)";
+                            let gear = icon_button(ui, Icon::Gear, "Settings", tip, self.settings_open);
+                            if gear.clicked() {
+                                self.toggle_settings();
+                            }
+                        });
+                    }
+                    ui.add_space(2.0);
+                });
+            }
+            self.explorer_panel(ui);
+        });
+        self.right_panel(ui);
+        if self.ask.job.is_some() && self.merging.is_none() {
+            egui::Panel::bottom("ai-output")
+                .resizable(true)
+                .default_size(AI_OUTPUT_HEIGHT)
+                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
+                .show(ui, |ui| self.ai_output_panel(ui));
+        }
+        if self.helm.panel.is_some() && self.merging.is_none() {
+            egui::Panel::bottom("helm-output")
+                .resizable(true)
+                .default_size(AI_OUTPUT_HEIGHT)
+                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
+                .show(ui, |ui| self.helm_panel(ui));
         }
     }
 
     /// The bar above the page, when any tab is open: the tab strip, or the
     /// active tab's name while the tabs are listed in the explorer.
     fn page_header(&mut self, ui: &mut Ui) {
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() || self.terminal_full_screen.is_showing() {
             return;
         }
         match self.settings.layout.tab_position {
@@ -2729,6 +2837,10 @@ impl RubriqueApp {
 
     /// Path of the open file on the left; mode and editor stats on the right.
     fn document_status(&mut self, ui: &mut Ui) {
+        if matches!(self.open_file, OpenFile::Terminal { .. }) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.terminal_status(ui));
+            return;
+        }
         let Some(path) = self.open_file.path() else {
             return;
         };
@@ -3307,8 +3419,10 @@ impl eframe::App for RubriqueApp {
         self.handle_shortcuts(&ctx);
         #[cfg(target_os = "macos")]
         self.native_menu(&ctx);
+        self.sync_terminal_full_screen(&ctx);
         // The preview reads the text area zoom while it draws.
         crate::markdown::render::set_page_zoom(self.settings.accessibility.page_scale());
+        crate::markdown::render::set_explorer_folders(&ctx, &self.settings.folders);
         self.poll_disk(&ctx);
         self.poll_drafts(&ctx);
         self.poll_naming();
@@ -3319,6 +3433,7 @@ impl eframe::App for RubriqueApp {
         self.poll_remote();
         self.poll_remote_saves();
         self.poll_pending_sends();
+        self.poll_terminal_sources(&ctx);
         self.poll_agent_sessions(&ctx);
         self.poll_update(&ctx);
         self.poll_git(&ctx);
@@ -3329,59 +3444,16 @@ impl eframe::App for RubriqueApp {
         // The page fills the whole central area; editor and preview add their own margins.
         let page_frame = egui::Frame::central_panel(&style).fill(page_fill(&style.visuals)).inner_margin(0);
 
-        // macOS has the menus in its own bar at the top of the screen.
-        #[cfg(not(target_os = "macos"))]
-        if self.settings.accessibility.show_menu_bar {
-            egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
-        }
-        egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
-        // Settings open from the menus (the macOS menu bar, or the bar in the
-        // window). Only where that bar is switched off does a gear at the
-        // bottom of the explorer stay, so Settings can still be found.
-        let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
-        let update_card = self.update_card_wanted();
-        egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
-            if menu_hidden || update_card {
-                egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
-                    ui.add_space(4.0);
-                    if update_card {
-                        self.update_card(ui);
-                        ui.add_space(4.0);
-                    }
-                    if menu_hidden {
-                        ui.horizontal(|ui| {
-                            let tip = "Settings (Ctrl+,)";
-                            let gear = icon_button(ui, Icon::Gear, "Settings", tip, self.settings_open);
-                            if gear.clicked() {
-                                self.toggle_settings();
-                            }
-                        });
-                    }
-                    ui.add_space(2.0);
-                });
-            }
-            self.explorer_panel(ui);
-        });
-        self.right_panel(ui);
-        if self.ask.job.is_some() && self.merging.is_none() {
-            egui::Panel::bottom("ai-output")
-                .resizable(true)
-                .default_size(AI_OUTPUT_HEIGHT)
-                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
-                .show(ui, |ui| self.ai_output_panel(ui));
-        }
-        if self.helm.panel.is_some() && self.merging.is_none() {
-            egui::Panel::bottom("helm-output")
-                .resizable(true)
-                .default_size(AI_OUTPUT_HEIGHT)
-                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
-                .show(ui, |ui| self.helm_panel(ui));
+        // A terminal in full screen has the window to itself.
+        if !self.terminal_full_screen.is_showing() {
+            self.panels_around_page(ui, bar_frame);
         }
         self.prepare_find(&ctx);
         egui::CentralPanel::default().frame(page_frame).show(ui, |ui| self.document_area(ui));
         self.handle_dropped_files(&ctx);
         self.open_system_documents(&ctx);
         self.find_bar(&ctx);
+        self.terminal_full_screen_hint(&ctx);
 
         self.ask_dialogs(&ctx);
         self.install_dialog(&ctx);
@@ -3391,6 +3463,7 @@ impl eframe::App for RubriqueApp {
         self.note_dialog(&ctx);
         self.rename_dialog(&ctx);
         self.delete_dialog(&ctx);
+        self.stop_seat_dialog(&ctx);
         self.open_path_dialog(&ctx);
         self.clone_repo_dialog(&ctx);
         self.add_remote_dialog(&ctx);
@@ -3421,7 +3494,7 @@ mod tests {
 
         let ctx = Context::default();
         let mut gesture = super::ZoomGesture::default();
-        let mut size = super::TextSize::Default;
+        let mut steps = 0;
         let modifiers = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
         let wheel = |unit, delta, phase, modifiers| Event::MouseWheel {
             unit,
@@ -3436,29 +3509,21 @@ mod tests {
                     wheel(MouseWheelUnit::Point, vec2(0.0, 15.0), TouchPhase::Start, modifiers),
                     wheel(MouseWheelUnit::Point, vec2(0.0, 0.0), TouchPhase::End, modifiers),
                 ],
-                super::TextSize::Large,
+                1,
                 false,
             ),
-            (
-                vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), TouchPhase::Move, modifiers)],
-                super::TextSize::Default,
-                false,
-            ),
-            (
-                vec![wheel(MouseWheelUnit::Line, vec2(0.0, 1.0), TouchPhase::Move, Modifiers::NONE)],
-                super::TextSize::Default,
-                true,
-            ),
+            (vec![wheel(MouseWheelUnit::Line, vec2(0.0, -1.0), TouchPhase::Move, modifiers)], 0, false),
+            (vec![wheel(MouseWheelUnit::Line, vec2(0.0, 1.0), TouchPhase::Move, Modifiers::NONE)], 0, true),
         ];
-        for (events, expected_size, scrolls) in frames {
+        for (events, expected_steps, scrolls) in frames {
             let mut input = RawInput { events, ..Default::default() };
             super::linux_wheel_zoom(&mut input, 700.0);
             ctx.run_ui(input, |ui| {
-                size = gesture.step(size, ui.input(InputState::zoom_delta));
+                steps += gesture.direction(ui.input(InputState::zoom_delta));
                 assert_eq!(ui.input(|input| input.smooth_scroll_delta.y > 0.0), scrolls);
             })
             .drop_without_applying_deltas();
-            assert_eq!(size, expected_size);
+            assert_eq!(steps, expected_steps);
         }
     }
 

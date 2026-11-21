@@ -5,6 +5,10 @@
 //! with `/` starts at the root of the Open Knowledge Format bundle the file
 //! is in (OKF writes links between concepts that way, such as
 //! `/tables/orders.md`).
+//!
+//! Links and local images never reach outside the preview root: the
+//! explorer folder that holds the open file, else its bundle root, else the
+//! file's own folder (see [`preview_root`]).
 
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
@@ -15,9 +19,10 @@ use super::front_matter::FrontMatter;
 const INDEX_HEAD_BYTES: u64 = 4096;
 
 /// The Markdown file `url` points at, or `None` when it is not a link to a
-/// local `.md` file (a web address, another kind of file, or a `/` link
-/// outside a bundle). `folder` is the open file's folder.
-pub fn link_target(url: &str, folder: &Path, bundle_root: Option<&Path>) -> Option<PathBuf> {
+/// local `.md` file (a web address, another kind of file, a `/` link
+/// outside a bundle, or a file outside `root`). `folder` is the open file's
+/// folder and `root` its [`preview_root`].
+pub fn link_target(url: &str, folder: &Path, bundle_root: Option<&Path>, root: &Path) -> Option<PathBuf> {
     let path = url.split(['#', '?']).next().unwrap_or(url);
     // A scheme (`https:`, `file:`) is not a local link.
     if path.is_empty() || path.contains(':') {
@@ -33,7 +38,22 @@ pub fn link_target(url: &str, folder: &Path, bundle_root: Option<&Path>) -> Opti
         Some(inside) => bundle_root?.join(inside),
         None => folder.join(path),
     };
-    Some(normalized(&joined))
+    inside(&joined, root)
+}
+
+/// The folder the preview may read links and images from for a file in
+/// `folder`: the deepest of `explorer_folders` that holds it, else
+/// `bundle_root`, else `folder` itself.
+pub fn preview_root(folder: &Path, explorer_folders: &[PathBuf], bundle_root: Option<&Path>) -> PathBuf {
+    let explorer_folder =
+        explorer_folders.iter().filter(|root| folder.starts_with(root)).max_by_key(|root| root.components().count());
+    explorer_folder.map(PathBuf::as_path).or(bundle_root).unwrap_or(folder).to_path_buf()
+}
+
+/// `path` with `.` and `..` worked out, when that is inside `root`.
+pub fn inside(path: &Path, root: &Path) -> Option<PathBuf> {
+    let path = normalized(path);
+    path.starts_with(normalized(root)).then_some(path)
 }
 
 /// The root folder of the OKF bundle that holds `folder`: the nearest folder
@@ -88,30 +108,64 @@ mod tests {
     #[test]
     fn relative_links_start_at_the_files_folder() {
         let folder = Path::new("/b/metrics");
-        assert_eq!(link_target("revenue.md", folder, None), Some(PathBuf::from("/b/metrics/revenue.md")));
+        let root = Path::new("/b");
+        assert_eq!(link_target("revenue.md", folder, None, root), Some(PathBuf::from("/b/metrics/revenue.md")));
         assert_eq!(
-            link_target("../computations/revenue.md#definition", folder, None),
+            link_target("../computations/revenue.md#definition", folder, None, root),
             Some(PathBuf::from("/b/computations/revenue.md"))
         );
-        assert_eq!(link_target("./Notes.MARKDOWN", folder, None), Some(PathBuf::from("/b/metrics/Notes.MARKDOWN")));
+        assert_eq!(
+            link_target("./Notes.MARKDOWN", folder, None, root),
+            Some(PathBuf::from("/b/metrics/Notes.MARKDOWN"))
+        );
     }
 
     #[test]
     fn slash_links_start_at_the_bundle_root() {
         let folder = Path::new("/b/metrics");
-        let root = Some(Path::new("/b"));
-        assert_eq!(link_target("/tables/orders.md", folder, root), Some(PathBuf::from("/b/tables/orders.md")));
-        assert_eq!(link_target("/tables/orders.md", folder, None), None);
+        let root = Path::new("/b");
+        assert_eq!(
+            link_target("/tables/orders.md", folder, Some(root), root),
+            Some(PathBuf::from("/b/tables/orders.md"))
+        );
+        assert_eq!(link_target("/tables/orders.md", folder, None, root), None);
+    }
+
+    #[test]
+    fn links_never_leave_the_preview_root() {
+        let folder = Path::new("/notes/work");
+        let root = Path::new("/notes");
+        assert_eq!(link_target("../home.md", folder, None, root), Some(PathBuf::from("/notes/home.md")));
+        assert_eq!(link_target("../../etc/secret.md", folder, None, root), None);
+        assert_eq!(link_target("/../../outside.md", folder, Some(root), root), None);
+    }
+
+    #[test]
+    fn the_preview_root_is_the_explorer_folder_then_the_bundle_then_the_file_folder() {
+        let folder = Path::new("/home/a/notes/work/okf");
+        let explorer = [PathBuf::from("/home/a/notes"), PathBuf::from("/home/a/notes/work"), PathBuf::from("/srv")];
+        let bundle = Some(Path::new("/home/a/notes/work/okf"));
+        assert_eq!(preview_root(folder, &explorer, bundle), PathBuf::from("/home/a/notes/work"));
+        assert_eq!(preview_root(folder, &[], bundle), PathBuf::from("/home/a/notes/work/okf"));
+        assert_eq!(preview_root(folder, &explorer[2..], None), folder);
+    }
+
+    #[test]
+    fn inside_works_out_dots_and_keeps_to_the_root() {
+        let root = Path::new("/notes");
+        assert_eq!(inside(Path::new("/notes/a/../img.png"), root), Some(PathBuf::from("/notes/img.png")));
+        assert_eq!(inside(Path::new("/notes/../etc/passwd"), root), None);
+        assert_eq!(inside(Path::new("/notesbook/img.png"), root), None);
     }
 
     #[test]
     fn only_local_markdown_files_are_links() {
         let folder = Path::new("/b");
-        assert_eq!(link_target("https://a.io/x.md", folder, None), None);
-        assert_eq!(link_target("file:///b/x.md", folder, None), None);
-        assert_eq!(link_target("script.py", folder, None), None);
-        assert_eq!(link_target("subdir/", folder, None), None);
-        assert_eq!(link_target("#heading", folder, None), None);
+        assert_eq!(link_target("https://a.io/x.md", folder, None, folder), None);
+        assert_eq!(link_target("file:///b/x.md", folder, None, folder), None);
+        assert_eq!(link_target("script.py", folder, None, folder), None);
+        assert_eq!(link_target("subdir/", folder, None, folder), None);
+        assert_eq!(link_target("#heading", folder, None, folder), None);
     }
 
     #[test]

@@ -105,6 +105,12 @@ pub enum Icon {
     /// Open the folders again (the Files header): the same line with the
     /// chevrons pointing away from it.
     ExpandAll,
+    /// The buttons of a row too narrow to show them, as one menu (the Files
+    /// header): three lines, the middle one the accent.
+    Menu,
+    /// Fill the screen with the terminal (the status bar of a terminal
+    /// tab): four corners pointing out; the top right one is the accent.
+    FullScreen,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -203,12 +209,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
             }
             painter.circle_filled(center, 1.6, accent);
         }
-        Icon::FolderPlus => {
-            // Folder with a tab; the round plus badge at the bottom right is the accent.
-            let outline = [at(-6.5, -5.5), at(-2.0, -5.5), at(-0.4, -3.9), at(6.5, -3.9), at(6.5, 5.5), at(-6.5, 5.5)];
-            stroke_path(painter, &round_corners(&outline, CORNER, true), true, line);
-            plus_badge(painter, at(4.0, 3.5), accent, behind);
-        }
+        Icon::FolderPlus => paint_folder_plus(painter, center, line, accent, behind),
         Icon::ServerPlus => paint_server_plus(painter, center, colors),
         Icon::Plus => plus(painter, center, 5.0, line),
         Icon::SidePanel => paint_side_panel(painter, center, line, detail),
@@ -229,8 +230,9 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::TabList => paint_tab_list(painter, center, line, detail),
         Icon::Branch => paint_branch(painter, center, line, detail),
         Icon::Pencil => paint_pencil(painter, center, line, detail),
-        Icon::CollapseAll => paint_fold_all(painter, center, line, detail, true),
-        Icon::ExpandAll => paint_fold_all(painter, center, line, detail, false),
+        Icon::CollapseAll | Icon::ExpandAll => paint_fold_all(painter, center, line, detail, icon == Icon::CollapseAll),
+        Icon::Menu => paint_menu(painter, center, line, detail),
+        Icon::FullScreen => paint_full_screen(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -306,11 +308,18 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
 /// and tall. `label` is what screen readers announce.
 /// Three agents joined in a triangle; the one on top is the accent.
 fn paint_openrig(painter: &Painter, center: Pos2, color: Color32, accent: Color32) {
-    let (top, left, right) = (center + vec2(0.0, -4.5), center + vec2(-5.0, 4.0), center + vec2(5.0, 4.0));
-    stroke_path(painter, &[top, left, right], true, Stroke::new(LINE, color));
-    painter.circle_filled(left, RIG_NODE, color);
-    painter.circle_filled(right, RIG_NODE, color);
-    painter.circle_filled(top, RIG_NODE, accent);
+    paint_openrig_mark(painter, center, 1.0, color, accent);
+}
+
+/// The `OpenRig` mark at `scale` times the icon size (the Settings logo is
+/// larger): three agents joined in a triangle, the top one the accent.
+pub fn paint_openrig_mark(painter: &Painter, center: Pos2, scale: f32, color: Color32, accent: Color32) {
+    let at = |x: f32, y: f32| center + vec2(x, y) * scale;
+    let (top, left, right) = (at(0.0, -4.5), at(-5.0, 4.0), at(5.0, 4.0));
+    stroke_path(painter, &[top, left, right], true, Stroke::new(LINE * scale.sqrt(), color));
+    painter.circle_filled(left, RIG_NODE * scale, color);
+    painter.circle_filled(right, RIG_NODE * scale, color);
+    painter.circle_filled(top, RIG_NODE * scale, accent);
 }
 
 /// Draw `icon` alone (no button) centered on `center`.
@@ -372,6 +381,14 @@ fn paint_filter(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
     let cone = [at(-6.5, -5.5), at(6.5, -5.5), at(1.6, 0.5), at(-1.6, 0.5)];
     stroke_path(painter, &round_corners(&cone, CORNER, true), true, line);
     stroke_path(painter, &[at(-1.6, 0.5), at(-1.6, 6.5), at(1.6, 4.5), at(1.6, 0.5)], false, detail);
+}
+
+/// Three lines one under another; the middle one is the accent.
+fn paint_menu(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    for (y, stroke) in [(-4.5, line), (0.0, detail), (4.5, line)] {
+        stroke_path(painter, &[at(-6.0, y), at(6.0, y)], false, stroke);
+    }
 }
 
 /// Three rows with a dot before each, the lower two indented under the
@@ -595,6 +612,24 @@ fn paint_side_panel(painter: &Painter, center: Pos2, line: Stroke, detail: Strok
     stroke_path(painter, &[at(1.5, -5.5), at(1.5, 5.5)], false, line);
     stroke_path(painter, &[at(3.6, -2.5), at(4.4, -2.5)], false, detail);
     stroke_path(painter, &[at(3.6, 0.0), at(4.4, 0.0)], false, detail);
+}
+
+/// Folder with a tab; the round plus badge at the bottom right is the accent.
+fn paint_folder_plus(painter: &Painter, center: Pos2, line: Stroke, accent: Color32, behind: Color32) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let outline = [at(-6.5, -5.5), at(-2.0, -5.5), at(-0.4, -3.9), at(6.5, -3.9), at(6.5, 5.5), at(-6.5, 5.5)];
+    stroke_path(painter, &round_corners(&outline, CORNER, true), true, line);
+    plus_badge(painter, at(4.0, 3.5), accent, behind);
+}
+
+/// Four corners of a square, pointing out; the top right one is the accent.
+fn paint_full_screen(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let stroke = if x > 0.0 && y < 0.0 { detail } else { line };
+        let corner = [at(6.0 * x, 2.0 * y), at(6.0 * x, 5.5 * y), at(2.5 * x, 5.5 * y)];
+        stroke_path(painter, &corner, false, stroke);
+    }
 }
 
 /// A window; the `>_` prompt inside is the accent.

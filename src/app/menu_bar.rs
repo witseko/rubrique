@@ -10,11 +10,15 @@
 
 use eframe::egui::{Context, KeyboardShortcut};
 
+use super::terminal_full_screen::TOGGLE_TERMINAL_FULL_SCREEN;
 use super::{
     ASK, NEW_ENCRYPTED_SCRATCH, NEW_SCRATCH, OPEN_PATH, PAGE_DEFAULT, PAGE_LARGER, PAGE_SMALLER, RubriqueApp, SAVE,
-    TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_PREVIEW_EDITING, TOGGLE_SETTINGS,
+    TEXT_DEFAULT, TEXT_LARGER, TEXT_SMALLER, TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_PREVIEW_EDITING,
+    TOGGLE_SETTINGS,
 };
-use crate::settings::accessibility::{DEFAULT_PAGE_ZOOM, TextSize, page_zoom_larger, page_zoom_smaller};
+use crate::settings::accessibility::{
+    DEFAULT_PAGE_ZOOM, DEFAULT_TEXT_SIZE, page_zoom_larger, page_zoom_smaller, text_size_larger, text_size_smaller,
+};
 use crate::settings::layout::PreviewMode;
 use crate::theme::catalog::ThemeChoice;
 use crate::theme::code_colors::CodeColors;
@@ -33,7 +37,10 @@ pub(super) enum MenuCommand {
     TogglePreview,
     PreviewEditing,
     TextHighlights,
-    TextSize(TextSize),
+    TerminalFullScreen,
+    TextSizeLarger,
+    TextSizeSmaller,
+    TextSizeReset,
     PageZoomLarger,
     PageZoomSmaller,
     PageZoomReset,
@@ -51,11 +58,11 @@ pub(super) enum MenuCommand {
 }
 
 impl MenuCommand {
-    /// True for one choice out of several (a text size, a theme): drawn as a
+    /// True for one choice out of several (a theme, code colors): drawn as a
     /// pick rather than a check box in the window's bar.
     #[cfg(not(target_os = "macos"))]
     pub(super) fn is_choice(&self) -> bool {
-        matches!(self, MenuCommand::TextSize(_) | MenuCommand::Theme(_) | MenuCommand::CodeColors(_))
+        matches!(self, MenuCommand::Theme(_) | MenuCommand::CodeColors(_))
     }
 }
 
@@ -98,7 +105,11 @@ impl RubriqueApp {
             item("Save", MenuCommand::Save, Some(&SAVE)),
             item("Ask AI...", MenuCommand::Ask, Some(&ASK)),
         ];
-        let text_sizes = TextSize::ALL.into_iter().map(|size| item(size.name(), MenuCommand::TextSize(size), None));
+        let text_sizes = vec![
+            item("Larger", MenuCommand::TextSizeLarger, TEXT_LARGER.first()),
+            item("Smaller", MenuCommand::TextSizeSmaller, Some(&TEXT_SMALLER)),
+            item(&format!("Reset ({DEFAULT_TEXT_SIZE}%)"), MenuCommand::TextSizeReset, Some(&TEXT_DEFAULT)),
+        ];
         let zoom = vec![
             item("Larger", MenuCommand::PageZoomLarger, PAGE_LARGER.first()),
             item("Smaller", MenuCommand::PageZoomSmaller, Some(&PAGE_SMALLER)),
@@ -122,8 +133,9 @@ impl RubriqueApp {
             item("Preview / source", MenuCommand::TogglePreview, Some(&TOGGLE_PREVIEW)),
             item("Edit in preview", MenuCommand::PreviewEditing, Some(&TOGGLE_PREVIEW_EDITING)),
             item("Text highlights", MenuCommand::TextHighlights, Some(&TOGGLE_HIGHLIGHTS)),
+            item("Terminal full screen", MenuCommand::TerminalFullScreen, Some(&TOGGLE_TERMINAL_FULL_SCREEN)),
             MenuEntry::Separator,
-            MenuEntry::Submenu { label: "Text size", entries: text_sizes.collect() },
+            MenuEntry::Submenu { label: "Text size", entries: text_sizes },
             MenuEntry::Submenu { label: "Text area zoom", entries: zoom },
             item("Line numbers", MenuCommand::LineNumbers, None),
             item("Wrap lines", MenuCommand::WrapLines, None),
@@ -147,9 +159,9 @@ impl RubriqueApp {
         let accessibility = &self.settings.accessibility;
         let filter = &self.settings.explorer_filter;
         let checked = match command {
-            MenuCommand::TextSize(size) => accessibility.text_size == *size,
             MenuCommand::PreviewEditing => self.settings.layout.preview_mode == PreviewMode::Edit,
             MenuCommand::TextHighlights => self.settings.text_highlight.enabled,
+            MenuCommand::TerminalFullScreen => self.terminal_full_screen_on(),
             MenuCommand::LineNumbers => accessibility.line_numbers,
             MenuCommand::WrapLines => accessibility.wrap_lines,
             MenuCommand::Theme(choice) => self.settings.theme == *choice,
@@ -188,6 +200,7 @@ impl RubriqueApp {
             MenuCommand::TogglePreview => self.toggle_preview(),
             MenuCommand::PreviewEditing => self.toggle_preview_editing(),
             MenuCommand::TextHighlights => self.toggle_text_highlights(ctx),
+            MenuCommand::TerminalFullScreen => self.toggle_terminal_full_screen(),
             MenuCommand::PageZoomLarger => self.change_page_zoom(ctx, page_zoom_larger(page_zoom)),
             MenuCommand::PageZoomSmaller => self.change_page_zoom(ctx, page_zoom_smaller(page_zoom)),
             MenuCommand::PageZoomReset => self.change_page_zoom(ctx, DEFAULT_PAGE_ZOOM),
@@ -201,7 +214,9 @@ impl RubriqueApp {
                 }
             }
             // The rest change how things look.
-            MenuCommand::TextSize(size) => accessibility.text_size = size,
+            MenuCommand::TextSizeLarger => accessibility.text_size = text_size_larger(accessibility.text_size),
+            MenuCommand::TextSizeSmaller => accessibility.text_size = text_size_smaller(accessibility.text_size),
+            MenuCommand::TextSizeReset => accessibility.text_size = DEFAULT_TEXT_SIZE,
             MenuCommand::LineNumbers => accessibility.line_numbers = !accessibility.line_numbers,
             MenuCommand::WrapLines => accessibility.wrap_lines = !accessibility.wrap_lines,
             MenuCommand::ReduceMotion => accessibility.reduce_motion = !accessibility.reduce_motion,

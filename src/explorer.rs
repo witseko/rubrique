@@ -1,6 +1,7 @@
 //! File explorer: the folder tree in the left panel.
 
 pub mod note_marks;
+mod openrig;
 pub mod paths;
 pub mod reorder;
 mod section;

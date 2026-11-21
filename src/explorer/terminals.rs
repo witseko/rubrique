@@ -7,16 +7,17 @@ use eframe::egui::text::LayoutJob;
 use eframe::egui::{self, Align, Color32, FontSelection, RichText, Ui, Visuals};
 
 use super::reorder::{ListDrag, draggable};
-use super::section::{SECTION_HEADER_HEIGHT, paint_fold_arrow, section_header};
+use super::section::{SECTION_HEADER_HEIGHT, empty_space_double_clicked, paint_fold_arrow, section_header};
 use super::selection::FileRows;
 use super::view::{
-    ExplorerAction, HEADER_BUTTON_SIZE, ICON_GAP, InlineRename, NOTE_MARK_SIZE, SessionEdit, TreeContext, file_click,
-    file_menu, is_revealed, paint_root_bar, rename_row, scroll_if_revealed, tree_row,
+    ExplorerAction, HEADER_BUTTON_SIZE, ICON_GAP, InlineRename, NOTE_MARK_SIZE, SeatCommand, SessionEdit, TreeContext,
+    file_click, file_menu, is_revealed, paint_root_bar, rename_row, scroll_if_revealed, tree_row,
 };
 use crate::explorer::tree::FsNode;
 use crate::icons::{Icon, paint_icon, small_icon_button};
+use crate::settings::layout::LayoutSettings;
 use crate::terminal::agent_sessions::AgentSession;
-use crate::terminal::groups::TerminalGroup;
+use crate::terminal::groups::{TerminalGroup, seat_of};
 use crate::terminal::monitor::{TerminalRow, ago_label, opened_label};
 use crate::terminal::status::TerminalStatus;
 use crate::terminal::tmux::session_name_for_file;
@@ -26,8 +27,8 @@ use crate::theme::style::group_color;
 const TERMINALS_DEFAULT_HEIGHT: f32 = 180.0;
 /// The open section keeps room for its header and about two rows.
 const TERMINALS_MIN_HEIGHT: f32 = 90.0;
-/// Space above the Terminals header, under the panel's dividing line.
-const SECTION_GAP: i8 = 4;
+/// Space above the Terminals and `OpenRig` headers, under the panel's dividing line.
+pub(super) const SECTION_GAP: i8 = 4;
 /// Status color of an idle agent: the green used for "all good".
 const IDLE_COLOR: Color32 = Color32::from_rgb(0x34, 0xa8, 0x53);
 /// One more space before the name than tree rows have: the terminal icon
@@ -36,10 +37,6 @@ const ICON_ROOM: &str = " ";
 /// Spaces left after the name for the status dot to be painted in.
 const DOT_ROOM: &str = "     ";
 const DOT_RADIUS: f32 = 3.5;
-/// How far right of a group's fold arrow the `OpenRig` icon is centered.
-const OPENRIG_ICON_SHIFT: f32 = 17.0;
-/// Spaces before the `OpenRig` group's title, for its icon.
-const OPENRIG_ICON_ROOM: &str = "      ";
 
 /// The Terminals section docked at the bottom of the explorer: a panel the
 /// user can resize by its top edge, or only its header while folded.
@@ -47,17 +44,18 @@ const OPENRIG_ICON_ROOM: &str = "      ";
 pub(super) fn show_docked_terminals(
     ui: &mut Ui,
     context: &TreeContext,
-    collapsed: &mut bool,
+    layout: &mut LayoutSettings,
     rename: &mut Option<InlineRename<SessionEdit>>,
     action: &mut Option<ExplorerAction>,
 ) {
     if context.terminals.is_none() {
         return;
     }
+    let collapsed = layout.terminals_collapsed;
     let frame = egui::Frame::new().inner_margin(egui::Margin { top: SECTION_GAP, ..egui::Margin::ZERO });
     // Folded and open use their own ids, so folding keeps the height the
     // user dragged the open section to.
-    let panel = if *collapsed {
+    let panel = if collapsed {
         egui::Panel::bottom("terminals-folded").exact_size(SECTION_HEADER_HEIGHT + f32::from(SECTION_GAP))
     } else {
         egui::Panel::bottom("terminals")
@@ -65,7 +63,7 @@ pub(super) fn show_docked_terminals(
             .default_size(TERMINALS_DEFAULT_HEIGHT)
             .size_range(TERMINALS_MIN_HEIGHT..=f32::INFINITY)
     };
-    panel.frame(frame).show(ui, |ui| show_terminals_section(ui, context, collapsed, rename, action));
+    panel.frame(frame).show(ui, |ui| show_terminals_section(ui, context, layout, rename, action));
 }
 
 /// The "TERMINALS" header (with a count, status dots while folded, and
@@ -77,28 +75,35 @@ pub(super) fn show_docked_terminals(
 pub(super) fn show_terminals_section(
     ui: &mut Ui,
     context: &TreeContext,
-    collapsed: &mut bool,
+    layout: &mut LayoutSettings,
     rename: &mut Option<InlineRename<SessionEdit>>,
     action: &mut Option<ExplorerAction>,
 ) {
-    let Some(rows) = context.terminals else {
+    let Some(all_rows) = context.terminals else {
         return;
     };
-    let expanded = !*collapsed;
-    let toggled = section_header(
+    // `OpenRig` seats have their own section.
+    let rows: Vec<&TerminalRow> =
+        all_rows.iter().filter(|row| !(context.openrig && seat_of(&row.info.name).is_some())).collect();
+    let expanded = !layout.terminals_collapsed;
+    let clicks = section_header(
         ui,
         "TERMINALS",
         expanded,
-        |ui| header_details(ui, rows, expanded),
-        |ui| {
+        |ui| header_details(ui, &rows, expanded),
+        |ui, _| {
             let tip = "New terminal: a tmux session in the first folder";
             if small_icon_button(ui, Icon::Plus, HEADER_BUTTON_SIZE, "New terminal", tip).clicked() {
                 *action = Some(ExplorerAction::NewTerminal);
             }
         },
     );
-    if toggled {
-        *collapsed = expanded;
+    if clicks.background_double {
+        layout.toggle_terminals_focus();
+        return;
+    }
+    if clicks.title {
+        layout.terminals_collapsed = expanded;
     }
     if !expanded {
         return;
@@ -107,6 +112,9 @@ pub(super) fn show_terminals_section(
     if rows.is_empty() && !naming_new {
         let hint = "No tmux sessions yet. Start one with +, or right-click a folder for a .tmux file.";
         ui.add(egui::Label::new(RichText::new(hint).small().weak()).wrap());
+        if empty_space_double_clicked(ui, "terminals-empty-space") {
+            layout.toggle_terminals_focus();
+        }
         return;
     }
     egui::ScrollArea::both().id_salt("terminal-list").auto_shrink([false, false]).show(ui, |ui| {
@@ -123,12 +131,15 @@ pub(super) fn show_terminals_section(
                 }
             }
         }
+        if empty_space_double_clicked(ui, "terminals-empty-space") {
+            layout.toggle_terminals_focus();
+        }
     });
 }
 
 /// One group of the list: its header, then (unless folded) its sessions
-/// and its sub-groups (rigs, pods) indented under it.
-fn terminal_group(
+/// and its sub-groups (pods) indented under it.
+pub(super) fn terminal_group(
     ui: &mut Ui,
     group: &TerminalGroup,
     context: &TreeContext,
@@ -152,14 +163,12 @@ fn terminal_group(
     });
 }
 
-/// A group's header row: the fold arrow, the title, the session count, for
-/// a folder a bar of its color, and for the `OpenRig` group its icon. Returns true when it was clicked.
+/// A group's header row: the fold arrow, the title, the session count, and
+/// for a folder a bar of its color. Returns true when it was clicked.
 fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<Color32>) -> bool {
     let mut job = LayoutJob::default();
     let style = ui.style();
-    // The OpenRig group keeps room for its icon after the arrow.
-    let icon_room = if group.is_openrig() { OPENRIG_ICON_ROOM } else { "" };
-    RichText::new(format!("{ICON_GAP}{icon_room}{}", group.title)).strong().append_to(
+    RichText::new(format!("{ICON_GAP}{}", group.title)).strong().append_to(
         &mut job,
         style,
         FontSelection::Default,
@@ -178,12 +187,6 @@ fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<
     );
     let arrow_color = ui.style().interact(&response).fg_stroke.color;
     paint_fold_arrow(ui.painter(), center, !folded, arrow_color);
-    if group.is_openrig() {
-        let behind =
-            if response.hovered() { ui.visuals().widgets.hovered.weak_bg_fill } else { ui.visuals().panel_fill };
-        let icon_center = center + egui::vec2(OPENRIG_ICON_SHIFT, 0.0);
-        paint_icon(ui.painter(), Icon::OpenRig, icon_center, arrow_color, arrow_color, behind);
-    }
     if let Some(color) = color {
         paint_root_bar(ui, &response, color);
     }
@@ -229,8 +232,9 @@ fn move_action(group_rows: &[&TerminalRow], from: usize, to: usize) -> Option<Ex
 
 /// One session in the list: a click shows it in a tab, a double click
 /// renames it in place, a right click offers "Show in files", "Rename" and
-/// "Exit terminal", and a drag moves it up or down the list. Returns its
-/// row, or `None` while it shows a name field instead.
+/// "Exit terminal" (an `OpenRig` seat gets [`seat_menu`] instead, and keeps
+/// its name), and a drag moves it up or down the list. Returns its row, or
+/// `None` while it shows a name field instead.
 fn terminal_row(
     ui: &mut Ui,
     row: &TerminalRow,
@@ -258,26 +262,17 @@ fn terminal_row(
         *action = Some(ExplorerAction::ToggleAgentSessions(name.clone()));
         return Some(response);
     }
-    if response.double_clicked() {
+    let is_seat = context.openrig && seat_of(name).is_some();
+    if response.double_clicked() && !is_seat {
         *action = Some(ExplorerAction::RenameTerminal(row.info.name.clone()));
     } else if response.clicked() {
         *action = Some(ExplorerAction::OpenTerminal(row.info.name.clone()));
     }
-    response.context_menu(|ui| {
-        let tip = "Open the file tree down to this terminal's .tmux file or folder";
-        if ui.button("Show in files").on_hover_text(tip).clicked() {
-            *action = Some(ExplorerAction::ShowTerminalInFiles(row.info.name.clone()));
-            ui.close();
-        }
-        if ui.button("Rename").on_hover_text("Or double-click it").clicked() {
-            *action = Some(ExplorerAction::RenameTerminal(row.info.name.clone()));
-            ui.close();
-        }
-        if ui.button("Exit terminal").on_hover_text("End the session and everything running in it").clicked() {
-            *action = Some(ExplorerAction::ExitTerminal(row.info.name.clone()));
-            ui.close();
-        }
-    });
+    if is_seat {
+        response.context_menu(|ui| seat_menu(ui, name, action));
+    } else {
+        terminal_menu(&response, name, action);
+    }
     if expanded && !sessions.is_empty() {
         ui.indent(("agent-sessions", name), |ui| {
             for session in sessions {
@@ -286,6 +281,55 @@ fn terminal_row(
         });
     }
     Some(response)
+}
+
+/// The right-click menu of an `OpenRig` seat: send it a step, copy its
+/// address or attach command, open it in the terminal app, or stop it.
+fn seat_menu(ui: &mut Ui, name: &str, action: &mut Option<ExplorerAction>) {
+    let items = [
+        (
+            "Send step to this seat…",
+            "Open Send to OpenRig for the open document, with this seat chosen",
+            SeatCommand::SendStep,
+        ),
+        ("Copy address", "Copy the seat's OpenRig address (seat@rig)", SeatCommand::CopyAddress),
+        ("Copy attach command", "Copy the shell command that attaches to this seat", SeatCommand::CopyAttach),
+        (
+            "Open in Terminal app",
+            "Attach to this seat in a window of the system's terminal app",
+            SeatCommand::OpenInTerminalApp,
+        ),
+    ];
+    for (label, tip, command) in items {
+        if ui.button(label).on_hover_text(tip).clicked() {
+            *action = Some(ExplorerAction::Seat(name.to_owned(), command));
+            ui.close();
+        }
+    }
+    ui.separator();
+    if ui.button("Stop seat…").on_hover_text("End the seat's tmux session and the agent in it").clicked() {
+        *action = Some(ExplorerAction::Seat(name.to_owned(), SeatCommand::Stop));
+        ui.close();
+    }
+}
+
+/// The right-click menu of a plain terminal: show in files, rename or exit.
+fn terminal_menu(response: &egui::Response, name: &str, action: &mut Option<ExplorerAction>) {
+    response.context_menu(|ui| {
+        let tip = "Open the file tree down to this terminal's .tmux file or folder";
+        if ui.button("Show in files").on_hover_text(tip).clicked() {
+            *action = Some(ExplorerAction::ShowTerminalInFiles(name.to_owned()));
+            ui.close();
+        }
+        if ui.button("Rename").on_hover_text("Or double-click it").clicked() {
+            *action = Some(ExplorerAction::RenameTerminal(name.to_owned()));
+            ui.close();
+        }
+        if ui.button("Exit terminal").on_hover_text("End the session and everything running in it").clicked() {
+            *action = Some(ExplorerAction::ExitTerminal(name.to_owned()));
+            ui.close();
+        }
+    });
 }
 
 /// The fold arrow in the icon's place; returns true when it was clicked.
@@ -350,7 +394,7 @@ fn agent_session_row(ui: &mut Ui, session: &AgentSession, action: &mut Option<Ex
 /// Next to the title: how many sessions there are and, while the section
 /// is folded, a dot and count for agents that need you or are working, so
 /// nothing important hides behind the fold.
-fn header_details(ui: &mut Ui, rows: &[TerminalRow], expanded: bool) {
+pub(super) fn header_details(ui: &mut Ui, rows: &[&TerminalRow], expanded: bool) {
     if rows.is_empty() {
         return;
     }

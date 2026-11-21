@@ -8,10 +8,87 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal full screen.** Press `Cmd+Shift+Enter` in a terminal tab, or
+  click the new button in its status bar (also View → Terminal full
+  screen), and the terminal fills the screen with no explorer, tabs or
+  bars around it. The same keys bring the window back as it was; switching
+  to another kind of tab does too.
+
+### Changed
+
+- **Git only in repositories you trust.** Rubrique no longer runs git in
+  a repository until you trust it: the status bar shows "Not trusted",
+  and a click on it explains why and offers Trust this repository. A
+  repository's own settings can start programs when git runs, so a folder
+  from a zip or a shared drive could run code as soon as you opened a
+  file in it. Repositories you clone in Rubrique are trusted at once;
+  trust each existing one with one click.
+- **Preview stays in your folder.** Images and links to Markdown files in
+  the preview reach only files inside the explorer folder that holds the
+  note (or its bundle, or the note's own folder when it is in neither).
+  An image outside shows its alt text, with the reason on hover.
+
 ### Fixed
 
+- **Checked whisper model download.** The voice memo model downloaded
+  from Settings is checked against a checksum built into the app before
+  it is used. A damaged or altered download is deleted, with a message to
+  try again.
+- **Safer opening with the system app.** A file whose name starts with
+  `-` now opens as that file in its default app, instead of being read
+  as an option by `open` or `xdg-open`.
+- **Stricter clone addresses.** Clone from Git refuses an address whose
+  host starts with `-`, such as `ssh://-oProxyCommand=x/repo`, so it can
+  never reach `ssh` as an option.
 - **Ask AI with selected text.** Clicking Ask in the status bar opens the
   prompt for the selected text in the Markdown preview.
+
+## [1.9.0] - 2026-11-21
+
+### Added
+
+- **OpenRig switch.** Settings → OpenRig has a Use OpenRig switch, off
+  by default (on for settings that already list a remote rig). Off, the
+  OpenRig section, Send to OpenRig and remote rigs are hidden, and seats
+  show as plain terminals. The page shows the OpenRig mark and a link to
+  openrig.dev.
+- **Remote OpenRig rigs in Settings.** Settings → OpenRig lists your
+  remote rigs. Add one by SSH host (the hosts in `~/.ssh/config` are one
+  click away), remove one, or click Check to see its seats, or what is
+  missing: the SSH login, rig on that computer, or a running team.
+- **OpenRig section.** OpenRig seats have their own section in the
+  explorer, under Terminals, with a group per rig and its pods. Seats of
+  remote rigs show as `rig@host`; open one to watch and type into it over
+  SSH (tmux must be installed on that computer). Right-click a seat to send
+  it a step from the open document, copy its address or attach command,
+  open it in the Terminal app, or stop it. Terminals and OpenRig start
+  folded when they have nothing to show.
+- **Focus a list.** Double-click the Terminals or OpenRig header (or the
+  empty space under the list) to fold the file tree (and, for OpenRig,
+  Terminals) and give that list the whole explorer. Double-click again to
+  fold the sections back as they were.
+
+### Changed
+
+- **Text size slider.** Settings → Accessibility sets the text size with
+  a slider from 80% to 200% in steps of 5%, in place of five fixed sizes.
+  Cmd/Ctrl + plus and minus, the wheel and View → Text size move one
+  step. A size you saved before stays as it was.
+- **One zoom for the text area.** The Editor font size slider is gone
+  from Settings → Accessibility: Text area zoom now sets the size of the
+  source editor and the preview together. A saved editor font size is no
+  longer used, so set the zoom again if the editor looks different.
+- **Line numbers in their own column.** The line numbers sit on a tinted
+  strip with a thin line between them and the text, and the number of the
+  line with the cursor stands out. Click a number to select its line.
+
+### Fixed
+
+- **Header buttons in a narrow explorer.** When the explorer is too narrow
+  for the buttons next to FILES, one menu button takes their place, with
+  the same commands by name. The buttons no longer draw over the title.
 
 ## [1.8.0] - 2026-11-20
 

@@ -48,7 +48,7 @@ pub struct Settings {
     pub code_colors: CodeColors,
     /// Rules that color matches in plain text files.
     pub text_highlight: TextHighlightSettings,
-    /// Text size, editor font size, reduced motion and focus outlines.
+    /// Text size, text area zoom, reduced motion and focus outlines.
     pub accessibility: AccessibilitySettings,
     /// Where new scratch files go; `None` means the default folder.
     pub scratch_folder: Option<PathBuf>,
@@ -67,10 +67,17 @@ pub struct Settings {
     /// The order the user dragged the Terminals list into, by session name.
     /// Sessions not in it (new ones) show above, newest first.
     pub terminal_order: Vec<String>,
+    /// `OpenRig` is turned on: the `OpenRig` section, Send to `OpenRig` and
+    /// the remote rigs show. Off by default.
+    pub openrig_enabled: bool,
     /// SSH host names of the remote `OpenRig` rigs added in Send to `OpenRig`, in order.
     pub openrig_rigs: Vec<String>,
     /// Whether to check for new versions, and when it last did.
     pub updates: UpdateSettings,
+    /// Top folders of the git repositories the user trusts. Rubrique runs
+    /// git only in these: a repository's own config and hooks can start
+    /// programs, so one from an unknown source must not run git unasked.
+    pub trusted_repositories: Vec<PathBuf>,
 }
 
 impl Settings {
@@ -116,6 +123,7 @@ impl Settings {
         let mut height = None;
         // Files from before multiple folders have one `last_folder` line.
         let mut legacy_folder = None;
+        let mut openrig_enabled = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -142,6 +150,8 @@ impl Settings {
                 "openrig_rig" if is_valid_host(value) && !settings.openrig_rigs.iter().any(|host| host == value) => {
                     settings.openrig_rigs.push(value.to_string());
                 }
+                "openrig_enabled" => openrig_enabled = Some(value == "true"),
+                "trusted_repository" if !value.is_empty() => settings.trust_repository(PathBuf::from(value)),
                 "note_marks" => settings.note_marks = value == "true",
                 "html_browser_preview" => settings.html_browser_preview = value == "true",
                 "window_width" => width = value.parse::<f32>().ok(),
@@ -155,6 +165,8 @@ impl Settings {
         if settings.folders.is_empty() {
             settings.folders.extend(legacy_folder);
         }
+        // Files from before the switch keep OpenRig on when they added a remote rig.
+        settings.openrig_enabled = openrig_enabled.unwrap_or(!settings.openrig_rigs.is_empty());
         if let (Some(width), Some(height)) = (width, height) {
             settings.window_size = Some((width, height));
         }
@@ -182,12 +194,14 @@ impl Settings {
             let _ = writeln!(lines, "terminal_order={name}");
             lines
         });
-        let rig_lines = self.openrig_rigs.iter().fold(String::new(), |mut lines, host| {
-            let _ = writeln!(lines, "openrig_rig={host}");
-            lines
-        });
+        let rig_lines =
+            self.openrig_rigs.iter().fold(format!("openrig_enabled={}\n", self.openrig_enabled), |mut lines, host| {
+                let _ = writeln!(lines, "openrig_rig={host}");
+                lines
+            });
+        let trusted_lines = path_lines("trusted_repository", &self.trusted_repositories);
         format!(
-            "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
+            "{folder_lines}{tab_lines}{terminal_lines}{rig_lines}{trusted_lines}last_file={}\nnote_marks={}\nhtml_browser_preview={}\ntheme={}\ncode_colors={}\nscratch_folder={}\n{window_lines}{}{}{}{}{}{}{}{}{}",
             last_file,
             self.note_marks,
             self.html_browser_preview,
@@ -222,6 +236,18 @@ impl Settings {
     /// The folder for new scratch files: the chosen one, else the default.
     pub fn scratch_folder_or_default(&self) -> Option<PathBuf> {
         self.scratch_folder.clone().or_else(default_scratch_folder)
+    }
+
+    /// Whether the user trusts the git repository whose top folder is `repo`.
+    pub fn trusts_repository(&self, repo: &Path) -> bool {
+        self.trusted_repositories.iter().any(|trusted| trusted == repo)
+    }
+
+    /// Trust the git repository whose top folder is `repo`; once is enough.
+    pub fn trust_repository(&mut self, repo: PathBuf) {
+        if !self.trusts_repository(&repo) {
+            self.trusted_repositories.push(repo);
+        }
     }
 }
 
@@ -339,8 +365,7 @@ mod tests {
             theme: ThemeChoice::Named("dark".to_string()),
             code_colors: CodeColors::VsCode,
             accessibility: AccessibilitySettings {
-                text_size: accessibility::TextSize::Larger,
-                editor_font_size: 15,
+                text_size: 130,
                 page_zoom: 120,
                 show_menu_bar: false,
                 reduce_motion: true,
@@ -375,11 +400,14 @@ mod tests {
                 side_view: layout::SideView::Notes,
                 files_collapsed: false,
                 terminals_collapsed: true,
+                openrig_collapsed: true,
                 tab_position: layout::TabPosition::Explorer,
                 explorer_view: layout::ExplorerView::Tabs,
                 preview_mode: layout::PreviewMode::Edit,
+                ..layout::LayoutSettings::default()
             },
             terminal_order: vec!["build".to_string(), "notes agent".to_string()],
+            openrig_enabled: true,
             openrig_rigs: vec!["build-box".to_string(), "me@gpu.example.com".to_string()],
             text_highlight: text_highlight::TextHighlightSettings {
                 enabled: false,
@@ -394,6 +422,7 @@ mod tests {
                 last_check: Some(1_800_000_000),
                 skipped_version: crate::update::Version::parse("1.7.0"),
             },
+            trusted_repositories: vec![PathBuf::from("/home/a/code/rubrique"), PathBuf::from("/work/my repo")],
         };
         let text = settings.to_text();
         assert!(text.contains("folder=ssh://server/srv/notes\n"), "{text}");
@@ -403,6 +432,20 @@ mod tests {
         let with_tab = Settings { open_tabs: vec![remote_folder.join("a.md")], ..Settings::default() };
         assert!(with_tab.to_text().contains("tab=ssh://server/srv/notes/a.md\n"));
         assert_eq!(Settings::parse(&with_tab.to_text()), with_tab);
+    }
+
+    #[test]
+    fn repositories_are_trusted_only_once_trusted() {
+        let mut settings =
+            Settings::parse("trusted_repository=\ntrusted_repository=/code/a\ntrusted_repository=/code/a\n");
+        assert_eq!(settings.trusted_repositories, [PathBuf::from("/code/a")]);
+        assert!(settings.trusts_repository(Path::new("/code/a")));
+        // A folder inside a trusted repository is a different repository.
+        assert!(!settings.trusts_repository(Path::new("/code/a/vendor/b")));
+        assert!(!Settings::default().trusts_repository(Path::new("/code/a")));
+        settings.trust_repository(PathBuf::from("/code/b"));
+        settings.trust_repository(PathBuf::from("/code/b"));
+        assert_eq!(settings.trusted_repositories, [PathBuf::from("/code/a"), PathBuf::from("/code/b")]);
     }
 
     #[test]
@@ -424,6 +467,16 @@ mod tests {
     fn old_preview_mode_line_is_ignored() {
         // Every file opens in preview now, so the old global mode is not read.
         assert_eq!(Settings::parse("preview_mode=false\n"), Settings::default());
+    }
+
+    /// `OpenRig` starts off, but a file from before the switch that added a
+    /// remote rig keeps it on; a saved choice always wins.
+    #[test]
+    fn openrig_is_off_unless_a_rig_was_added_or_it_was_turned_on() {
+        assert!(!Settings::parse("").openrig_enabled);
+        assert!(Settings::parse("openrig_rig=build-box\n").openrig_enabled);
+        assert!(!Settings::parse("openrig_rig=build-box\nopenrig_enabled=false\n").openrig_enabled);
+        assert!(Settings::parse("openrig_enabled=true\n").openrig_enabled);
     }
 
     #[test]

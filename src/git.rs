@@ -193,15 +193,24 @@ pub fn clone_url_problem(url: &str) -> Option<&'static str> {
     if url.starts_with('-') || url.chars().any(|character| character.is_whitespace() || character.is_control()) {
         return Some("Not a repository address");
     }
-    let has_scheme = CLONE_SCHEMES.iter().any(|scheme| url.starts_with(scheme));
+    let after_scheme = CLONE_SCHEMES.iter().find_map(|scheme| url.strip_prefix(scheme));
     // `user@host:path`: the colon comes before any slash, or git reads it
     // as a local path.
-    let short_ssh = url.split_once(':').is_some_and(|(user_host, path)| {
-        user_host.split_once('@').is_some_and(|(user, host)| !user.is_empty() && !host.is_empty())
-            && !user_host.contains('/')
-            && !path.is_empty()
+    let short_ssh_host = url.split_once(':').and_then(|(user_host, path)| {
+        let (user, host) = user_host.split_once('@')?;
+        (!user.is_empty() && !host.is_empty() && !user_host.contains('/') && !path.is_empty()).then_some(host)
     });
-    (!has_scheme && !short_ssh).then_some("Use an https:// address or an SSH one like git@github.com:owner/repo.git")
+    // The host goes to ssh as an argument, where `-oProxyCommand=...`
+    // would be read as an option.
+    let host = match (after_scheme, short_ssh_host) {
+        (Some(rest), _) => {
+            let authority = rest.split('/').next().unwrap_or_default();
+            authority.rsplit('@').next().unwrap_or_default()
+        }
+        (None, Some(host)) => host,
+        (None, None) => return Some("Use an https:// address or an SSH one like git@github.com:owner/repo.git"),
+    };
+    host.starts_with('-').then_some("Not a repository address")
 }
 
 /// The folder name `git clone` would pick for `url`: its last part
@@ -492,7 +501,17 @@ mod tests {
         ] {
             assert_eq!(clone_url_problem(url), None, "{url}");
         }
-        for url in ["", "--upload-pack=x", "github.com/owner/repo", "/local/repo", "git@github.com:", "a b"] {
+        for url in [
+            "",
+            "--upload-pack=x",
+            "github.com/owner/repo",
+            "/local/repo",
+            "git@github.com:",
+            "a b",
+            "ssh://-oProxyCommand=x/repo",
+            "ssh://git@-oProxyCommand=x/repo",
+            "git@-x:repo",
+        ] {
             assert!(clone_url_problem(url).is_some(), "{url}");
         }
     }

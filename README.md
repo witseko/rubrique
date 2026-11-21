@@ -85,7 +85,9 @@ the libraries listed under [Build](#build) first.
   its README if it has one.
 - Click the branch in the status bar to switch or create branches, pull
   fast-forward updates, stash or restore changes, or commit all changes
-  including new files.
+  including new files. Git runs only in repositories you trust: click
+  "Not trusted" to trust one. Repositories you clone in Rubrique are
+  trusted already.
 - Tabs keep unsaved changes, cursor and undo. Close one with "Keep for
   later" and its edits come back when you open the file again.
 - Rubrique saves the text you typed. If another program changes a file
@@ -98,15 +100,18 @@ the libraries listed under [Build](#build) first.
 - Open tmux sessions as tabs. The explorer shows whether an agent is
   working, idle or waiting for you, and lists Claude Code and Codex
   sessions you can resume. A `.tmux` file opens a terminal in its folder.
-  The Terminals list groups sessions by explorer folder, and OpenRig seats
-  by rig and pod.
+  The Terminals list groups sessions by explorer folder. OpenRig seats,
+  on this computer and on remote rigs, have their own OpenRig section,
+  grouped by rig and pod; right-click a seat to send it a step, copy its
+  attach command, open it in the Terminal app or stop it.
 - To hand a task to a terminal's agent, write a line such as
   `@tmux-qa: check this` in your document, then select Send.
 - Send a Markdown step to an existing OpenRig team, on this computer or on
-  another computer over SSH. Select the step, open Tasks, click **Send to
+  another computer over SSH (turn on Settings > OpenRig > Use OpenRig first). Select the step, open Tasks, click **Send to
   OpenRig**, choose a rig (or **Add remote rig...** with an SSH host name),
-  and choose a seat. Open Tasks in the same file later to check the queue
-  status and read the result.
+  and choose a seat. Settings > OpenRig also lists remote rigs, with a
+  Check button that shows their seats or what is missing. Open Tasks in
+  the same file later to check the queue status and read the result.
 - Tabs take their group and color from their explorer folder. Drag tabs
   or groups to reorder them. To list tabs vertically, choose Settings >
   Appearance > Tabs > In the explorer and switch between Files and Tabs.
@@ -176,6 +181,7 @@ Settings → Accessibility.
 | Cmd+Shift+C | Copy the open file's path |
 | Cmd+Shift+O | Open the heading list |
 | Cmd+Shift+H | Toggle text highlights |
+| Cmd+Shift+Enter | Terminal full screen, or leave it |
 | Cmd+G / Cmd+Shift+G | Next / previous match |
 | Cmd+Alt+F (Ctrl+H on Linux) | Find and replace |
 | Alt+Up / Alt+Down | Move lines |

@@ -16,7 +16,7 @@ use crate::ai::{AiSettings, AiTool, CommandProblem, PROMPT, SYSTEM, check_comman
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::install::view::{InstallAction, install_prompt};
 use crate::install::{InstallStatus, Recipe};
-use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZES, PAGE_ZOOM_PERCENTS, TextSize};
+use crate::settings::accessibility::{AccessibilitySettings, PAGE_ZOOM_PERCENTS, TEXT_SIZE_PERCENTS, TEXT_SIZE_STEP};
 use crate::settings::layout::TabPosition;
 use crate::settings::privacy::PrivacySettings;
 use crate::theme::catalog::{ThemeChoice, Themes};
@@ -26,12 +26,15 @@ use crate::update::Version;
 use crate::voice::VoiceSettings;
 
 mod highlight_rules;
+mod openrig_page;
 mod privacy_page;
 mod skill_list;
 mod updates_page;
 
 use highlight_rules::highlights_section;
 pub use highlight_rules::{HighlightInfo, RuleWriter};
+use openrig_page::openrig_section;
+pub use openrig_page::{OpenRigInfo, RemoteRigRow, RigCheck, rig_host_field};
 use privacy_page::privacy_section;
 use skill_list::{SkillsInfo, skills_section};
 pub use updates_page::UpdateInfo;
@@ -85,6 +88,14 @@ pub enum SettingsAction {
     VoiceCommandChanged,
     /// Look for tmux again (after installing it in a terminal).
     CheckTerminals,
+    /// Add a remote `OpenRig` rig by SSH host name and check it.
+    AddRemoteRig(String),
+    /// Remove a remote `OpenRig` rig from the list.
+    RemoveRemoteRig(String),
+    /// Log in to a remote `OpenRig` rig and list its seats.
+    CheckRemoteRig(String),
+    /// `OpenRig` was turned on or off.
+    OpenRigToggled,
     /// The Chromium HTML preview was turned on or off, or asked to look again.
     CheckHtmlBrowser,
     /// Put this text on the clipboard.
@@ -251,12 +262,13 @@ pub enum SettingsGroup {
     Skills,
     Agents,
     Terminals,
+    OpenRig,
     VoiceMemos,
     Updates,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 11] = [
+    pub const ALL: [SettingsGroup; 12] = [
         Self::Appearance,
         Self::Highlights,
         Self::Accessibility,
@@ -266,6 +278,7 @@ impl SettingsGroup {
         Self::Skills,
         Self::Agents,
         Self::Terminals,
+        Self::OpenRig,
         Self::VoiceMemos,
         Self::Updates,
     ];
@@ -281,6 +294,7 @@ impl SettingsGroup {
             Self::Skills => "Skills",
             Self::Agents => "Agents",
             Self::Terminals => "Terminals",
+            Self::OpenRig => "OpenRig",
             Self::VoiceMemos => "Voice memos",
             Self::Updates => "Updates",
         }
@@ -333,6 +347,7 @@ pub fn show_settings(
     ai: AiInfo,
     voice: VoiceInfo,
     terminals: TerminalsInfo,
+    openrig: OpenRigInfo,
     html_preview: HtmlPreviewInfo,
     updates: UpdateInfo,
 ) -> Option<SettingsAction> {
@@ -389,6 +404,7 @@ pub fn show_settings(
                         agents_section(ui, settings, agents, agents_folder)
                     }
                     SettingsGroup::Terminals => terminals_section(ui, terminals),
+                    SettingsGroup::OpenRig => openrig_section(ui, openrig),
                     SettingsGroup::VoiceMemos => voice_section(ui, voice),
                     SettingsGroup::Updates => updates_section(ui, updates),
                 };
@@ -479,30 +495,26 @@ fn appearance_section(ui: &mut Ui, appearance: AppearanceInfo) -> Option<Setting
     action
 }
 
-/// Accessibility: text size, editor font size, line wrapping, motion and focus outlines.
+/// Accessibility: text size, text area zoom, line wrapping, motion and focus outlines.
 fn accessibility_section(ui: &mut Ui, settings: &mut AccessibilitySettings) -> Option<SettingsAction> {
     let mut changed = false;
     ui.label(RichText::new("Text size").strong());
-    ui.label(RichText::new("Scales the whole window. Cmd/Ctrl + plus, minus and 0 change it too.").weak());
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        for size in TextSize::ALL {
-            let percent = format!("{}%", (size.scale() * 100.0).round());
-            changed |= ui.selectable_value(&mut settings.text_size, size, size.name()).on_hover_text(percent).changed();
-        }
-    });
+    ui.label(RichText::new("Everything in the window: menus, file list, tabs and the page. Cmd/Ctrl + plus, minus and 0 change it too.").weak());
+    let text_size =
+        egui::Slider::new(&mut settings.text_size, TEXT_SIZE_PERCENTS).step_by(f64::from(TEXT_SIZE_STEP)).suffix("%");
+    let text_size = ui.add(text_size);
+    // The new size moves this slider under the pointer, so a drag applies when it ends.
+    changed |= text_size.drag_stopped() || (text_size.changed() && !text_size.dragged());
 
     ui.add_space(6.0);
     ui.separator();
-    ui.label(RichText::new("Editor font size").strong());
-    ui.label(RichText::new("The Markdown editor and other monospace text, before the text size.").weak());
-    let slider = egui::Slider::new(&mut settings.editor_font_size, EDITOR_FONT_SIZES).suffix(" pt");
-    changed |= ui.add(slider).changed();
-    ui.add_space(4.0);
     ui.label(RichText::new("Text area zoom").strong());
     ui.label(
-        RichText::new("Zooms only the editor and the preview. Cmd/Ctrl + Alt + plus, minus and 0, or Cmd/Ctrl + wheel over the text.")
-            .weak(),
+        RichText::new(
+            "The page you read or write: the source editor and the preview together. Menus, file list and tabs \
+             keep their size. Cmd/Ctrl + Alt + plus, minus and 0, or Cmd/Ctrl + wheel over the text.",
+        )
+        .weak(),
     );
     let zoom = egui::Slider::new(&mut settings.page_zoom, PAGE_ZOOM_PERCENTS).suffix("%");
     changed |= ui.add(zoom).changed();
