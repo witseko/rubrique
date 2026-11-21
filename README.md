@@ -179,6 +179,7 @@ Settings → Accessibility.
 | Cmd+Shift+C | Copy the open file's path |
 | Cmd+Shift+O | Open the heading list |
 | Cmd+Shift+H | Toggle text highlights |
+| Cmd+Shift+Enter | Terminal full screen, or leave it |
 | Cmd+G / Cmd+Shift+G | Next / previous match |
 | Cmd+Alt+F (Ctrl+H on Linux) | Find and replace |
 | Alt+Up / Alt+Down | Move lines |

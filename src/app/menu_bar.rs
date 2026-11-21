@@ -10,6 +10,7 @@
 
 use eframe::egui::{Context, KeyboardShortcut};
 
+use super::terminal_full_screen::TOGGLE_TERMINAL_FULL_SCREEN;
 use super::{
     ASK, NEW_ENCRYPTED_SCRATCH, NEW_SCRATCH, OPEN_PATH, PAGE_DEFAULT, PAGE_LARGER, PAGE_SMALLER, RubriqueApp, SAVE,
     TEXT_DEFAULT, TEXT_LARGER, TEXT_SMALLER, TOGGLE_HIGHLIGHTS, TOGGLE_PREVIEW, TOGGLE_PREVIEW_EDITING,
@@ -36,6 +37,7 @@ pub(super) enum MenuCommand {
     TogglePreview,
     PreviewEditing,
     TextHighlights,
+    TerminalFullScreen,
     TextSizeLarger,
     TextSizeSmaller,
     TextSizeReset,
@@ -131,6 +133,7 @@ impl RubriqueApp {
             item("Preview / source", MenuCommand::TogglePreview, Some(&TOGGLE_PREVIEW)),
             item("Edit in preview", MenuCommand::PreviewEditing, Some(&TOGGLE_PREVIEW_EDITING)),
             item("Text highlights", MenuCommand::TextHighlights, Some(&TOGGLE_HIGHLIGHTS)),
+            item("Terminal full screen", MenuCommand::TerminalFullScreen, Some(&TOGGLE_TERMINAL_FULL_SCREEN)),
             MenuEntry::Separator,
             MenuEntry::Submenu { label: "Text size", entries: text_sizes },
             MenuEntry::Submenu { label: "Text area zoom", entries: zoom },
@@ -158,6 +161,7 @@ impl RubriqueApp {
         let checked = match command {
             MenuCommand::PreviewEditing => self.settings.layout.preview_mode == PreviewMode::Edit,
             MenuCommand::TextHighlights => self.settings.text_highlight.enabled,
+            MenuCommand::TerminalFullScreen => self.terminal_full_screen_on(),
             MenuCommand::LineNumbers => accessibility.line_numbers,
             MenuCommand::WrapLines => accessibility.wrap_lines,
             MenuCommand::Theme(choice) => self.settings.theme == *choice,
@@ -196,6 +200,7 @@ impl RubriqueApp {
             MenuCommand::TogglePreview => self.toggle_preview(),
             MenuCommand::PreviewEditing => self.toggle_preview_editing(),
             MenuCommand::TextHighlights => self.toggle_text_highlights(ctx),
+            MenuCommand::TerminalFullScreen => self.toggle_terminal_full_screen(),
             MenuCommand::PageZoomLarger => self.change_page_zoom(ctx, page_zoom_larger(page_zoom)),
             MenuCommand::PageZoomSmaller => self.change_page_zoom(ctx, page_zoom_smaller(page_zoom)),
             MenuCommand::PageZoomReset => self.change_page_zoom(ctx, DEFAULT_PAGE_ZOOM),
