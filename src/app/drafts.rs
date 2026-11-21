@@ -201,6 +201,7 @@ impl RubriqueApp {
                 disk_notice: Some(DiskState::Deleted),
                 editor: None,
                 source: false,
+                team: None,
             });
             return Some(Restored::Missing(path));
         }

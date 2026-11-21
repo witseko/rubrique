@@ -2,9 +2,10 @@
 //! on this computer or on a remote host over SSH.
 
 use std::ffi::OsStr;
+use std::fmt;
 use std::io;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,6 +17,7 @@ use crate::ai::run::{AiRun, RunEnd};
 use crate::remote::connection;
 use crate::remote::mirror::is_valid_host;
 
+pub mod spec;
 pub mod store;
 
 const TIMEOUT: Duration = Duration::from_secs(12);
@@ -28,6 +30,11 @@ const PARTIAL_MARKER: &str = "Warning: failed to fetch nodes";
 const REMOTE_PROGRAM: &str = "rig";
 /// The shell's exit status for a command it cannot find.
 const EXIT_COMMAND_NOT_FOUND: i32 = 127;
+/// How long `rig up` may take, plan or launch: rig's own wait for the
+/// daemon (120 s) and a margin.
+const UP_TIMEOUT: Duration = Duration::from_secs(150);
+/// What to say when the local rig CLI is missing.
+const LOCAL_RIG_MISSING: &str = "OpenRig CLI missing. Install @openrig/cli and put rig on PATH.";
 
 /// Runs rig on a remote host through its login shell (rig is often on PATH
 /// only there, through nvm), with the same environment as the local call.
@@ -109,6 +116,77 @@ impl TaskStatus {
     }
 }
 
+/// Why a call to rig gave no answer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RigCallError {
+    /// rig is not installed (or not on PATH) on the machine that should run it.
+    NotInstalled(String),
+    /// rig ran, or could not be run, without a usable answer.
+    Failed(String),
+}
+
+impl fmt::Display for RigCallError {
+    /// The message to show the user.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RigCallError::NotInstalled(message) | RigCallError::Failed(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl From<RigCallError> for String {
+    fn from(error: RigCallError) -> Self {
+        error.to_string()
+    }
+}
+
+impl From<&str> for RigCallError {
+    fn from(message: &str) -> Self {
+        RigCallError::Failed(message.to_owned())
+    }
+}
+
+/// The answer of `rig spec validate --json`, which needs no daemon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SpecValidation {
+    pub valid: bool,
+    /// Each error with its path (`pods[0].members[1].id`) when it names one.
+    pub errors: Vec<spec::Issue>,
+    /// Findings that do not block validation or launch.
+    pub advisories: Vec<String>,
+}
+
+/// The answer of `rig spec preflight --json`, which asks the daemon.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Preflight {
+    pub ready: bool,
+    pub warnings: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// The answer of `rig up --json`, for a launch or a `--plan` preview.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpReply {
+    /// rig exited cleanly and the daemon reported no failure.
+    pub ok: bool,
+    /// `rigResult`, such as `launched` or `partially_restored`, when given.
+    pub rig_result: Option<String>,
+    /// The daemon's own explanation, when it gave one.
+    pub message: Option<String>,
+    /// Validation or preflight errors that stopped the launch or the plan.
+    pub errors: Vec<String>,
+    /// Findings that do not stop the launch.
+    pub warnings: Vec<String>,
+}
+
+/// rig's answer to one call: its exit status, what it printed and whether
+/// it warned that the seat list is partial.
+struct CliReply {
+    success: bool,
+    stdout: String,
+    partial: bool,
+}
+
 /// The rig executable on the machine that runs the daemon.
 pub struct Rig {
     program: PathBuf,
@@ -121,13 +199,68 @@ impl Rig {
     /// local rig is needed for it.
     pub fn open(host: &RigHost) -> Result<Self, String> {
         let program = match host {
-            RigHost::Local => {
-                find_on_path("rig").ok_or("OpenRig CLI missing. Install @openrig/cli and put rig on PATH.")?
-            }
+            RigHost::Local => find_on_path("rig").ok_or(LOCAL_RIG_MISSING)?,
             RigHost::Ssh(name) if is_valid_host(name) => PathBuf::from(REMOTE_PROGRAM),
             RigHost::Ssh(_) => return Err("Use a host name, or user@host.".into()),
         };
         Ok(Self { program, host: host.clone() })
+    }
+
+    /// [`Rig::open`] for the team editor, which tells a missing rig apart
+    /// from other failures.
+    ///
+    /// # Errors
+    ///
+    /// [`RigCallError::NotInstalled`] when rig is not on this computer's
+    /// PATH; [`RigCallError::Failed`] for a host name that is not valid.
+    pub fn open_checked(host: &RigHost) -> Result<Self, RigCallError> {
+        if *host == RigHost::Local && find_on_path("rig").is_none() {
+            return Err(RigCallError::NotInstalled(LOCAL_RIG_MISSING.into()));
+        }
+        Self::open(host).map_err(RigCallError::Failed)
+    }
+
+    /// Check a rig spec with `rig spec validate <spec> --json` (no daemon
+    /// needed). `spec` is an absolute path on the rig's machine.
+    ///
+    /// # Errors
+    ///
+    /// Fails when rig is missing, cannot run or gives no readable answer.
+    pub fn spec_validate(&self, spec: &Path) -> Result<SpecValidation, RigCallError> {
+        let reply = self.call(None, &["spec", "validate", spec_argument(spec)?, "--json"], None, TIMEOUT)?;
+        parse_validation(&reply.stdout)
+    }
+
+    /// Ask the daemon whether the spec can launch, with `rig spec preflight
+    /// <spec> --json`. `spec` is an absolute path on the rig's machine.
+    ///
+    /// # Errors
+    ///
+    /// Fails when rig is missing, the daemon is not running, or rig gives no
+    /// readable answer.
+    pub fn spec_preflight(&self, spec: &Path) -> Result<Preflight, RigCallError> {
+        let reply = self.call(None, &["spec", "preflight", spec_argument(spec)?, "--json"], None, UP_TIMEOUT)?;
+        parse_preflight(reply.success, &reply.stdout)
+    }
+
+    /// Preview a launch with `rig up <spec> --plan --json`; starts nothing.
+    ///
+    /// # Errors
+    ///
+    /// Fails when rig is missing, cannot run or gives no readable answer.
+    pub fn up_plan(&self, spec: &Path) -> Result<UpReply, RigCallError> {
+        let reply = self.call(None, &["up", spec_argument(spec)?, "--plan", "--json"], None, UP_TIMEOUT)?;
+        parse_up(reply.success, &reply.stdout)
+    }
+
+    /// Launch the team with `rig up <spec> --json`.
+    ///
+    /// # Errors
+    ///
+    /// Fails when rig is missing, cannot run or gives no readable answer.
+    pub fn up(&self, spec: &Path) -> Result<UpReply, RigCallError> {
+        let reply = self.call(None, &["up", spec_argument(spec)?, "--json"], None, UP_TIMEOUT)?;
+        parse_up(reply.success, &reply.stdout)
     }
 
     /// Read the configured daemon and list its local agent seats.
@@ -252,19 +385,32 @@ impl Rig {
 
     /// Run a bounded CLI call off the UI thread, on the daemon's machine. Queue data goes through stdin.
     fn json(&self, endpoint: Option<SocketAddr>, args: &[&str], body: Option<String>) -> Result<(Value, bool), String> {
-        match &self.host {
-            RigHost::Local => self.local_json(endpoint, args, body),
-            RigHost::Ssh(host) => self.remote_json(host, endpoint, args, body.as_deref()),
-        }
+        let reply = self.call(endpoint, args, body, TIMEOUT)?;
+        parse_reply(reply.success, &reply.stdout, reply.partial)
     }
 
-    /// Run rig on this computer.
-    fn local_json(
+    /// Run rig with `args` on the daemon's machine, waiting up to `timeout`.
+    fn call(
         &self,
         endpoint: Option<SocketAddr>,
         args: &[&str],
         body: Option<String>,
-    ) -> Result<(Value, bool), String> {
+        timeout: Duration,
+    ) -> Result<CliReply, RigCallError> {
+        match &self.host {
+            RigHost::Local => self.local_call(endpoint, args, body, timeout),
+            RigHost::Ssh(host) => self.remote_call(host, endpoint, args, body.as_deref(), timeout),
+        }
+    }
+
+    /// Run rig on this computer.
+    fn local_call(
+        &self,
+        endpoint: Option<SocketAddr>,
+        args: &[&str],
+        body: Option<String>,
+        timeout: Duration,
+    ) -> Result<CliReply, RigCallError> {
         let mut command = Command::new(&self.program);
         command
             .args(args)
@@ -283,11 +429,12 @@ impl Rig {
         }
         let mut run =
             AiRun::start_command(&mut command, body, Some(MAX_CLI_OUTPUT), || {}).map_err(|_| "Cannot start rig.")?;
-        let deadline = Instant::now() + TIMEOUT;
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if let Some(end) = run.poll().cloned() {
                 let success = matches!(end, RunEnd::Exited { success: true, .. });
-                return parse_reply(success, &run.output_text(), run.error_text().contains(PARTIAL_MARKER));
+                let partial = run.error_text().contains(PARTIAL_MARKER);
+                return Ok(CliReply { success, stdout: run.output_text(), partial });
             }
             thread::sleep(Duration::from_millis(20));
         }
@@ -296,18 +443,19 @@ impl Rig {
 
     /// Run rig on `host` over the shared SSH connection (see [`REMOTE_RIG`]).
     /// On the host, the endpoint is that host's own loopback address.
-    fn remote_json(
+    fn remote_call(
         &self,
         host: &str,
         endpoint: Option<SocketAddr>,
         args: &[&str],
         body: Option<&str>,
-    ) -> Result<(Value, bool), String> {
+        timeout: Duration,
+    ) -> Result<CliReply, RigCallError> {
         let url = endpoint.map(|endpoint| format!("http://{endpoint}")).unwrap_or_default();
         let mut script_args = vec![OsStr::new(&url), self.program.as_os_str()];
         script_args.extend(args.iter().map(OsStr::new));
-        let output = connection::run(host, REMOTE_RIG, &script_args, body.map(str::as_bytes), TIMEOUT)
-            .map_err(|error| remote_error(host, &error))?;
+        let output = connection::run(host, REMOTE_RIG, &script_args, body.map(str::as_bytes), timeout)
+            .map_err(|error| RigCallError::Failed(remote_error(host, &error)))?;
         if output.len() > MAX_CLI_OUTPUT {
             return Err("OpenRig CLI returned too much output.".into());
         }
@@ -315,9 +463,11 @@ impl Rig {
         let (status, partial, stdout) =
             parse_remote_output(&output).ok_or("OpenRig CLI returned an unreadable reply.")?;
         if status == EXIT_COMMAND_NOT_FOUND {
-            return Err(format!("OpenRig CLI missing on {host}. Install @openrig/cli there and put rig on PATH."));
+            return Err(RigCallError::NotInstalled(format!(
+                "OpenRig CLI missing on {host}. Install @openrig/cli there and put rig on PATH."
+            )));
         }
-        parse_reply(status == 0, stdout, partial)
+        Ok(CliReply { success: status == 0, stdout: stdout.to_owned(), partial })
     }
 }
 
@@ -350,6 +500,86 @@ fn parse_reply(success: bool, stdout: &str, partial: bool) -> Result<(Value, boo
     }
     let value = value.map_err(|_| "OpenRig CLI returned an unreadable JSON reply.")?;
     Ok((value, partial))
+}
+
+/// A spec path as rig's argument: absolute (so it never reads as an
+/// option) and valid UTF-8.
+fn spec_argument(spec: &Path) -> Result<&str, RigCallError> {
+    let text = spec.to_str().filter(|_| spec.is_absolute()).ok_or("OpenRig needs the spec's full path.")?;
+    Ok(text)
+}
+
+/// The JSON object rig printed: the whole output, or else its last line
+/// (rig may print a notice before it).
+fn reply_object(stdout: &str) -> Option<Value> {
+    let parse = |text: &str| serde_json::from_str::<Value>(text).ok().filter(Value::is_object);
+    parse(stdout.trim()).or_else(|| stdout.trim().lines().last().and_then(parse))
+}
+
+/// The strings in the list at `key`; other items are left out.
+fn strings(reply: &Value, key: &str) -> Vec<String> {
+    reply[key]
+        .as_array()
+        .map(|items| items.iter().filter_map(|item| item.as_str().map(str::to_owned)).collect())
+        .unwrap_or_default()
+}
+
+/// Read `rig spec validate --json`: `{valid, errors, advisories?}`, or
+/// `{error}` when the validator itself failed.
+fn parse_validation(stdout: &str) -> Result<SpecValidation, RigCallError> {
+    let reply = reply_object(stdout).ok_or("OpenRig CLI returned an unreadable reply.")?;
+    let Some(valid) = reply["valid"].as_bool() else {
+        return Err("OpenRig could not finish checking the spec.".into());
+    };
+    Ok(SpecValidation {
+        valid,
+        errors: strings(&reply, "errors").iter().map(|line| spec::Issue::parse(line)).collect(),
+        advisories: strings(&reply, "advisories"),
+    })
+}
+
+/// Read `rig spec preflight --json`: `{ready, warnings, errors}`. Without
+/// a daemon rig prints no JSON and fails.
+fn parse_preflight(success: bool, stdout: &str) -> Result<Preflight, RigCallError> {
+    let Some(reply) = reply_object(stdout) else {
+        let message = if success {
+            "OpenRig CLI returned an unreadable reply."
+        } else {
+            "Start the OpenRig daemon, then check again."
+        };
+        return Err(message.into());
+    };
+    Ok(Preflight {
+        ready: reply["ready"].as_bool().unwrap_or(false),
+        warnings: strings(&reply, "warnings"),
+        errors: strings(&reply, "errors"),
+    })
+}
+
+/// Read `rig up --json`. A failure explains itself in `error` (text, or
+/// `{fact, consequence, action}`), `message` or `errors`.
+fn parse_up(success: bool, stdout: &str) -> Result<UpReply, RigCallError> {
+    let reply = reply_object(stdout).ok_or("OpenRig CLI returned an unreadable reply.")?;
+    let rig_result = reply["rigResult"].as_str().map(str::to_owned);
+    let failed_result = matches!(rig_result.as_deref(), Some("partially_restored" | "failed" | "not_attempted"))
+        || reply["status"] == "failed";
+    let error = &reply["error"];
+    let message = error
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| {
+            let parts = ["fact", "action"].map(|key| error[key].as_str().unwrap_or_default());
+            let text = parts.iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join(" ");
+            (!text.is_empty()).then_some(text)
+        })
+        .or_else(|| reply["message"].as_str().map(str::to_owned));
+    Ok(UpReply {
+        ok: success && reply["ok"] != false && !failed_result,
+        rig_result,
+        message,
+        errors: strings(&reply, "errors"),
+        warnings: strings(&reply, "warnings"),
+    })
 }
 
 /// Accept only a local HTTP origin with an explicit port, without resolving a hostname.
@@ -580,6 +810,87 @@ mod tests {
         assert!(error.contains("missing on rig-host"), "{error}");
         assert!(Rig::open(&RigHost::Ssh("-oProxyCommand=touch x".into())).is_err());
         assert!(Rig::open(&RigHost::Ssh("rig-host".into())).is_ok());
+    }
+
+    /// Validation answers keep the error paths, with or without a notice line first.
+    #[test]
+    fn parses_spec_validation_replies() {
+        let reply = "notice: update available\n{\"valid\":false,\"errors\":[\"pods[0].members[1].id: must not contain dots\",\"pods: required non-empty array\"],\"advisories\":[\"a\"]}";
+        let validation = parse_validation(reply).unwrap();
+        assert!(!validation.valid);
+        assert_eq!(validation.errors[0], spec::Issue::at("pods[0].members[1].id", "must not contain dots"));
+        assert_eq!(validation.errors[1].path, "pods");
+        assert_eq!(validation.advisories, ["a"]);
+        assert!(parse_validation("{\"valid\":true,\"errors\":[]}").unwrap().valid);
+        assert!(parse_validation("{\"error\":\"Internal validator error\"}").is_err());
+        assert!(parse_validation("not json").is_err());
+    }
+
+    /// Preflight without a daemon prints no JSON; with one it lists warnings and errors.
+    #[test]
+    fn parses_preflight_replies() {
+        let preflight =
+            parse_preflight(false, "{\"ready\":false,\"warnings\":[\"w\"],\"errors\":[\"agent.yaml missing\"]}")
+                .unwrap();
+        assert_eq!(
+            preflight,
+            Preflight { ready: false, warnings: vec!["w".into()], errors: vec!["agent.yaml missing".into()] }
+        );
+        let error = parse_preflight(false, "").unwrap_err();
+        assert_eq!(error, RigCallError::Failed("Start the OpenRig daemon, then check again.".into()));
+    }
+
+    /// A launch reply is ok only when rig and the daemon both say so, and a failure explains itself.
+    #[test]
+    fn parses_up_replies() {
+        let launched = parse_up(true, "{\"ok\":true,\"rigResult\":\"launched\"}").unwrap();
+        assert!(launched.ok);
+        assert_eq!(launched.rig_result.as_deref(), Some("launched"));
+        let refused = parse_up(false, "{\"code\":\"preflight_failed\",\"errors\":[\"cwd missing\"]}").unwrap();
+        assert!(!refused.ok);
+        assert_eq!(refused.errors, ["cwd missing"]);
+        let three_part = "{\"ok\":false,\"error\":{\"fact\":\"A rig named starter is running.\",\"consequence\":\"x\",\"action\":\"Stop it first.\"}}";
+        let refused = parse_up(false, three_part).unwrap();
+        assert_eq!(refused.message.as_deref(), Some("A rig named starter is running. Stop it first."));
+        let partial = parse_up(false, "{\"rigResult\":\"partially_restored\"}").unwrap();
+        assert!(!partial.ok);
+        let blocked_plan =
+            parse_up(true, "{\"status\":\"failed\",\"errors\":[\"no agent\"],\"warnings\":[\"w\"]}").unwrap();
+        assert!(!blocked_plan.ok);
+        assert_eq!((blocked_plan.errors, blocked_plan.warnings), (vec!["no agent".to_owned()], vec!["w".to_owned()]));
+        assert!(parse_up(true, "{\"status\":\"planned\",\"warnings\":[]}").unwrap().ok);
+    }
+
+    /// The spec path reaches rig as one argument, even with spaces and quotes,
+    /// and a failed validation still returns its answer.
+    #[test]
+    fn validates_a_spec_through_the_cli() {
+        let temp = TempFolder::new();
+        let spec = temp.write("my team/rig 'x'.yaml", "name: x\n");
+        let program = temp.write(
+            "rig",
+            r#"#!/bin/sh
+test "$1" = spec && test "$2" = validate && test "$4" = --json && test -f "$3" || exit 3
+printf '{"valid":false,"errors":["name: required non-empty string"]}\n'
+exit 1
+"#,
+        );
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o700)).unwrap();
+        let rig = Rig { program, host: RigHost::Local };
+        let validation = rig.spec_validate(&spec).unwrap();
+        assert!(!validation.valid);
+        assert_eq!(validation.errors[0].path, "name");
+        assert!(rig.spec_validate(Path::new("relative.yaml")).is_err());
+    }
+
+    /// A host without rig is a distinct answer, so the editor can say how to install it.
+    #[test]
+    fn reports_rig_missing_on_a_remote_host() {
+        use_fake_ssh();
+        let temp = TempFolder::new();
+        let rig = Rig { program: temp.path().join("no-rig-here"), host: RigHost::Ssh("rig-host".into()) };
+        let error = rig.spec_validate(Path::new("/specs/rig.yaml")).unwrap_err();
+        assert!(matches!(error, RigCallError::NotInstalled(message) if message.contains("missing on rig-host")));
     }
 
     /// The local fake rig.

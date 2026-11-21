@@ -112,6 +112,13 @@ the libraries listed under [Build](#build) first.
   and choose a seat. Settings > OpenRig also lists remote rigs, with a
   Check button that shows their seats or what is missing. Open Tasks in
   the same file later to check the queue status and read the result.
+- Edit an OpenRig team as a form. With Use OpenRig on, a rig spec
+  (`rig.yaml`) opens with its pods, seats, links and team settings; click
+  a seat to edit it, and switch to Source for the YAML. Saves keep your
+  comments and the fields the form does not show. Validate and Launch run
+  `rig`, which must be installed; Launch shows what it would start and
+  waits for you to confirm. The plus button in the Explorer's OpenRig
+  section creates a new team in `~/.openrig/specs`.
 - Tabs take their group and color from their explorer folder. Drag tabs
   or groups to reorder them. To list tabs vertically, choose Settings >
   Appearance > Tabs > In the explorer and switch between Files and Tabs.
@@ -210,7 +217,7 @@ installed; Settings → Terminals offers the install command.
 | `whisper-cli` | Transcribing memos |
 | `helm` | Helm charts |
 | `tmux` | Terminals |
-| `rig` | OpenRig task handoff and status in the Tasks panel |
+| `rig` | OpenRig task handoff and status in the Tasks panel; checking and launching teams |
 
 Gemini CLI runs in plan mode. Trust the working folder in Gemini before
 using it in Rubrique.

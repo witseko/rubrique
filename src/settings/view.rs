@@ -744,7 +744,7 @@ fn choice_name(choice: Option<AiTool>) -> &'static str {
 }
 
 /// The outlined box around the tool rows; the rows draw their own separators.
-fn list_frame(ui: &mut Ui, add_rows: impl FnOnce(&mut Ui)) {
+pub(crate) fn list_frame(ui: &mut Ui, add_rows: impl FnOnce(&mut Ui)) {
     egui::Frame::new().stroke(ui.visuals().widgets.noninteractive.bg_stroke).corner_radius(LIST_RADIUS).show(
         ui,
         |ui| {
@@ -821,7 +821,7 @@ fn status_mark(ui: &mut Ui, found: bool) {
 }
 
 /// A small tag on a tool row: "Ask" or "Summaries".
-fn tag(ui: &mut Ui, text: &str) {
+pub(crate) fn tag(ui: &mut Ui, text: &str) {
     egui::Frame::new()
         .fill(ui.visuals().selection.bg_fill)
         .corner_radius(TAG_RADIUS)
@@ -1323,7 +1323,7 @@ fn voice_section(ui: &mut Ui, voice: VoiceInfo) -> Option<SettingsAction> {
 }
 
 /// A text field's outlined box; a warning border when `warn`.
-fn field_box(ui: &mut Ui, visuals: &egui::Visuals, warn: bool, add: impl FnOnce(&mut Ui)) {
+pub(crate) fn field_box(ui: &mut Ui, visuals: &egui::Visuals, warn: bool, add: impl FnOnce(&mut Ui)) {
     let border = if warn { Stroke::new(1.0, visuals.warn_fg_color) } else { visuals.widgets.noninteractive.bg_stroke };
     egui::Frame::new()
         .fill(visuals.text_edit_bg_color())

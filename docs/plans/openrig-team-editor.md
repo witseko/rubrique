@@ -1,6 +1,6 @@
 # OpenRig team editor
 
-Status: design. Mockups: https://claude.ai/artifact/TtwmjwWCwTYnQReAka27QA
+Status: implemented. Mockups: https://claude.ai/artifact/TtwmjwWCwTYnQReAka27QA
 
 ## The problem
 
@@ -12,8 +12,8 @@ a spec or take raw YAML.
 
 ## The editor
 
-A rig spec opens as a form in a document tab. A Form / YAML switch at the
-top right shows the same file as text. Nothing else in the app changes
+A rig spec opens as a form in a document tab. A Form / Source switch at
+the top right shows the same file as YAML text. Nothing else in the app changes
 place: the Explorer OpenRig section and Settings stay as they are.
 
 1. **Header.** Team name, a count line ("3 pods, 7 seats, 11 links"), the
@@ -67,15 +67,29 @@ Kept as written and edited in YAML only: `claude_auto_mode`,
 actions for agent seats, and the pod's `continuity_policy` and `startup`.
 The `stub` runtime and the `none` permission value are not offered.
 
-## Open questions
+## Decisions
 
-- **Saving.** The form promises that YAML comments and fields it does not
-  cover survive a save. That needs a YAML writer that keeps comments.
-- **Duplicating a built-in team.** Built-in teams point to agents with
-  relative `local:` paths that do not resolve from `~/.openrig/specs/`. The
-  mockup rewrites them to `path:` links on duplicate.
-- **Pod id and label.** The mockups show them read-only; the edit control is
-  not designed yet.
+These were open questions in the design; this is what was built.
+
+- **Saving.** The form edits the text in place through the `yaml-edit`
+  crate's lossless tree: only the keys whose values changed are set or
+  removed, so comments, key order, quoting and the fields the form does
+  not cover survive a save. A file without changes is written back byte
+  for byte. The form adds and removes list items but never reorders the
+  items read from the file.
+- **Duplicating a built-in team.** "Duplicate to edit" copies the team to
+  `~/.openrig/specs/<name>-copy/`, rewrites its relative `local:` agent
+  links to absolute `path:` links, and copies the companion files the spec
+  names (culture file, startup files, docs) when they are plain relative
+  paths. A new team from the starter or the factory does the same when
+  "Keep using the built-in agents" is on.
+- **Pod id and label.** They are edited inline in the pod's card, from the
+  pod's `...` menu (Edit id and label). The label changes as it is typed;
+  the id when its field loses focus or on Done, and links between pods
+  that named the old id follow it.
+- **Launch.** Launch validates the team, runs preflight and then
+  `rig up --plan`, and shows the seats the launch would start. Only the
+  Launch button under that plan runs `rig up`; any edit clears the plan.
 
 ## Implementation notes
 
@@ -83,9 +97,9 @@ The `stub` runtime and the `none` permission value are not offered.
   with the YAML view reusing the text editor.
 - Validate runs `rig spec validate <path> --json` (no daemon). Its error
   paths (`pods[0].members[1].id`) map to form fields. Preflight runs
-  `rig spec preflight <path> --json`. Launch runs `rig up <path>`, with
-  `--plan` for a preview. These go through `Rig` in `src/openrig.rs`, so
-  remote rigs over SSH keep working.
+  `rig spec preflight <path> --json`. Launch runs `rig up <path> --plan`
+  first and `rig up <path>` on confirmation. These go through `Rig` in
+  `src/openrig.rs`, so remote rigs over SSH keep working.
 - User specs live in `~/.openrig/specs`; built-in specs are read-only.
 - Reuse the Settings widgets (`list_frame`, `tag`, `field_box`,
   `choice_chip`) and the constants of `src/settings/view/openrig_page.rs`.

@@ -90,6 +90,10 @@ fn openrig_section(
             if small_icon_button(ui, Icon::OpenRig, HEADER_BUTTON_SIZE, "Remote rigs", tip).clicked() {
                 *action = Some(ExplorerAction::OpenRigSettings);
             }
+            let tip = "Create a team of agents from a template and edit it as a form";
+            if small_icon_button(ui, Icon::Plus, HEADER_BUTTON_SIZE, "New team", tip).clicked() {
+                *action = Some(ExplorerAction::NewOpenRigTeam);
+            }
         },
     );
     if clicks.background_double {

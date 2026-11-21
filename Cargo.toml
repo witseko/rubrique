@@ -80,6 +80,9 @@ rclip-rtf = { version = "0.1", features = ["codepage"] }
 base64 = "0.23"
 # Checks the downloaded whisper model against the SHA-256 built into the app.
 sha2 = "0.11"
+# The OpenRig team editor saves a rig spec (YAML) by editing it in place,
+# so comments, key order and the fields the form does not show stay as written.
+yaml-edit = { version = "0.3.6", default-features = false }
 
 # The menu bar at the top of the screen on macOS (File, View, Settings), in
 # place of the menu bar drawn inside the window on other systems.
