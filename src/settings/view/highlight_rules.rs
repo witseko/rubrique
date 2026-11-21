@@ -20,7 +20,8 @@ use crate::theme::palette::Rgb;
 /// thing the default rules color, so every rule shows a count.
 const SAMPLE: &str = "2026-11-11 09:14:05 INFO request 3f2a9c1e-7b4d-4e21-9a0c-5d8e1f6b2a90 from 10.0.4.17\n\
                       2026-11-11 09:14:09 WARN retry 3 of 5 for ops@rubrique.dev on fe80::1\n\
-                      2026-11-11 09:14:12 INFO deployed a1b2c3d for PROJ-482 in 182 ms";
+                      2026-11-11 09:14:12 INFO deployed a1b2c3d for PROJ-482 in 182 ms\n\
+                      2026-11-11 09:14:15 INFO wrote report.csv to /var/log/rubrique, see https://rubrique.dev/docs";
 /// Where the sample text is kept while the app runs (it is not saved).
 const SAMPLE_ID: &str = "rubrique-highlight-sample";
 /// Where the place of the open rule row is kept.

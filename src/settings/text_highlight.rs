@@ -1,10 +1,10 @@
 //! The text highlight rules in the settings file: a `text_highlights` line
-//! (the on and off switch), a `highlight_rules` line, then one
-//! `highlight_rule` line per rule, in order.
+//! (the on and off switch), a `highlight_rules` line, a `highlight_defaults`
+//! line, then one `highlight_rule` line per rule, in order.
 
 use std::fmt::Write as _;
 
-use crate::highlight::text_rules::{HighlightRule, default_rules};
+use crate::highlight::text_rules::{DEFAULT_RULES_VERSION, HighlightRule, add_new_default_rules, default_rules};
 
 /// Key of the line that says whether highlights are on (`true` or `false`).
 const ENABLED_KEY: &str = "text_highlights";
@@ -12,6 +12,12 @@ const ENABLED_KEY: &str = "text_highlights";
 /// before rules existed, so it gets the default rules; a file with it and no
 /// rule lines means the user deleted them all.
 const RULES_KEY: &str = "highlight_rules";
+/// Key of the line with the version of the default rules the saved list has
+/// had its chance to take. It follows the `highlight_rules` line; a saved
+/// list without it is from before the line existed.
+const DEFAULTS_KEY: &str = "highlight_defaults";
+/// Version of the default rules when rules were first saved.
+const FIRST_DEFAULTS_VERSION: u32 = 1;
 /// Key of each rule's line.
 const RULE_KEY: &str = "highlight_rule";
 
@@ -22,11 +28,13 @@ pub struct TextHighlightSettings {
     pub enabled: bool,
     /// Tried top to bottom; the first match colors the text.
     pub rules: Vec<HighlightRule>,
+    /// Version of the default rules this list has already been offered.
+    pub(super) defaults_version: u32,
 }
 
 impl Default for TextHighlightSettings {
     fn default() -> Self {
-        TextHighlightSettings { enabled: true, rules: default_rules() }
+        TextHighlightSettings { enabled: true, rules: default_rules(), defaults_version: DEFAULT_RULES_VERSION }
     }
 }
 
@@ -37,16 +45,33 @@ impl TextHighlightSettings {
         match key {
             ENABLED_KEY => self.enabled = value == "true",
             // The saved list replaces the defaults.
-            RULES_KEY => self.rules.clear(),
+            RULES_KEY => {
+                self.rules.clear();
+                self.defaults_version = FIRST_DEFAULTS_VERSION;
+            }
+            DEFAULTS_KEY => self.defaults_version = value.parse().unwrap_or(FIRST_DEFAULTS_VERSION),
             RULE_KEY => self.rules.extend(HighlightRule::from_value(value)),
             _ => return false,
         }
         true
     }
 
+    /// Call once after the last line is read: a list saved by an older
+    /// Rubrique gets the default rules added since then. This happens once,
+    /// so a new rule the user deletes stays deleted.
+    pub fn add_new_defaults(&mut self) {
+        add_new_default_rules(&mut self.rules, self.defaults_version);
+        self.defaults_version = DEFAULT_RULES_VERSION;
+    }
+
     /// The `key=value` lines that [`TextHighlightSettings::parse_line`] reads.
     pub fn to_lines(&self) -> String {
-        let mut lines = format!("{ENABLED_KEY}={}\n{RULES_KEY}={}\n", self.enabled, self.rules.len());
+        let mut lines = format!(
+            "{ENABLED_KEY}={}\n{RULES_KEY}={}\n{DEFAULTS_KEY}={}\n",
+            self.enabled,
+            self.rules.len(),
+            self.defaults_version
+        );
         for rule in &self.rules {
             let _ = writeln!(lines, "{RULE_KEY}={}", rule.to_value());
         }
@@ -71,6 +96,7 @@ mod tests {
             let (key, value) = line.split_once('=').expect("every line is key=value");
             assert!(settings.parse_line(key.trim(), value.trim()));
         }
+        settings.add_new_defaults();
         settings
     }
 
@@ -91,14 +117,27 @@ mod tests {
 
     #[test]
     fn deleting_every_rule_is_remembered() {
-        let empty = TextHighlightSettings { enabled: true, rules: Vec::new() };
-        assert_eq!(empty.to_lines(), "text_highlights=true\nhighlight_rules=0\n");
+        let empty = TextHighlightSettings { rules: Vec::new(), ..TextHighlightSettings::default() };
+        assert_eq!(empty.to_lines(), "text_highlights=true\nhighlight_rules=0\nhighlight_defaults=2\n");
         assert_eq!(parse(&empty.to_lines()).rules, Vec::new());
     }
 
     #[test]
+    fn a_list_saved_before_new_defaults_gets_them_once() {
+        let old = parse("highlight_rules=1\nhighlight_rule=on\tkey\t[0-9]+\tDigits\n");
+        let names: Vec<&str> = old.rules.iter().map(|rule| rule.name.as_str()).collect();
+        assert_eq!(names, ["URL", "File path", "File name", "Digits"]);
+
+        let mut kept = old.clone();
+        kept.rules.retain(|rule| rule.name != "URL");
+        assert_eq!(parse(&kept.to_lines()), kept);
+    }
+
+    #[test]
     fn broken_rule_lines_are_skipped() {
-        let settings = parse("highlight_rules=2\nhighlight_rule=nonsense\nhighlight_rule=on\tkey\t[0-9]+\tDigits\n");
+        let settings = parse(
+            "highlight_rules=2\nhighlight_defaults=2\nhighlight_rule=nonsense\nhighlight_rule=on\tkey\t[0-9]+\tDigits\n",
+        );
         assert_eq!(settings.rules, [HighlightRule::new("Digits", "[0-9]+", RuleColor::Key)]);
     }
 
