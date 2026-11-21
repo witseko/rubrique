@@ -17,6 +17,10 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   from a zip or a shared drive could run code as soon as you opened a
   file in it. Repositories you clone in Rubrique are trusted at once;
   trust each existing one with one click.
+- **Preview stays in your folder.** Images and links to Markdown files in
+  the preview reach only files inside the explorer folder that holds the
+  note (or its bundle, or the note's own folder when it is in neither).
+  An image outside shows its alt text, with the reason on hover.
 
 ### Fixed
 
