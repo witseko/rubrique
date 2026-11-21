@@ -309,11 +309,18 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
 /// and tall. `label` is what screen readers announce.
 /// Three agents joined in a triangle; the one on top is the accent.
 fn paint_openrig(painter: &Painter, center: Pos2, color: Color32, accent: Color32) {
-    let (top, left, right) = (center + vec2(0.0, -4.5), center + vec2(-5.0, 4.0), center + vec2(5.0, 4.0));
-    stroke_path(painter, &[top, left, right], true, Stroke::new(LINE, color));
-    painter.circle_filled(left, RIG_NODE, color);
-    painter.circle_filled(right, RIG_NODE, color);
-    painter.circle_filled(top, RIG_NODE, accent);
+    paint_openrig_mark(painter, center, 1.0, color, accent);
+}
+
+/// The `OpenRig` mark at `scale` times the icon size (the Settings logo is
+/// larger): three agents joined in a triangle, the top one the accent.
+pub fn paint_openrig_mark(painter: &Painter, center: Pos2, scale: f32, color: Color32, accent: Color32) {
+    let at = |x: f32, y: f32| center + vec2(x, y) * scale;
+    let (top, left, right) = (at(0.0, -4.5), at(-5.0, 4.0), at(5.0, 4.0));
+    stroke_path(painter, &[top, left, right], true, Stroke::new(LINE * scale.sqrt(), color));
+    painter.circle_filled(left, RIG_NODE * scale, color);
+    painter.circle_filled(right, RIG_NODE * scale, color);
+    painter.circle_filled(top, RIG_NODE * scale, accent);
 }
 
 /// Draw `icon` alone (no button) centered on `center`.

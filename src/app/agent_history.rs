@@ -38,7 +38,8 @@ impl RubriqueApp {
             return;
         };
         let mut changed = false;
-        for row in monitor.rows() {
+        // A remote seat's conversations are on its host, not in this home folder.
+        for row in monitor.rows().into_iter().filter(|row| !monitor.is_remote(&row.info.name)) {
             let Some(agent) = row.status.agent() else {
                 continue;
             };
@@ -95,7 +96,7 @@ impl RubriqueApp {
         } else {
             new_session_name(&rows.into_iter().map(|row| row.info).collect::<Vec<_>>())
         };
-        match start_and_type(monitor.tmux(), &target, &session) {
+        match start_and_type(&monitor.tmux_for(&target), &target, &session) {
             Ok(()) => {
                 monitor.refresh();
                 if !new_terminal && !fits_here {

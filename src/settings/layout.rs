@@ -125,6 +125,7 @@ impl ExplorerView {
 
 /// Open and closed panels, remembered between runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[expect(clippy::struct_excessive_bools, reason = "each flag is one panel or section, opened and closed on its own")]
 pub struct LayoutSettings {
     /// The right panel is shown (for Markdown files). Closed by default, so
     /// the page gets the full width until someone asks for the panel.
@@ -136,15 +137,68 @@ pub struct LayoutSettings {
     pub files_collapsed: bool,
     /// The Terminals section is folded down to its header.
     pub terminals_collapsed: bool,
+    /// The `OpenRig` section is folded down to its header.
+    pub openrig_collapsed: bool,
     /// Where the tabs are: above the page (the default) or in the explorer.
     pub tab_position: TabPosition,
     /// Files or Tabs, when the tabs are in the explorer.
     pub explorer_view: ExplorerView,
     /// Read or Edit, for the Markdown preview of every file.
     pub preview_mode: PreviewMode,
+    /// How the explorer sections were folded before a double click gave one
+    /// of them the height, to put back on the next one. Not saved.
+    pub before_focus: Option<SectionFolds>,
+}
+
+/// Which explorer sections are folded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SectionFolds {
+    pub files: bool,
+    pub terminals: bool,
+    pub openrig: bool,
 }
 
 impl LayoutSettings {
+    /// A double click on Terminals' header or empty space: fold Files and
+    /// open Terminals so it gets the explorer's height, or, when it already
+    /// has it, fold the sections back as they were.
+    pub fn toggle_terminals_focus(&mut self) {
+        let focused = self.files_collapsed && !self.terminals_collapsed;
+        self.toggle_focus(focused, SectionFolds { files: true, terminals: false, openrig: self.openrig_collapsed });
+    }
+
+    /// A double click on `OpenRig`'s header or empty space: fold Files and
+    /// Terminals and open `OpenRig` so it gets the explorer's height, or,
+    /// when it already has it, fold the sections back as they were.
+    pub fn toggle_openrig_focus(&mut self) {
+        let focused = self.files_collapsed && self.terminals_collapsed && !self.openrig_collapsed;
+        self.toggle_focus(focused, SectionFolds { files: true, terminals: true, openrig: false });
+    }
+
+    /// Apply `focus` and remember the folds before it, or, when `focused`,
+    /// put those back (Files open when nothing was remembered).
+    fn toggle_focus(&mut self, focused: bool, focus: SectionFolds) {
+        let folds = if focused {
+            let fallback = SectionFolds { files: false, ..self.section_folds() };
+            self.before_focus.take().unwrap_or(fallback)
+        } else {
+            self.before_focus = Some(self.section_folds());
+            focus
+        };
+        self.files_collapsed = folds.files;
+        self.terminals_collapsed = folds.terminals;
+        self.openrig_collapsed = folds.openrig;
+    }
+
+    /// The folds of the explorer sections now.
+    fn section_folds(&self) -> SectionFolds {
+        SectionFolds {
+            files: self.files_collapsed,
+            terminals: self.terminals_collapsed,
+            openrig: self.openrig_collapsed,
+        }
+    }
+
     /// Apply one `key=value` line. Returns false when the key is not a layout key.
     pub fn parse_line(&mut self, key: &str, value: &str) -> bool {
         match key {
@@ -152,6 +206,7 @@ impl LayoutSettings {
             "side_view" => self.side_view = SideView::parse(value),
             "files_collapsed" => self.files_collapsed = value == "true",
             "terminals_collapsed" => self.terminals_collapsed = value == "true",
+            "openrig_collapsed" => self.openrig_collapsed = value == "true",
             "tab_position" => self.tab_position = TabPosition::parse(value),
             "explorer_view" => self.explorer_view = ExplorerView::parse(value),
             "preview" => self.preview_mode = PreviewMode::parse(value),
@@ -163,11 +218,13 @@ impl LayoutSettings {
     /// The `key=value` lines that [`LayoutSettings::parse_line`] reads.
     pub fn to_lines(self) -> String {
         format!(
-            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\ntab_position={}\nexplorer_view={}\npreview={}\n",
+            "side_panel_open={}\nside_view={}\nfiles_collapsed={}\nterminals_collapsed={}\nopenrig_collapsed={}\n\
+             tab_position={}\nexplorer_view={}\npreview={}\n",
             self.side_panel_open,
             self.side_view.id(),
             self.files_collapsed,
             self.terminals_collapsed,
+            self.openrig_collapsed,
             self.tab_position.id(),
             self.explorer_view.id(),
             self.preview_mode.id()
@@ -179,6 +236,30 @@ impl LayoutSettings {
 mod tests {
     use super::*;
 
+    /// A double click gives a list the explorer, and a second one folds the
+    /// sections back exactly as they were.
+    #[test]
+    fn focus_toggles_give_a_list_the_height_and_back() {
+        let folds =
+            |layout: &LayoutSettings| (layout.files_collapsed, layout.terminals_collapsed, layout.openrig_collapsed);
+        let mut layout =
+            LayoutSettings { terminals_collapsed: true, openrig_collapsed: true, ..LayoutSettings::default() };
+        layout.toggle_openrig_focus();
+        assert_eq!(folds(&layout), (true, true, false));
+        layout.toggle_openrig_focus();
+        assert_eq!(folds(&layout), (false, true, true), "Terminals and OpenRig fold again");
+
+        layout.toggle_terminals_focus();
+        assert_eq!(folds(&layout), (true, false, true));
+        layout.toggle_terminals_focus();
+        assert_eq!(folds(&layout), (false, true, true));
+
+        // Focused at startup (nothing remembered): Files opens again.
+        let mut layout = LayoutSettings { files_collapsed: true, ..LayoutSettings::default() };
+        layout.toggle_terminals_focus();
+        assert_eq!(folds(&layout), (false, false, false));
+    }
+
     #[test]
     fn round_trips_through_lines() {
         let layout = LayoutSettings {
@@ -186,9 +267,11 @@ mod tests {
             side_view: SideView::Notes,
             files_collapsed: true,
             terminals_collapsed: true,
+            openrig_collapsed: true,
             tab_position: TabPosition::Explorer,
             explorer_view: ExplorerView::Tabs,
             preview_mode: PreviewMode::Edit,
+            before_focus: None,
         };
         let mut parsed = LayoutSettings::default();
         for line in layout.to_lines().lines() {

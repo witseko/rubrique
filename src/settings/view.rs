@@ -26,12 +26,15 @@ use crate::update::Version;
 use crate::voice::VoiceSettings;
 
 mod highlight_rules;
+mod openrig_page;
 mod privacy_page;
 mod skill_list;
 mod updates_page;
 
 use highlight_rules::highlights_section;
 pub use highlight_rules::{HighlightInfo, RuleWriter};
+use openrig_page::openrig_section;
+pub use openrig_page::{OpenRigInfo, RemoteRigRow, RigCheck, rig_host_field};
 use privacy_page::privacy_section;
 use skill_list::{SkillsInfo, skills_section};
 pub use updates_page::UpdateInfo;
@@ -85,6 +88,14 @@ pub enum SettingsAction {
     VoiceCommandChanged,
     /// Look for tmux again (after installing it in a terminal).
     CheckTerminals,
+    /// Add a remote `OpenRig` rig by SSH host name and check it.
+    AddRemoteRig(String),
+    /// Remove a remote `OpenRig` rig from the list.
+    RemoveRemoteRig(String),
+    /// Log in to a remote `OpenRig` rig and list its seats.
+    CheckRemoteRig(String),
+    /// `OpenRig` was turned on or off.
+    OpenRigToggled,
     /// The Chromium HTML preview was turned on or off, or asked to look again.
     CheckHtmlBrowser,
     /// Put this text on the clipboard.
@@ -251,12 +262,13 @@ pub enum SettingsGroup {
     Skills,
     Agents,
     Terminals,
+    OpenRig,
     VoiceMemos,
     Updates,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 11] = [
+    pub const ALL: [SettingsGroup; 12] = [
         Self::Appearance,
         Self::Highlights,
         Self::Accessibility,
@@ -266,6 +278,7 @@ impl SettingsGroup {
         Self::Skills,
         Self::Agents,
         Self::Terminals,
+        Self::OpenRig,
         Self::VoiceMemos,
         Self::Updates,
     ];
@@ -281,6 +294,7 @@ impl SettingsGroup {
             Self::Skills => "Skills",
             Self::Agents => "Agents",
             Self::Terminals => "Terminals",
+            Self::OpenRig => "OpenRig",
             Self::VoiceMemos => "Voice memos",
             Self::Updates => "Updates",
         }
@@ -333,6 +347,7 @@ pub fn show_settings(
     ai: AiInfo,
     voice: VoiceInfo,
     terminals: TerminalsInfo,
+    openrig: OpenRigInfo,
     html_preview: HtmlPreviewInfo,
     updates: UpdateInfo,
 ) -> Option<SettingsAction> {
@@ -389,6 +404,7 @@ pub fn show_settings(
                         agents_section(ui, settings, agents, agents_folder)
                     }
                     SettingsGroup::Terminals => terminals_section(ui, terminals),
+                    SettingsGroup::OpenRig => openrig_section(ui, openrig),
                     SettingsGroup::VoiceMemos => voice_section(ui, voice),
                     SettingsGroup::Updates => updates_section(ui, updates),
                 };

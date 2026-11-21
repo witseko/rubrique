@@ -100,15 +100,18 @@ the libraries listed under [Build](#build) first.
 - Open tmux sessions as tabs. The explorer shows whether an agent is
   working, idle or waiting for you, and lists Claude Code and Codex
   sessions you can resume. A `.tmux` file opens a terminal in its folder.
-  The Terminals list groups sessions by explorer folder, and OpenRig seats
-  by rig and pod.
+  The Terminals list groups sessions by explorer folder. OpenRig seats,
+  on this computer and on remote rigs, have their own OpenRig section,
+  grouped by rig and pod; right-click a seat to send it a step, copy its
+  attach command, open it in the Terminal app or stop it.
 - To hand a task to a terminal's agent, write a line such as
   `@tmux-qa: check this` in your document, then select Send.
 - Send a Markdown step to an existing OpenRig team, on this computer or on
-  another computer over SSH. Select the step, open Tasks, click **Send to
+  another computer over SSH (turn on Settings > OpenRig > Use OpenRig first). Select the step, open Tasks, click **Send to
   OpenRig**, choose a rig (or **Add remote rig...** with an SSH host name),
-  and choose a seat. Open Tasks in the same file later to check the queue
-  status and read the result.
+  and choose a seat. Settings > OpenRig also lists remote rigs, with a
+  Check button that shows their seats or what is missing. Open Tasks in
+  the same file later to check the queue status and read the result.
 - Tabs take their group and color from their explorer folder. Drag tabs
   or groups to reorder them. To list tabs vertically, choose Settings >
   Appearance > Tabs > In the explorer and switch between Files and Tabs.
