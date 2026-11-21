@@ -8,6 +8,17 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Text size slider.** Settings → Accessibility sets the text size with
+  a slider from 80% to 200% in steps of 5%, in place of five fixed sizes.
+  Cmd/Ctrl + plus and minus, the wheel and View → Text size move one
+  step. A size you saved before stays as it was.
+- **One zoom for the text area.** The Editor font size slider is gone
+  from Settings → Accessibility: Text area zoom now sets the size of the
+  source editor and the preview together. A saved editor font size is no
+  longer used, so set the zoom again if the editor looks different.
+
 ## [1.8.0] - 2026-11-20
 
 ### Added

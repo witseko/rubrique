@@ -8,7 +8,7 @@ use eframe::egui::{
 
 use super::catalog::{ThemeChoice, Themes};
 use super::palette::{Base, Palette, Rgb, Theme};
-use crate::settings::accessibility::{AccessibilitySettings, DEFAULT_EDITOR_FONT_SIZE};
+use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZE};
 
 /// Font size of labels, buttons and fields. egui's 13 points read small
 /// next to macOS text; one point more fills the same rows comfortably.
@@ -73,16 +73,16 @@ fn font_definitions() -> FontDefinitions {
 /// Install the text size and adjust the light and dark styles. Call after
 /// [`apply_theme`], which replaces the styles.
 pub fn apply_accessibility(ctx: &Context, settings: &AccessibilitySettings) {
-    ctx.set_zoom_factor(settings.text_size.scale());
+    ctx.set_zoom_factor(settings.text_scale());
     ctx.all_styles_mut(|style| adjust_style(style, settings));
     ctx.request_repaint();
 }
 
-/// The editor font size, no animations, and thicker focus outlines.
+/// The zoomed editor font, no animations, and thicker focus outlines.
 fn adjust_style(style: &mut Style, settings: &AccessibilitySettings) {
     // The text area zoom grows the editor's font; the preview scales itself
     // (see `markdown::render::set_page_zoom`).
-    let editor_size = (f32::from(settings.editor_font_size) * settings.page_scale()).round();
+    let editor_size = (f32::from(EDITOR_FONT_SIZE) * settings.page_scale()).round();
     style.text_styles.insert(TextStyle::Monospace, FontId::monospace(editor_size));
     if settings.reduce_motion {
         style.animation_time = 0.0;
@@ -139,7 +139,7 @@ fn style(theme: &Theme) -> Style {
         (TextStyle::Body, FontId::proportional(BODY_SIZE)),
         (TextStyle::Button, FontId::proportional(BODY_SIZE)),
         (TextStyle::Heading, FontId::proportional(HEADING_SIZE)),
-        (TextStyle::Monospace, FontId::monospace(f32::from(DEFAULT_EDITOR_FONT_SIZE))),
+        (TextStyle::Monospace, FontId::monospace(f32::from(EDITOR_FONT_SIZE))),
     ]
     .into();
     style.spacing.item_spacing = egui::vec2(8.0, 4.0);
@@ -246,20 +246,16 @@ mod tests {
     #[test]
     fn accessibility_adjusts_fonts_motion_and_focus() {
         let mut adjusted = style(&Theme::builtin(Base::Light));
-        let settings = AccessibilitySettings {
-            editor_font_size: 18,
-            reduce_motion: true,
-            strong_focus: true,
-            ..Default::default()
-        };
+        let settings =
+            AccessibilitySettings { page_zoom: 150, reduce_motion: true, strong_focus: true, ..Default::default() };
         adjust_style(&mut adjusted, &settings);
-        assert_eq!(adjusted.text_styles[&TextStyle::Monospace], FontId::monospace(18.0));
+        assert_eq!(adjusted.text_styles[&TextStyle::Monospace], FontId::monospace(21.0));
         assert!(adjusted.animation_time.abs() < f32::EPSILON);
         let unchanged = style(&Theme::builtin(Base::Light)).visuals;
         let focus = Stroke::new(STRONG_FOCUS_WIDTH, unchanged.selection.stroke.color);
         assert_eq!(adjusted.visuals.selection.stroke, focus);
 
-        // The defaults change nothing (the style already has the default editor font size).
+        // The defaults change nothing (the style already has the editor font size).
         let mut plain = style(&Theme::builtin(Base::Light));
         adjust_style(&mut plain, &AccessibilitySettings::default());
         assert_eq!(format!("{plain:?}"), format!("{:?}", style(&Theme::builtin(Base::Light))));
@@ -267,18 +263,16 @@ mod tests {
 
     #[test]
     fn text_size_scales_window_layout_and_text_together() {
-        use crate::settings::accessibility::TextSize;
-
         let ctx = Context::default();
         let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 600.0)));
         let input = egui::RawInput { screen_rect, ..Default::default() };
         ctx.run_ui(input.clone(), |_| {
-            apply_accessibility(&ctx, &AccessibilitySettings { text_size: TextSize::Largest, ..Default::default() });
+            apply_accessibility(&ctx, &AccessibilitySettings { text_size: 150, ..Default::default() });
         })
         .drop_without_applying_deltas();
         ctx.run_ui(input, |ui| {
             assert_eq!(ctx.content_rect().size(), egui::vec2(600.0, 400.0));
-            assert!((ui.pixels_per_point() - TextSize::Largest.scale()).abs() < f32::EPSILON);
+            assert!((ui.pixels_per_point() - 1.5).abs() < f32::EPSILON);
         })
         .drop_without_applying_deltas();
     }
@@ -297,7 +291,7 @@ mod tests {
         })
         .drop_without_applying_deltas();
         ctx.run_ui(egui::RawInput::default(), |ui| {
-            let editor_size = (f32::from(DEFAULT_EDITOR_FONT_SIZE) * 1.5).round();
+            let editor_size = (f32::from(EDITOR_FONT_SIZE) * 1.5).round();
             assert_eq!(TextStyle::Monospace.resolve(ui.style()), FontId::monospace(editor_size));
         })
         .drop_without_applying_deltas();
