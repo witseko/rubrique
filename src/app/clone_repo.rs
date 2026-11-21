@@ -98,8 +98,10 @@ impl RubriqueApp {
         }
     }
 
-    /// When the clone is done: add its folder to the explorer, open its
-    /// README when it has one, and close the dialog, or show why it failed and keep the dialog for another try.
+    /// When the clone is done: trust it, add its folder to the explorer,
+    /// open its README when it has one, and close the dialog, or show why it
+    /// failed and keep the dialog for another try. A fresh clone is trusted
+    /// because cloning brings no config or hooks from the remote.
     fn finish_clone(&mut self) {
         let Some(dialog) = &mut self.clone_repo else {
             return;
@@ -113,6 +115,8 @@ impl RubriqueApp {
         match result {
             Ok(message) => {
                 self.clone_repo = None;
+                self.settings.trust_repository(destination.clone());
+                self.write_settings();
                 let readme = find_readme(&destination);
                 self.add_folder(destination);
                 if let Some(readme) = readme {

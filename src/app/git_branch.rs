@@ -2,6 +2,11 @@
 //! file's folder; a click opens a menu to pull, commit, stash, unstash,
 //! switch branch or create one. Git runs on a background thread, one
 //! command at a time.
+//!
+//! Git runs only in a repository the user trusts. Its own config and hooks
+//! can start programs (`core.fsmonitor` and clean filters even on `git
+//! status`), so a repository from a zip or a shared folder gets a "Not
+//! trusted" button instead, and nothing runs until the user trusts it.
 
 use std::path::{Path, PathBuf};
 
@@ -22,6 +27,8 @@ const LIST_HEIGHT: f32 = 280.0;
 const MENU_WIDTH: f32 = 300.0;
 /// What the branch button says on a detached HEAD.
 const DETACHED: &str = "detached HEAD";
+/// Width of the menu that asks to trust a repository.
+const TRUST_MENU_WIDTH: f32 = 320.0;
 
 /// The git state of the open file's folder.
 #[derive(Debug, Default)]
@@ -128,14 +135,30 @@ impl RubriqueApp {
         self.git.looked_up_for = path;
     }
 
-    /// Start reading the open file's repository.
+    /// The open file's repository when the user trusts it: the only
+    /// repository git may run in.
+    fn trusted_repo(&self) -> Option<PathBuf> {
+        self.git.repo.clone().filter(|repo| self.settings.trusts_repository(repo))
+    }
+
+    /// Start reading the open file's repository, when it is trusted.
     fn read_repo_status(&mut self, ctx: &Context, now: f64) {
         self.git.last_read = now;
-        let Some(repo) = self.git.repo.clone() else {
+        let Some(repo) = self.trusted_repo() else {
             return;
         };
         let folder = repo.clone();
         self.git.reading = Some((repo, spawn_with_repaint(ctx, move || git::read_status(&folder))));
+    }
+
+    /// Trust the open file's repository, remember it, and read it now.
+    fn trust_open_repository(&mut self) {
+        let Some(repo) = self.git.repo.clone() else {
+            return;
+        };
+        self.settings.trust_repository(repo);
+        self.write_settings();
+        self.git.last_read = f64::NEG_INFINITY;
     }
 
     /// Show the result of a finished command, then re-read what it may
@@ -159,7 +182,7 @@ impl RubriqueApp {
     /// Run `choice` in the repository in the background. The fields that
     /// led to it are cleared: the next time the menu opens it is fresh.
     fn start_git_job(&mut self, ctx: &Context, choice: MenuChoice, branch: &str) {
-        let Some(repo) = self.git.repo.clone() else {
+        let Some(repo) = self.trusted_repo() else {
             return;
         };
         let label = choice.working_label(branch);
@@ -167,14 +190,19 @@ impl RubriqueApp {
         self.git.job = Some((label, spawn_with_repaint(ctx, move || choice.run(&repo))));
     }
 
-    /// The branch button, or a spinner while git works. Nothing outside a
-    /// repository. Sits at the left of the status bar, before the path or a
-    /// status message.
+    /// The branch button, or a spinner while git works, or the "Not
+    /// trusted" button in a repository the user has not trusted. Nothing
+    /// outside a repository. Sits at the left of the status bar, before the
+    /// path or a status message.
     pub(super) fn branch_button(&mut self, ui: &mut Ui) {
         if let Some((label, _)) = &self.git.job {
             ui.add(egui::Spinner::new().size(12.0));
             ui.label(RichText::new(label.as_str()).weak());
             super::status_separator(ui);
+            return;
+        }
+        if self.git.repo.is_some() && self.trusted_repo().is_none() {
+            self.trust_button(ui);
             return;
         }
         let Some(status) = &self.git.status else {
@@ -196,6 +224,49 @@ impl RubriqueApp {
             self.start_git_job(ui.ctx(), choice, &name);
         }
     }
+
+    /// The "Not trusted" button: a click explains why git is off here and
+    /// offers to trust the repository.
+    fn trust_button(&mut self, ui: &mut Ui) {
+        let Some(repo) = &self.git.repo else {
+            return;
+        };
+        let tip = "Git is off in this repository until you trust it. Click for details";
+        let response = icon_text_button(ui, Icon::Branch, "Not trusted", tip, false);
+        super::status_separator(ui);
+        let mut trust = false;
+        egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.set_width(TRUST_MENU_WIDTH);
+            trust = trust_menu(ui, repo);
+            if trust {
+                ui.close();
+            }
+        });
+        if trust {
+            self.trust_open_repository();
+        }
+    }
+}
+
+/// Why git is off in `repo`, and the button that trusts it; true when clicked.
+fn trust_menu(ui: &mut Ui, repo: &Path) -> bool {
+    ui.label(RichText::new("Trust this repository?").strong());
+    ui.label(
+        RichText::new(
+            "Rubrique runs git here only after you trust it. A repository's own settings can start \
+             programs when git runs, so trust only repositories you made or got from a source you trust.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.label(RichText::new(repo.display().to_string()).monospace().small());
+    let mut trust = false;
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            trust = ui.button("Trust this repository").clicked();
+        });
+    });
+    trust
 }
 
 /// The menu under the branch button: the commit form while a message is
@@ -357,4 +428,72 @@ fn branch_list(ui: &mut Ui, status: &RepoStatus, filter: &mut String) -> Option<
         choice = choice.or(first);
     }
     choice
+}
+
+#[cfg(test)]
+mod tests {
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::settings::Settings;
+    use crate::test_support::TempFolder;
+
+    /// Run git in `folder` for test setup, panicking on failure.
+    fn git(folder: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(folder)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?} failed");
+    }
+
+    /// Poll until the background read of the repository is done.
+    fn wait_for_status(app: &mut RubriqueApp, ctx: &Context) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.git.status.is_none() {
+            assert!(Instant::now() < deadline, "the repository was never read");
+            std::thread::sleep(Duration::from_millis(10));
+            app.poll_git(ctx);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn git_runs_only_in_a_trusted_repository() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TempFolder::new();
+        let repo = temp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        git(&repo, &["init"]);
+        let note = temp.write("repo/notes.md", "one\n");
+        git(&repo, &["add", "notes.md"]);
+        git(&repo, &["commit", "-m", "first"]);
+        // A hostile repository: `git status` starts its fsmonitor program.
+        let ran = temp.path().join("ran");
+        let hook = temp.write("hook.sh", format!("#!/bin/sh\ntouch '{}'\n", ran.display()));
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+        git(&repo, &["config", "core.fsmonitor", hook.to_str().unwrap()]);
+
+        let ctx = Context::default();
+        let mut app = RubriqueApp::new(&ctx, Settings::default(), vec![repo.clone()], Some(note));
+        app.poll_git(&ctx);
+        assert_eq!(app.git.repo.as_deref(), Some(repo.as_path()));
+        assert!(app.git.reading.is_none(), "git started in a repository nobody trusted");
+        assert!(!ran.exists());
+
+        app.settings.trust_repository(repo.clone());
+        app.git.last_read = f64::NEG_INFINITY;
+        app.poll_git(&ctx);
+        wait_for_status(&mut app, &ctx);
+        assert_eq!(app.git.status.as_ref().and_then(|status| status.current.as_deref()), Some("main"));
+        // Trusted, the repository's own settings apply again, which shows the
+        // program above really is what an untrusted read would have started.
+        assert!(ran.exists());
+    }
 }

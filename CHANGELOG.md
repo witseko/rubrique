@@ -10,10 +10,30 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
+- **Git only in repositories you trust.** Rubrique no longer runs git in
+  a repository until you trust it: the status bar shows "Not trusted",
+  and a click on it explains why and offers Trust this repository. A
+  repository's own settings can start programs when git runs, so a folder
+  from a zip or a shared drive could run code as soon as you opened a
+  file in it. Repositories you clone in Rubrique are trusted at once;
+  trust each existing one with one click.
 - **Preview stays in your folder.** Images and links to Markdown files in
   the preview reach only files inside the explorer folder that holds the
   note (or its bundle, or the note's own folder when it is in neither).
   An image outside shows its alt text, with the reason on hover.
+
+### Fixed
+
+- **Checked whisper model download.** The voice memo model downloaded
+  from Settings is checked against a checksum built into the app before
+  it is used. A damaged or altered download is deleted, with a message to
+  try again.
+- **Safer opening with the system app.** A file whose name starts with
+  `-` now opens as that file in its default app, instead of being read
+  as an option by `open` or `xdg-open`.
+- **Stricter clone addresses.** Clone from Git refuses an address whose
+  host starts with `-`, such as `ssh://-oProxyCommand=x/repo`, so it can
+  never reach `ssh` as an option.
 
 ## [1.9.0] - 2026-11-21
 

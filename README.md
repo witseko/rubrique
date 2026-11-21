@@ -85,7 +85,9 @@ the libraries listed under [Build](#build) first.
   its README if it has one.
 - Click the branch in the status bar to switch or create branches, pull
   fast-forward updates, stash or restore changes, or commit all changes
-  including new files.
+  including new files. Git runs only in repositories you trust: click
+  "Not trusted" to trust one. Repositories you clone in Rubrique are
+  trusted already.
 - Tabs keep unsaved changes, cursor and undo. Close one with "Keep for
   later" and its edits come back when you open the file again.
 - Rubrique saves the text you typed. If another program changes a file
