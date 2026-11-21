@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Stricter clone addresses.** Clone from Git refuses an address whose
+  host starts with `-`, such as `ssh://-oProxyCommand=x/repo`, so it can
+  never reach `ssh` as an option.
+
 ## [1.9.0] - 2026-11-21
 
 ### Added
