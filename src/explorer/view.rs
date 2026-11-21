@@ -7,7 +7,7 @@ use egui::text::{CCursor, CCursorRange};
 
 use super::note_marks::NoteMarks;
 use super::reorder::{ListDrag, draggable};
-use super::section::{paint_fold_arrow, section_header};
+use super::section::{ButtonRoom, paint_fold_arrow, section_header};
 use super::selection::{FileRows, FileSelection};
 use super::terminals::{show_docked_terminals, show_terminal_file, show_terminals_section};
 use crate::icons::{Icon, LOCK_MARK_SIZE, paint_icon, paint_lock_mark, small_icon_button, small_toggle_button};
@@ -333,7 +333,11 @@ fn files_header(
         "FILES",
         expanded,
         |_| {},
-        |ui| {
+        |ui, room| {
+            if room == ButtonRoom::Menu {
+                files_menu(ui, roots, context, filter, action);
+                return;
+            }
             // Right to left: the last button added sits furthest left.
             if small_icon_button(ui, Icon::Refresh, HEADER_BUTTON_SIZE, "Refresh", "Re-read all folders from disk")
                 .clicked()
@@ -379,6 +383,77 @@ fn files_header(
     )
 }
 
+/// The one button the Files header shows when its row of buttons does not
+/// fit: a menu with the same commands by name. It looks pressed while a
+/// filter hides files, as the funnel does in the row.
+fn files_menu(
+    ui: &mut Ui,
+    roots: &mut [FsNode],
+    context: &TreeContext,
+    filter: &mut ExplorerFilter,
+    action: &mut Option<ExplorerAction>,
+) {
+    let mut filtered = filter.any();
+    let tip = if filtered {
+        "Folder, scratch, filter and refresh commands. Some files are hidden by the filter"
+    } else {
+        "Folder, scratch, filter and refresh commands"
+    };
+    // The click is read from the response below, to open the menu; the
+    // flipped flag is not used.
+    let button = small_toggle_button(ui, Icon::Menu, HEADER_BUTTON_SIZE, "Files menu", tip, &mut filtered);
+    egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        fold_all_item(ui, roots);
+        let mut folders = vec![
+            ("Add folder...", ExplorerAction::AddFolder),
+            ("Open path... (Cmd+O)", ExplorerAction::OpenPath),
+            ("Clone repository...", ExplorerAction::CloneRepository),
+        ];
+        if context.remote_enabled {
+            folders.push(("Add remote folder (SSH)...", ExplorerAction::AddRemoteFolder));
+        }
+        menu_commands(ui, folders, action);
+        ui.separator();
+        let scratches = vec![
+            ("New scratch (Cmd+N)", ExplorerAction::NewScratch { encrypted: None }),
+            ("New plain scratch", ExplorerAction::NewScratch { encrypted: Some(false) }),
+            ("New encrypted scratch (Cmd+Shift+N)", ExplorerAction::NewScratch { encrypted: Some(true) }),
+        ];
+        menu_commands(ui, scratches, action);
+        ui.separator();
+        filter_boxes(ui, filter);
+        ui.separator();
+        menu_commands(ui, vec![("Refresh", ExplorerAction::Refresh)], action);
+    });
+}
+
+/// One menu item per command; a click reports the command and closes the menu.
+fn menu_commands(ui: &mut Ui, commands: Vec<(&str, ExplorerAction)>, action: &mut Option<ExplorerAction>) {
+    for (label, command) in commands {
+        if ui.button(label).clicked() {
+            *action = Some(command);
+            ui.close();
+        }
+    }
+}
+
+/// The menu item that does what [`fold_all_button`] does, with a line under it.
+fn fold_all_item(ui: &mut Ui, roots: &mut [FsNode]) {
+    if roots.is_empty() {
+        return;
+    }
+    if roots.iter().any(|root| root.expanded) {
+        if ui.button("Collapse all folders").clicked() {
+            roots.iter_mut().for_each(FsNode::collapse_all);
+            ui.close();
+        }
+    } else if ui.button("Expand all folders opened before").clicked() {
+        roots.iter_mut().for_each(FsNode::expand_loaded);
+        ui.close();
+    }
+    ui.separator();
+}
+
 /// The header button that folds every folder while any root is open, and
 /// otherwise opens again the folders that were listed before. It reads
 /// nothing from disk; "Expand all" in a folder's menu does.
@@ -412,11 +487,16 @@ fn filter_button(ui: &mut Ui, filter: &mut ExplorerFilter) {
     // The click is read from the response below, to open the menu; the
     // flipped flag is not used.
     let button = small_toggle_button(ui, Icon::Filter, HEADER_BUTTON_SIZE, "Filter files", tip, &mut active);
-    egui::Popup::menu(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.checkbox(&mut filter.markdown_only, "Markdown files only");
-        ui.checkbox(&mut filter.unsaved_only, "Unsaved edits only");
-        ui.checkbox(&mut filter.show_closed_terminals, "Show closed terminals");
-    });
+    egui::Popup::menu(&button)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| filter_boxes(ui, filter));
+}
+
+/// One box per filter of the explorer.
+fn filter_boxes(ui: &mut Ui, filter: &mut ExplorerFilter) {
+    ui.checkbox(&mut filter.markdown_only, "Markdown files only");
+    ui.checkbox(&mut filter.unsaved_only, "Unsaved edits only");
+    ui.checkbox(&mut filter.show_closed_terminals, "Show closed terminals");
 }
 
 /// True when the filter lets `file` into the tree. Unsaved edits narrow
