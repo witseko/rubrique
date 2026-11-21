@@ -91,7 +91,7 @@ pub(super) fn show_terminals_section(
         "TERMINALS",
         expanded,
         |ui| header_details(ui, &rows, expanded),
-        |ui| {
+        |ui, _| {
             let tip = "New terminal: a tmux session in the first folder";
             if small_icon_button(ui, Icon::Plus, HEADER_BUTTON_SIZE, "New terminal", tip).clicked() {
                 *action = Some(ExplorerAction::NewTerminal);

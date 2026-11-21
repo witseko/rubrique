@@ -42,6 +42,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   source editor and the preview together. A saved editor font size is no
   longer used, so set the zoom again if the editor looks different.
 
+### Fixed
+
+- **Header buttons in a narrow explorer.** When the explorer is too narrow
+  for the buttons next to FILES, one menu button takes their place, with
+  the same commands by name. The buttons no longer draw over the title.
+
 ## [1.8.0] - 2026-11-20
 
 ### Added

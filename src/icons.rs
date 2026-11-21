@@ -105,6 +105,9 @@ pub enum Icon {
     /// Open the folders again (the Files header): the same line with the
     /// chevrons pointing away from it.
     ExpandAll,
+    /// The buttons of a row too narrow to show them, as one menu (the Files
+    /// header): three lines, the middle one the accent.
+    Menu,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -230,6 +233,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Branch => paint_branch(painter, center, line, detail),
         Icon::Pencil => paint_pencil(painter, center, line, detail),
         Icon::CollapseAll | Icon::ExpandAll => paint_fold_all(painter, center, line, detail, icon == Icon::CollapseAll),
+        Icon::Menu => paint_menu(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -378,6 +382,14 @@ fn paint_filter(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
     let cone = [at(-6.5, -5.5), at(6.5, -5.5), at(1.6, 0.5), at(-1.6, 0.5)];
     stroke_path(painter, &round_corners(&cone, CORNER, true), true, line);
     stroke_path(painter, &[at(-1.6, 0.5), at(-1.6, 6.5), at(1.6, 4.5), at(1.6, 0.5)], false, detail);
+}
+
+/// Three lines one under another; the middle one is the accent.
+fn paint_menu(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    for (y, stroke) in [(-4.5, line), (0.0, detail), (4.5, line)] {
+        stroke_path(painter, &[at(-6.0, y), at(6.0, y)], false, stroke);
+    }
 }
 
 /// Three rows with a dot before each, the lower two indented under the

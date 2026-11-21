@@ -27,15 +27,26 @@ pub fn empty_space_double_clicked(ui: &Ui, id: &str) -> bool {
     ui.interact(rect, ui.scope_id().with(id), Sense::click()).double_clicked()
 }
 
+/// How much room a section header has for its buttons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonRoom {
+    /// The whole row of buttons fits beside the title.
+    Row,
+    /// The row would run over the title. A section with several buttons
+    /// shows one menu button in their place.
+    Menu,
+}
+
 /// One section header. `title` is drawn as given (callers pass it in
 /// capitals). `after_title` adds small details next to the title (a count,
-/// status dots); `buttons` adds the section's buttons, right-aligned.
+/// status dots); `buttons` adds the section's buttons, right-aligned, and
+/// is told whether the whole row fits.
 pub fn section_header(
     ui: &mut Ui,
     title: &str,
     expanded: bool,
     after_title: impl FnOnce(&mut Ui),
-    buttons: impl FnOnce(&mut Ui),
+    buttons: impl FnOnce(&mut Ui, ButtonRoom),
 ) -> HeaderClicks {
     let layout = egui::Layout::left_to_right(egui::Align::Center);
     let size = vec2(ui.available_width(), SECTION_HEADER_HEIGHT);
@@ -44,7 +55,7 @@ pub fn section_header(
         let background = ui.interact(ui.max_rect(), ui.scope_id().with(("section-background", title)), Sense::click());
         let title_clicked = section_title(ui, title, expanded);
         after_title(ui);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), buttons);
+        section_buttons(ui, title, buttons);
         HeaderClicks { title: title_clicked, background_double: background.double_clicked() }
     })
     .inner
@@ -57,6 +68,30 @@ pub struct HeaderClicks {
     pub title: bool,
     /// The empty part of the header was double-clicked.
     pub background_double: bool,
+}
+
+/// The section's buttons, right-aligned in the room left after the title.
+/// The width of the whole row is remembered from the last frame that drew
+/// it, to tell `buttons` when the panel is too narrow for it.
+fn section_buttons(ui: &mut Ui, title: &str, buttons: impl FnOnce(&mut Ui, ButtonRoom)) {
+    let width_id = ui.scope_id().with(("section-buttons-width", title));
+    let row_width: Option<f32> = ui.data(|data| data.get_temp(width_id));
+    let fits = row_width.is_none_or(|width| width <= ui.available_width());
+    let room = if fits { ButtonRoom::Row } else { ButtonRoom::Menu };
+    let size = vec2(ui.available_width(), SECTION_HEADER_HEIGHT);
+    let layout = egui::Layout::right_to_left(egui::Align::Center);
+    let drawn = ui.allocate_ui_with_layout(size, layout, |ui| {
+        if row_width.is_none() {
+            // The first frame only measures the row, so a narrow panel
+            // never shows it over the title.
+            ui.set_invisible();
+            ui.ctx().request_repaint();
+        }
+        buttons(ui, room);
+    });
+    if room == ButtonRoom::Row {
+        ui.data_mut(|data| data.insert_temp(width_id, drawn.response.rect.width()));
+    }
 }
 
 /// The fold arrow and the title, as one click target.
@@ -86,4 +121,51 @@ pub fn paint_fold_arrow(painter: &Painter, center: Pos2, expanded: bool, color: 
         vec![center + vec2(-half / 2.0, -half), center + vec2(half, 0.0), center + vec2(-half / 2.0, half)]
     };
     painter.add(egui::Shape::convex_polygon(points, color, egui::Stroke::NONE));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Context, RawInput, Rect};
+
+    /// The room a header with five buttons reports in a panel this wide,
+    /// once it has measured the row.
+    fn room_in_panel(panel_width: f32) -> ButtonRoom {
+        let ctx = Context::default();
+        let mut reported = ButtonRoom::Row;
+        for _ in 0..2 {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(panel_width, 200.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ctx| {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
+                    section_header(
+                        ui,
+                        "FILES",
+                        true,
+                        |_| {},
+                        |ui, room| {
+                            reported = room;
+                            for _ in 0..5 {
+                                ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+                            }
+                        },
+                    );
+                });
+            });
+            output.textures_delta.clear();
+        }
+        reported
+    }
+
+    #[test]
+    fn a_narrow_panel_asks_for_the_menu() {
+        assert_eq!(room_in_panel(80.0), ButtonRoom::Menu);
+    }
+
+    #[test]
+    fn a_wide_panel_keeps_the_row_of_buttons() {
+        assert_eq!(room_in_panel(400.0), ButtonRoom::Row);
+    }
 }

@@ -85,7 +85,7 @@ fn openrig_section(
         "OPENRIG",
         expanded,
         |ui| header_details(ui, &seats, expanded),
-        |ui| {
+        |ui, _| {
             let tip = "Add, check or remove rigs on other computers (Settings)";
             if small_icon_button(ui, Icon::OpenRig, HEADER_BUTTON_SIZE, "Remote rigs", tip).clicked() {
                 *action = Some(ExplorerAction::OpenRigSettings);
