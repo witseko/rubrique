@@ -11,12 +11,12 @@ use crate::ai::run::{AiRun, RunEnd};
 use crate::ai::{self, AiTool};
 use crate::install::view::{DialogChoice, InstallAction, Offer, install_dialog};
 use crate::install::{
-    InstallStatus, Platform, Progress, Recipe, find_installer, installed_message, last_line, model_recipe,
-    ollama_model, ollama_model_present, ollama_pull_recipe, recipe_for_command, tmux_recipe,
+    InstallStatus, Platform, Progress, Recipe, check_sha256, find_installer, installed_message, last_line,
+    model_recipe, ollama_model, ollama_model_present, ollama_pull_recipe, recipe_for_command, tmux_recipe,
 };
 use crate::terminal::monitor::TerminalMonitor;
 use crate::terminal::tmux::Tmux;
-use crate::voice::MODEL_URL;
+use crate::voice::{MODEL_SHA256, MODEL_URL};
 
 /// Recipes for what is missing, the dialog, and the install that runs.
 #[derive(Debug, Default)]
@@ -70,7 +70,7 @@ impl RubriqueApp {
             .model_download_command()
             .and(voice.model_path())
             .filter(|_| voice.model_missing())
-            .map(|model| model_recipe(&model, MODEL_URL, &find_installer));
+            .map(|model| model_recipe(&model, MODEL_URL, MODEL_SHA256, &find_installer));
     }
 
     /// Look for tmux when Terminals are off, and turn them on once it is
@@ -214,14 +214,18 @@ impl RubriqueApp {
     }
 }
 
-/// Put a finished download in place.
+/// Put a finished download in place once its checksum matches; delete it if not.
 fn finish_download(recipe: &Recipe) -> Result<(), String> {
-    match &recipe.download {
-        Some((partial, target)) => {
-            std::fs::rename(partial, target).map_err(|error| format!("Cannot move {}: {error}", partial.display()))
-        }
-        None => Ok(()),
+    let Some((partial, target)) = &recipe.download else {
+        return Ok(());
+    };
+    if let Some(expected) = recipe.download_sha256
+        && let Err(message) = check_sha256(partial, expected)
+    {
+        discard_download(recipe);
+        return Err(message);
     }
+    std::fs::rename(partial, target).map_err(|error| format!("Cannot move {}: {error}", partial.display()))
 }
 
 /// Remove what a broken download left.
@@ -230,5 +234,41 @@ fn discard_download(recipe: &Recipe) {
         && Path::new(partial).is_file()
     {
         let _ = std::fs::remove_file(partial);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TempFolder;
+
+    fn model_download(folder: &TempFolder, contents: &str) -> Recipe {
+        let target = folder.path().join("ggml-small.bin");
+        let partial = folder.write("ggml-small.bin.part", contents);
+        let mut recipe = model_recipe(&target, MODEL_URL, MODEL_SHA256, &|_| None);
+        recipe.download = Some((partial, target));
+        recipe
+    }
+
+    #[test]
+    fn a_download_with_the_wrong_checksum_is_deleted_not_moved() {
+        let folder = TempFolder::new();
+        let recipe = model_download(&folder, "not the model");
+        let error = finish_download(&recipe).unwrap_err();
+        assert!(error.contains("damaged"), "{error}");
+        let (partial, target) = recipe.download.unwrap();
+        assert!(!partial.exists());
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn a_download_with_the_right_checksum_is_moved_into_place() {
+        let folder = TempFolder::new();
+        let mut recipe = model_download(&folder, "abc");
+        recipe.download_sha256 = Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        assert_eq!(finish_download(&recipe), Ok(()));
+        let (partial, target) = recipe.download.unwrap();
+        assert!(!partial.exists());
+        assert_eq!(std::fs::read_to_string(target).unwrap(), "abc");
     }
 }
