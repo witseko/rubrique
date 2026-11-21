@@ -42,6 +42,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Stricter clone addresses.** Clone from Git refuses an address whose
   host starts with `-`, such as `ssh://-oProxyCommand=x/repo`, so it can
   never reach `ssh` as an option.
+- **Ask AI with selected text.** Clicking Ask in the status bar opens the
+  prompt for the selected text in the Markdown preview.
 
 ## [1.9.0] - 2026-11-21
 

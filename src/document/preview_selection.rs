@@ -37,6 +37,7 @@ pub fn clear(ctx: &Context) {
     ctx.data_mut(|data| {
         data.remove::<PreviewSelection>(selection_id());
         data.remove::<egui::Rect>(openrig_button_id());
+        data.remove::<egui::Rect>(ask_button_id());
         data.remove::<Range<usize>>(press_block_id());
         data.remove::<Range<usize>>(release_block_id());
     });
@@ -87,6 +88,21 @@ fn openrig_button_id() -> Id {
     Id::unique("rubrique-openrig-selection-button")
 }
 
+/// Where Ask was drawn in the status bar.
+pub fn set_ask_button_rect(ctx: &Context, rect: egui::Rect) {
+    ctx.data_mut(|data| data.insert_temp(ask_button_id(), rect));
+}
+
+/// Forget the previous Ask hit area before drawing the status bar.
+pub fn clear_ask_button_rect(ctx: &Context) {
+    ctx.data_mut(|data| data.remove::<egui::Rect>(ask_button_id()));
+}
+
+/// The ID of the status bar Ask button's hit area.
+fn ask_button_id() -> Id {
+    Id::unique("rubrique-ask-button")
+}
+
 fn selection_id() -> Id {
     Id::unique("rubrique-preview-selection")
 }
@@ -101,7 +117,7 @@ fn clicking_button(ctx: &Context, press_origin: Option<Pos2>) -> bool {
     let pressing = ctx.input(|input| input.pointer.any_down() || input.pointer.any_released());
     pressing
         && ctx.data(|data| {
-            [button_id(), openrig_button_id()]
+            [button_id(), openrig_button_id(), ask_button_id()]
                 .into_iter()
                 .any(|id| data.get_temp::<egui::Rect>(id).is_some_and(|rect| rect.contains(origin)))
         })
@@ -139,6 +155,7 @@ impl egui::Plugin for SelectionTracker {
                     data.remove::<PreviewSelection>(selection_id());
                     data.remove::<egui::Rect>(button_id());
                     data.remove::<egui::Rect>(openrig_button_id());
+                    data.remove::<egui::Rect>(ask_button_id());
                 });
             }
             return;

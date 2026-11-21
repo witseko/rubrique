@@ -2800,6 +2800,7 @@ impl RubriqueApp {
     /// Bottom bar: the git branch, then a recent status message or the open
     /// file's path, mode and stats.
     fn status_bar(&mut self, ui: &mut Ui) {
+        preview_selection::clear_ask_button_rect(ui.ctx());
         let now = ui.input(|input| input.time);
         // Always the height of a row of buttons, also with none (a terminal
         // tab, a status message): the bar sets the bottom of the explorer,
@@ -2873,6 +2874,9 @@ impl RubriqueApp {
             "Ask AI about the selection, or the whole file (Cmd+K)",
             self.ask.is_open(),
         );
+        if showing_preview {
+            preview_selection::set_ask_button_rect(ui.ctx(), ask.rect);
+        }
         if ask.clicked() {
             self.check_ai_tools();
             self.load_skills_and_agents();
@@ -3521,6 +3525,76 @@ mod tests {
             .drop_without_applying_deltas();
             assert_eq!(steps, expected_steps);
         }
+    }
+
+    /// Click the real status bar button with a Markdown document open.
+    #[test]
+    fn status_bar_ask_opens_prompt_for_preview_selection() {
+        use eframe::egui::{self, PointerButton, Rect, pos2, vec2};
+        use eframe::{App, Frame};
+
+        let path = std::env::temp_dir().join("rubrique-ask-selection-test").join("note.md");
+        let text = "# Example heading";
+        let document = super::Document::missing(&path, text.to_owned(), text.to_owned(), None);
+        let ctx = Context::default();
+        let mut app = super::RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![], None);
+        app.add_tab(super::OpenFile::Text {
+            document,
+            preview: None,
+            delimited: None,
+            disk_notice: None,
+            editor: None,
+            source: false,
+        });
+        #[cfg(target_os = "macos")]
+        {
+            app.native_menu = super::native_menu::NativeMenuState::Failed;
+        }
+        let mut frame = Frame::_new_kittest();
+        let mut draw = |events| {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 700.0))),
+                events,
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| app.ui(ui, &mut frame))
+        };
+        draw(vec![]).drop_without_applying_deltas();
+        let text_bounds = |output: &egui::FullOutput, label| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == label => Some(text.visual_bounding_rect()),
+                    _ => None,
+                })
+                .expect("visible label")
+        };
+        let pointer_button = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let output = draw(vec![]);
+        let heading = text_bounds(&output, "Example heading");
+        output.drop_without_applying_deltas();
+        let start = pos2(heading.left(), heading.center().y);
+        let end = heading.center();
+        draw(vec![Event::PointerMoved(start)]).drop_without_applying_deltas();
+        draw(vec![pointer_button(start, true)]).drop_without_applying_deltas();
+        draw(vec![Event::PointerMoved(end)]).drop_without_applying_deltas();
+        draw(vec![pointer_button(end, false)]).drop_without_applying_deltas();
+        let output = draw(vec![]);
+        let button = text_bounds(&output, "Ask").center();
+        output.drop_without_applying_deltas();
+        draw(vec![Event::PointerMoved(button)]).drop_without_applying_deltas();
+        for pressed in [true, false] {
+            draw(vec![pointer_button(button, pressed)]).drop_without_applying_deltas();
+        }
+        let output = draw(vec![]);
+        text_bounds(&output, "1 line selected");
+        output.drop_without_applying_deltas();
     }
 
     /// One frame of the "unsaved changes" dialog with `keys` pressed.
