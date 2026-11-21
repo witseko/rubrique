@@ -8,6 +8,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Terminal full screen.** Press `Cmd+Shift+Enter` in a terminal tab, or
+  click the new button in its status bar (also View → Terminal full
+  screen), and the terminal fills the screen with no explorer, tabs or
+  bars around it. The same keys bring the window back as it was; switching
+  to another kind of tab does too.
+
 ### Changed
 
 - **Git only in repositories you trust.** Rubrique no longer runs git in

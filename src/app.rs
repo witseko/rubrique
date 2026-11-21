@@ -38,6 +38,8 @@ mod summary;
 mod tab_groups;
 mod tab_list;
 mod tabs;
+mod terminal_full_screen;
+use terminal_full_screen::TerminalFullScreen;
 mod terminals;
 use terminals::StartupFolds;
 mod text_highlight;
@@ -341,6 +343,8 @@ pub struct RubriqueApp {
     zoom_gesture: ZoomGesture,
     /// The same for the text area, when the pointer is over it.
     page_zoom_gesture: ZoomGesture,
+    /// A terminal tab filling the screen (see `terminal_full_screen.rs`).
+    terminal_full_screen: TerminalFullScreen,
     /// The menus in the macOS menu bar, installed on the first frame.
     #[cfg(target_os = "macos")]
     native_menu: native_menu::NativeMenuState,
@@ -510,6 +514,7 @@ impl RubriqueApp {
             quit_confirmed: false,
             zoom_gesture: ZoomGesture::default(),
             page_zoom_gesture: ZoomGesture::default(),
+            terminal_full_screen: TerminalFullScreen::default(),
             #[cfg(target_os = "macos")]
             native_menu: native_menu::NativeMenuState::NotYet,
             status_message: None,
@@ -1186,7 +1191,9 @@ impl RubriqueApp {
 
     /// Remember the window size and the open tabs, then write the settings file.
     fn save_settings(&mut self, ctx: &Context) {
-        if let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
+        let full_screen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        // A full screen window keeps the size it had before.
+        if !full_screen && let Some(rect) = ctx.input(|input| input.viewport().inner_rect) {
             // In points of the native scale, as the window was opened with, not zoomed ones.
             let zoom = ctx.zoom_factor();
             self.settings.window_size = Some((rect.width() * zoom, rect.height() * zoom));
@@ -2008,10 +2015,64 @@ impl RubriqueApp {
         }
     }
 
+    /// The bars and panels around the page: menu and status bars, the
+    /// explorer, the side panel and the AI and Helm output.
+    fn panels_around_page(&mut self, ui: &mut Ui, bar_frame: egui::Frame) {
+        let style = ui.ctx().global_style();
+        // macOS has the menus in its own bar at the top of the screen.
+        #[cfg(not(target_os = "macos"))]
+        if self.settings.accessibility.show_menu_bar {
+            egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
+        }
+        egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
+        // Settings open from the menus (the macOS menu bar, or the bar in the
+        // window). Only where that bar is switched off does a gear at the
+        // bottom of the explorer stay, so Settings can still be found.
+        let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
+        let update_card = self.update_card_wanted();
+        egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
+            if menu_hidden || update_card {
+                egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
+                    ui.add_space(4.0);
+                    if update_card {
+                        self.update_card(ui);
+                        ui.add_space(4.0);
+                    }
+                    if menu_hidden {
+                        ui.horizontal(|ui| {
+                            let tip = "Settings (Ctrl+,)";
+                            let gear = icon_button(ui, Icon::Gear, "Settings", tip, self.settings_open);
+                            if gear.clicked() {
+                                self.toggle_settings();
+                            }
+                        });
+                    }
+                    ui.add_space(2.0);
+                });
+            }
+            self.explorer_panel(ui);
+        });
+        self.right_panel(ui);
+        if self.ask.job.is_some() && self.merging.is_none() {
+            egui::Panel::bottom("ai-output")
+                .resizable(true)
+                .default_size(AI_OUTPUT_HEIGHT)
+                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
+                .show(ui, |ui| self.ai_output_panel(ui));
+        }
+        if self.helm.panel.is_some() && self.merging.is_none() {
+            egui::Panel::bottom("helm-output")
+                .resizable(true)
+                .default_size(AI_OUTPUT_HEIGHT)
+                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
+                .show(ui, |ui| self.helm_panel(ui));
+        }
+    }
+
     /// The bar above the page, when any tab is open: the tab strip, or the
     /// active tab's name while the tabs are listed in the explorer.
     fn page_header(&mut self, ui: &mut Ui) {
-        if self.tabs.is_empty() {
+        if self.tabs.is_empty() || self.terminal_full_screen.is_showing() {
             return;
         }
         match self.settings.layout.tab_position {
@@ -2775,6 +2836,10 @@ impl RubriqueApp {
 
     /// Path of the open file on the left; mode and editor stats on the right.
     fn document_status(&mut self, ui: &mut Ui) {
+        if matches!(self.open_file, OpenFile::Terminal { .. }) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| self.terminal_status(ui));
+            return;
+        }
         let Some(path) = self.open_file.path() else {
             return;
         };
@@ -3350,6 +3415,7 @@ impl eframe::App for RubriqueApp {
         self.handle_shortcuts(&ctx);
         #[cfg(target_os = "macos")]
         self.native_menu(&ctx);
+        self.sync_terminal_full_screen(&ctx);
         // The preview reads the text area zoom while it draws.
         crate::markdown::render::set_page_zoom(self.settings.accessibility.page_scale());
         crate::markdown::render::set_explorer_folders(&ctx, &self.settings.folders);
@@ -3374,59 +3440,16 @@ impl eframe::App for RubriqueApp {
         // The page fills the whole central area; editor and preview add their own margins.
         let page_frame = egui::Frame::central_panel(&style).fill(page_fill(&style.visuals)).inner_margin(0);
 
-        // macOS has the menus in its own bar at the top of the screen.
-        #[cfg(not(target_os = "macos"))]
-        if self.settings.accessibility.show_menu_bar {
-            egui::Panel::top("menu-bar").frame(bar_frame).show(ui, |ui| self.menu_bar(ui));
-        }
-        egui::Panel::bottom("status-bar").frame(bar_frame).show(ui, |ui| self.status_bar(ui));
-        // Settings open from the menus (the macOS menu bar, or the bar in the
-        // window). Only where that bar is switched off does a gear at the
-        // bottom of the explorer stay, so Settings can still be found.
-        let menu_hidden = cfg!(not(target_os = "macos")) && !self.settings.accessibility.show_menu_bar;
-        let update_card = self.update_card_wanted();
-        egui::Panel::left("explorer").resizable(true).default_size(EXPLORER_DEFAULT_WIDTH).show(ui, |ui| {
-            if menu_hidden || update_card {
-                egui::Panel::bottom("explorer-footer").show_separator_line(false).show(ui, |ui| {
-                    ui.add_space(4.0);
-                    if update_card {
-                        self.update_card(ui);
-                        ui.add_space(4.0);
-                    }
-                    if menu_hidden {
-                        ui.horizontal(|ui| {
-                            let tip = "Settings (Ctrl+,)";
-                            let gear = icon_button(ui, Icon::Gear, "Settings", tip, self.settings_open);
-                            if gear.clicked() {
-                                self.toggle_settings();
-                            }
-                        });
-                    }
-                    ui.add_space(2.0);
-                });
-            }
-            self.explorer_panel(ui);
-        });
-        self.right_panel(ui);
-        if self.ask.job.is_some() && self.merging.is_none() {
-            egui::Panel::bottom("ai-output")
-                .resizable(true)
-                .default_size(AI_OUTPUT_HEIGHT)
-                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
-                .show(ui, |ui| self.ai_output_panel(ui));
-        }
-        if self.helm.panel.is_some() && self.merging.is_none() {
-            egui::Panel::bottom("helm-output")
-                .resizable(true)
-                .default_size(AI_OUTPUT_HEIGHT)
-                .frame(egui::Frame::side_top_panel(&style).inner_margin(0))
-                .show(ui, |ui| self.helm_panel(ui));
+        // A terminal in full screen has the window to itself.
+        if !self.terminal_full_screen.is_showing() {
+            self.panels_around_page(ui, bar_frame);
         }
         self.prepare_find(&ctx);
         egui::CentralPanel::default().frame(page_frame).show(ui, |ui| self.document_area(ui));
         self.handle_dropped_files(&ctx);
         self.open_system_documents(&ctx);
         self.find_bar(&ctx);
+        self.terminal_full_screen_hint(&ctx);
 
         self.ask_dialogs(&ctx);
         self.install_dialog(&ctx);

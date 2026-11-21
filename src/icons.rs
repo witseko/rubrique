@@ -108,6 +108,9 @@ pub enum Icon {
     /// The buttons of a row too narrow to show them, as one menu (the Files
     /// header): three lines, the middle one the accent.
     Menu,
+    /// Fill the screen with the terminal (the status bar of a terminal
+    /// tab): four corners pointing out; the top right one is the accent.
+    FullScreen,
 }
 
 /// A flat button with `icon` and a hover tip. `active` keeps it highlighted
@@ -206,12 +209,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
             }
             painter.circle_filled(center, 1.6, accent);
         }
-        Icon::FolderPlus => {
-            // Folder with a tab; the round plus badge at the bottom right is the accent.
-            let outline = [at(-6.5, -5.5), at(-2.0, -5.5), at(-0.4, -3.9), at(6.5, -3.9), at(6.5, 5.5), at(-6.5, 5.5)];
-            stroke_path(painter, &round_corners(&outline, CORNER, true), true, line);
-            plus_badge(painter, at(4.0, 3.5), accent, behind);
-        }
+        Icon::FolderPlus => paint_folder_plus(painter, center, line, accent, behind),
         Icon::ServerPlus => paint_server_plus(painter, center, colors),
         Icon::Plus => plus(painter, center, 5.0, line),
         Icon::SidePanel => paint_side_panel(painter, center, line, detail),
@@ -234,6 +232,7 @@ fn paint(painter: &Painter, icon: Icon, center: Pos2, colors: Colors) {
         Icon::Pencil => paint_pencil(painter, center, line, detail),
         Icon::CollapseAll | Icon::ExpandAll => paint_fold_all(painter, center, line, detail, icon == Icon::CollapseAll),
         Icon::Menu => paint_menu(painter, center, line, detail),
+        Icon::FullScreen => paint_full_screen(painter, center, line, detail),
         Icon::Refresh => {
             // Most of a circle; the arrowhead at its end is the accent.
             let radius = 5.6;
@@ -613,6 +612,24 @@ fn paint_side_panel(painter: &Painter, center: Pos2, line: Stroke, detail: Strok
     stroke_path(painter, &[at(1.5, -5.5), at(1.5, 5.5)], false, line);
     stroke_path(painter, &[at(3.6, -2.5), at(4.4, -2.5)], false, detail);
     stroke_path(painter, &[at(3.6, 0.0), at(4.4, 0.0)], false, detail);
+}
+
+/// Folder with a tab; the round plus badge at the bottom right is the accent.
+fn paint_folder_plus(painter: &Painter, center: Pos2, line: Stroke, accent: Color32, behind: Color32) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    let outline = [at(-6.5, -5.5), at(-2.0, -5.5), at(-0.4, -3.9), at(6.5, -3.9), at(6.5, 5.5), at(-6.5, 5.5)];
+    stroke_path(painter, &round_corners(&outline, CORNER, true), true, line);
+    plus_badge(painter, at(4.0, 3.5), accent, behind);
+}
+
+/// Four corners of a square, pointing out; the top right one is the accent.
+fn paint_full_screen(painter: &Painter, center: Pos2, line: Stroke, detail: Stroke) {
+    let at = |x: f32, y: f32| center + vec2(x, y);
+    for (x, y) in [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
+        let stroke = if x > 0.0 && y < 0.0 { detail } else { line };
+        let corner = [at(6.0 * x, 2.0 * y), at(6.0 * x, 5.5 * y), at(2.5 * x, 5.5 * y)];
+        stroke_path(painter, &corner, false, stroke);
+    }
 }
 
 /// A window; the `>_` prompt inside is the accent.
