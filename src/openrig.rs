@@ -17,6 +17,7 @@ use crate::ai::run::{AiRun, RunEnd};
 use crate::remote::connection;
 use crate::remote::mirror::is_valid_host;
 
+pub mod seat_setup;
 pub mod spec;
 pub mod store;
 
@@ -179,14 +180,6 @@ pub struct UpReply {
     pub warnings: Vec<String>,
 }
 
-/// rig's answer to one call: its exit status, what it printed and whether
-/// it warned that the seat list is partial.
-struct CliReply {
-    success: bool,
-    stdout: String,
-    partial: bool,
-}
-
 /// The rig executable on the machine that runs the daemon.
 pub struct Rig {
     program: PathBuf,
@@ -265,6 +258,12 @@ impl Rig {
 
     /// Read the configured daemon and list its local agent seats.
     pub fn inventory(&self) -> Result<Inventory, String> {
+        let endpoint = self.endpoint()?;
+        self.inventory_at(endpoint)
+    }
+
+    /// The configured daemon's loopback address on the rig's machine.
+    fn endpoint(&self) -> Result<SocketAddr, String> {
         // The URL override describes this computer's daemon, not a remote one.
         let override_url = (self.host == RigHost::Local)
             .then(|| {
@@ -274,18 +273,16 @@ impl Rig {
                     .or_else(|| std::env::var("RIGGED_URL").ok().filter(|url| !url.is_empty()))
             })
             .flatten();
-        let endpoint = if let Some(url) = override_url {
-            local_origin(&url).ok_or("OpenRig needs a local HTTP daemon on a loopback port.")?
-        } else {
-            let status = self.status(None)?;
-            let port = status["daemon"]["port"]
-                .as_u64()
-                .and_then(|port| u16::try_from(port).ok())
-                .filter(|port| *port != 0)
-                .ok_or("OpenRig did not report a daemon port.")?;
-            SocketAddr::from(([127, 0, 0, 1], port))
-        };
-        self.inventory_at(endpoint)
+        if let Some(url) = override_url {
+            return local_origin(&url).ok_or_else(|| "OpenRig needs a local HTTP daemon on a loopback port.".into());
+        }
+        let status = self.status(None)?;
+        let port = status["daemon"]["port"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+            .ok_or("OpenRig did not report a daemon port.")?;
+        Ok(SocketAddr::from(([127, 0, 0, 1], port)))
     }
 
     /// Read local agent seats and match them to teams on the selected daemon.
@@ -469,6 +466,14 @@ impl Rig {
         }
         Ok(CliReply { success: status == 0, stdout: stdout.to_owned(), partial })
     }
+}
+
+/// How a rig call ended: its exit, its stdout and whether rig warned that
+/// the seat list is incomplete. Holds no stderr.
+struct CliReply {
+    success: bool,
+    stdout: String,
+    partial: bool,
 }
 
 /// Split the remote script's output into rig's exit status, the partial flag and rig's stdout.

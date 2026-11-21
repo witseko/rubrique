@@ -14,7 +14,7 @@ use super::view::{
     file_click, file_menu, is_revealed, paint_root_bar, rename_row, scroll_if_revealed, tree_row,
 };
 use crate::explorer::tree::FsNode;
-use crate::icons::{Icon, paint_icon, small_icon_button};
+use crate::icons::{Icon, paint_icon, small_icon_button, small_icon_button_on};
 use crate::settings::layout::LayoutSettings;
 use crate::terminal::agent_sessions::AgentSession;
 use crate::terminal::groups::{TerminalGroup, seat_of};
@@ -37,6 +37,8 @@ const ICON_ROOM: &str = " ";
 /// Spaces left after the name for the status dot to be painted in.
 const DOT_ROOM: &str = "     ";
 const DOT_RADIUS: f32 = 3.5;
+/// Space between a rig's header row and its "Add seat" button.
+const ADD_SEAT_GAP: f32 = 4.0;
 
 /// The Terminals section docked at the bottom of the explorer: a panel the
 /// user can resize by its top edge, or only its header while folded.
@@ -149,8 +151,12 @@ pub(super) fn terminal_group(
     let folded = context.folded_terminal_groups.contains(&group.key);
     // Folder colors show only with several folders, as on the tabs.
     let color = group.root.filter(|_| context.can_remove_roots).map(group_color);
-    if group_header(ui, group, folded, color) {
+    let header = group_header(ui, group, folded, color);
+    if header.clicked() {
         *action = Some(ExplorerAction::ToggleTerminalGroup(group.key.clone()));
+    }
+    if is_rig_group(group) {
+        add_seat_controls(ui, &header, group, context, action);
     }
     if folded {
         return;
@@ -163,9 +169,53 @@ pub(super) fn terminal_group(
     });
 }
 
+/// A rig's group in the `OpenRig` list (not one of its pods).
+fn is_rig_group(group: &TerminalGroup) -> bool {
+    group.key.strip_prefix("rig:").is_some_and(|rig| !rig.contains('/'))
+}
+
+/// "Add seat" for a rig: a + button just after its header row, and the
+/// same item in the header's right-click menu.
+fn add_seat_controls(
+    ui: &Ui,
+    header: &egui::Response,
+    group: &TerminalGroup,
+    context: &TreeContext,
+    action: &mut Option<ExplorerAction>,
+) {
+    let size = header.rect.height().min(HEADER_BUTTON_SIZE);
+    let rect = egui::Rect::from_min_size(
+        egui::pos2(header.rect.right() + ADD_SEAT_GAP, header.rect.center().y - size / 2.0),
+        egui::vec2(size, size),
+    );
+    let tip = "Add a seat to this rig";
+    let plus = small_icon_button_on(ui, rect, header.id.with("add-seat"), Icon::Plus, "Add seat", tip);
+    let mut clicked = plus.clicked();
+    header.context_menu(|ui| {
+        if ui.button("Add seat…").on_hover_text(tip).clicked() {
+            clicked = true;
+            ui.close();
+        }
+    });
+    if clicked {
+        *action = Some(ExplorerAction::AddSeat { seats: group_session_names(group, context) });
+    }
+}
+
+/// The session names of a group's rows and its sub-groups' rows.
+fn group_session_names(group: &TerminalGroup, context: &TreeContext) -> Vec<String> {
+    let rows = context.terminals.unwrap_or_default();
+    let mut names: Vec<String> =
+        group.rows.iter().filter_map(|&index| rows.get(index)).map(|row| row.info.name.clone()).collect();
+    for child in &group.children {
+        names.extend(group_session_names(child, context));
+    }
+    names
+}
+
 /// A group's header row: the fold arrow, the title, the session count, and
-/// for a folder a bar of its color. Returns true when it was clicked.
-fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<Color32>) -> bool {
+/// for a folder a bar of its color.
+fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<Color32>) -> egui::Response {
     let mut job = LayoutJob::default();
     let style = ui.style();
     RichText::new(format!("{ICON_GAP}{}", group.title)).strong().append_to(
@@ -191,7 +241,7 @@ fn group_header(ui: &mut Ui, group: &TerminalGroup, folded: bool, color: Option<
         paint_root_bar(ui, &response, color);
     }
     let tip = if folded { "Show these terminals" } else { "Hide these terminals" };
-    response.on_hover_text(tip).clicked()
+    response.on_hover_text(tip)
 }
 
 /// The sessions of one group, which can be dragged up and down inside it.
@@ -284,7 +334,8 @@ fn terminal_row(
 }
 
 /// The right-click menu of an `OpenRig` seat: send it a step, copy its
-/// address or attach command, open it in the terminal app, or stop it.
+/// address or attach command, open it in the terminal app, change its
+/// setup, or stop it.
 fn seat_menu(ui: &mut Ui, name: &str, action: &mut Option<ExplorerAction>) {
     let items = [
         (
@@ -299,6 +350,7 @@ fn seat_menu(ui: &mut Ui, name: &str, action: &mut Option<ExplorerAction>) {
             "Attach to this seat in a window of the system's terminal app",
             SeatCommand::OpenInTerminalApp,
         ),
+        ("Seat setup…", "Change the seat's model, reasoning effort, permissions or working folder", SeatCommand::Setup),
     ];
     for (label, tip, command) in items {
         if ui.button(label).on_hover_text(tip).clicked() {

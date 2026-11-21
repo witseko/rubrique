@@ -103,7 +103,9 @@ the libraries listed under [Build](#build) first.
   The Terminals list groups sessions by explorer folder. OpenRig seats,
   on this computer and on remote rigs, have their own OpenRig section,
   grouped by rig and pod; right-click a seat to send it a step, copy its
-  attach command, open it in the Terminal app or stop it.
+  attach command, open it in the Terminal app, change its setup or stop it.
+  Click + next to a rig to add a seat with its provider, model, reasoning
+  effort, permissions, working folder and first instructions.
 - To hand a task to a terminal's agent, write a line such as
   `@tmux-qa: check this` in your document, then select Send.
 - Send a Markdown step to an existing OpenRig team, on this computer or on

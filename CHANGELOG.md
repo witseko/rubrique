@@ -27,6 +27,14 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   screen), and the terminal fills the screen with no explorer, tabs or
   bars around it. The same keys bring the window back as it was; switching
   to another kind of tab does too.
+- **Seat setup.** Add a seat to a running OpenRig team from the explorer:
+  click + next to a rig (or right-click it), then choose its name, pod,
+  provider (Claude Code, Codex or Pi), model, reasoning effort,
+  permissions, working folder and the first instructions it gets once it
+  starts. Right-click a seat and choose Seat setup to change its model,
+  effort, permissions or working folder, and restart it now or let the
+  change wait for its next launch. If a step fails, the dialog says which
+  one and what was already done.
 
 ### Changed
 
@@ -54,6 +62,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 - **Stricter clone addresses.** Clone from Git refuses an address whose
   host starts with `-`, such as `ssh://-oProxyCommand=x/repo`, so it can
   never reach `ssh` as an option.
+- **Ask AI with selected text.** Clicking Ask in the status bar opens the
+  prompt for the selected text in the Markdown preview.
 
 ## [1.9.0] - 2026-11-21
 
