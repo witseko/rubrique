@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-11-21
+
 ### Added
 
 - **File paths, file names and links in text highlights.** Settings →
