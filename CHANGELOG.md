@@ -8,6 +8,12 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Seat inspector header in a narrow window.** The seat's title and its
+  address no longer draw on top of each other: the address now sits on its
+  own line under "Seat pod.seat".
+
 ## [1.10.0] - 2026-11-21
 
 ### Added
