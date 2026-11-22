@@ -1,0 +1,9 @@
+# How the narrator says words the voice gets wrong: written<TAB>spoken.
+# Whole words only; the longest written form wins. Captions keep the written form.
+# Placeholder until the official pronunciation is decided.
+Rubrique	roo-breek
+tmux	tee mux
+whisper.cpp	whisper C P P
+rig.yaml	rig dot yammel
+YAML	yammel
+OpenRig	Open Rig

@@ -6,7 +6,9 @@
 //
 //   swift drive.swift window PID TITLE-PART   prints "id x y width height"
 //   swift drive.swift activate PID              brings the app to the front
+//   swift drive.swift frame ID                  prints "x y width height"
 //   swift drive.swift move ID X Y               moves the pointer
+//   swift drive.swift glide ID X Y [MS]         moves the pointer smoothly (for video)
 //   swift drive.swift click ID X Y              clicks there
 //   swift drive.swift type TEXT                 types the text
 //   swift drive.swift key NAME                  presses enter, escape, tab or cmd+LETTER
@@ -63,6 +65,25 @@ func post(_ event: CGEvent?) {
 
 func move(to point: CGPoint) {
     post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left))
+}
+
+/// Move the pointer from where it is to `target` along an eased path over
+/// about `milliseconds`, so a video shows a hand moving, not a jump.
+func glide(to target: CGPoint, milliseconds: Int) {
+    let start = CGEvent(source: nil)?.location ?? target
+    let steps = max(1, milliseconds / 10)
+    for step in 1...steps {
+        let progress = Double(step) / Double(steps)
+        // Ease in and out (cubic): slow start, fast middle, slow stop.
+        let eased = progress < 0.5 ? 4 * pow(progress, 3) : 1 - pow(2 - 2 * progress, 3) / 2
+        let position = CGPoint(
+            x: start.x + (target.x - start.x) * eased,
+            y: start.y + (target.y - start.y) * eased
+        )
+        CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: position, mouseButton: .left)?
+            .post(tap: .cghidEventTap)
+        usleep(10_000)
+    }
 }
 
 func click(at point: CGPoint) {
@@ -139,8 +160,16 @@ case "activate" where args.count == 2:
         fail("no process \(args[args.startIndex + 1])")
     }
     app.activate()
+case "frame" where args.count == 2:
+    let f = window(args[args.startIndex + 1]).frame
+    print("\(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height))")
 case "move" where args.count == 4:
     move(to: point(in: window(args[args.startIndex + 1]), args[args.startIndex + 2], args[args.startIndex + 3]))
+case "glide" where args.count == 4 || args.count == 5:
+    let target = point(in: window(args[args.startIndex + 1]), args[args.startIndex + 2], args[args.startIndex + 3])
+    let milliseconds = args.count == 5 ? Int(args[args.startIndex + 4]) : 450
+    guard let milliseconds, milliseconds > 0 else { fail("bad duration \(args[args.startIndex + 4])") }
+    glide(to: target, milliseconds: milliseconds)
 case "click" where args.count == 4:
     click(at: point(in: window(args[args.startIndex + 1]), args[args.startIndex + 2], args[args.startIndex + 3]))
 case "type" where args.count == 2:
@@ -158,5 +187,5 @@ case "key" where args.count == 2:
         pressWithCommand(code)
     }
 default:
-    fail("usage: drive.swift window|activate|move|click|type|key ... (see the top of the file)")
+    fail("usage: drive.swift window|activate|frame|move|glide|click|type|key ... (see the top of the file)")
 }

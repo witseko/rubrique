@@ -1,0 +1,52 @@
+# Episode 21: Compare two agents side by side.
+# [mark NAME] is where steps.zsh acts; [pause MS] is silence.
+
+[mark hook]
+Two agents. One document. You keep the best of both.
+[pause 600]
+
+[mark problem]
+Every coding agent writes a little differently. Instead of asking one,
+then asking another and copying lines across, Rubrique asks both at once.
+[pause 400]
+
+[mark open]
+Here is the handoff note from our tidepool survey. I want it shorter, so I
+press Command K.
+[pause 300]
+
+[mark type]
+I ask: make it shorter.
+[pause 300]
+
+[mark compare-menu]
+Next to the Ask button, Compare with lets me pick a second agent. Claude
+Code is my default. I add Codex.
+[mark run]
+Both run on my own computer, with the tools I already use. No API key.
+[pause 1500]
+
+[mark screen]
+Both answers are in. Compare in merge puts Claude on the left, Codex on the
+right, and the result in the middle.
+[pause 400]
+
+[mark choose-left]
+For the first change, I like Claude's wording.
+[pause 300]
+[mark choose-right]
+For the second, Codex says exactly what the file name should hold, so I
+take its version.
+[pause 400]
+
+[mark result]
+The result fills in as I choose. Nothing touches the file until I apply it.
+[mark apply]
+[pause 600]
+And if I change my mind, Command Z undoes it.
+[pause 500]
+
+[mark recap]
+So: Command K, Compare with, and keep what you like from each.
+Next, how to call your own named agents and skills with at A I dash.
+[pause 800]
