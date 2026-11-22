@@ -140,16 +140,17 @@ fn apply_requests(editor: &mut TeamEditor, seat: SeatRef, requests: Requests) {
     }
 }
 
-/// "Seat dev.build", the live address and the close button.
+/// "Seat dev.build" and the close button, with the live address on the
+/// line below so the two never overlap in a narrow inspector.
 fn title_row(ui: &mut Ui, title: &str, address: &str, requests: &mut Requests) {
     ui.horizontal(|ui| {
         ui.label(RichText::new("Seat").strong());
         ui.label(RichText::new(title).monospace().weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             requests.close = small_icon_button(ui, Icon::Close, REMOVE_SIZE, "Close", "Close the inspector").clicked();
-            ui.label(RichText::new(address).monospace().size(KEY_SIZE).color(ui.visuals().hyperlink_color));
         });
     });
+    ui.label(RichText::new(address).monospace().size(KEY_SIZE).color(ui.visuals().hyperlink_color));
 }
 
 /// The note on top of a terminal seat.
@@ -627,6 +628,8 @@ mod tests {
         /// Each piece of text the last frame drew, with where it was drawn.
         texts: Vec<(String, Rect)>,
         frame: u16,
+        /// Width of the screen the inspector fills.
+        width: f32,
     }
 
     impl Harness {
@@ -636,7 +639,8 @@ mod tests {
             let Opened::Text(document) = Document::open(&path, None).unwrap() else { panic!("a text file") };
             let mut editor = TeamEditor::new(&document);
             editor.selected = Some(seat);
-            let mut harness = Self { ctx: Context::default(), editor, seat, _temp: temp, texts: Vec::new(), frame: 0 };
+            let mut harness =
+                Self { ctx: Context::default(), editor, seat, _temp: temp, texts: Vec::new(), frame: 0, width: 420.0 };
             harness.run(Vec::new());
             harness
         }
@@ -652,7 +656,7 @@ mod tests {
         /// Draw one frame with `events`, remembering the text it drew.
         fn run(&mut self, events: Vec<Event>) {
             let input = RawInput {
-                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(420.0, 4000.0))),
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, 4000.0))),
                 time: Some(f64::from(self.frame) * 0.016),
                 events,
                 ..Default::default()
@@ -715,6 +719,32 @@ mod tests {
             Shape::Vec(shapes) => shapes.iter().for_each(|shape| collect_texts(shape, texts)),
             _ => {}
         }
+    }
+
+    /// The first drawn text that is exactly `text`.
+    fn first_text(harness: &Harness, text: &str) -> Rect {
+        let found = harness.texts.iter().find(|(drawn, _)| drawn == text);
+        found.unwrap_or_else(|| panic!("no {text:?} on screen")).1
+    }
+
+    /// In a narrow inspector (a 1280 x 720 window at text size 1.1) the
+    /// header's title and address do not overlap.
+    #[test]
+    fn narrow_header_keeps_title_and_address_apart() {
+        let mut harness = Harness::new(REVIEW);
+        harness.width = 360.0;
+        harness.editor.spec.name = "invoice-factory".into();
+        harness.editor.spec.pods[0].id = "review".into();
+        harness.member_mut().id = "reviewer".into();
+        for _ in 0..SETTLE_FRAMES {
+            harness.run(Vec::new());
+        }
+        let seat = first_text(&harness, "Seat");
+        let title = first_text(&harness, "review.reviewer");
+        let address = first_text(&harness, "review-reviewer@invoice-factory");
+        assert!(!seat.intersects(title), "{seat:?} {title:?}");
+        assert!(!title.intersects(address), "{title:?} {address:?}");
+        assert!(address.right() <= harness.width, "{address:?}");
     }
 
     /// Typing in a field changes the seat.
