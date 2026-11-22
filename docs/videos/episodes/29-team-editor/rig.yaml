@@ -1,0 +1,58 @@
+# The team that builds the invoice export from spec.md.
+version: "0.2"
+name: invoice-factory
+summary: >
+  A lead splits the spec into tasks, two builders write the code and tests,
+  and an independent reviewer checks every diff against the spec.
+
+pods:
+  - id: orch
+    label: Orchestration
+    members:
+      - id: lead
+        agent_ref: "local:agents/lead"
+        runtime: claude-code
+        profile: default
+        cwd: "."
+    edges: []
+
+  - id: dev
+    label: Development
+    members:
+      # Writes the export job and the API endpoints.
+      - id: build
+        agent_ref: "local:agents/implementer"
+        runtime: claude-code
+        profile: default
+        cwd: "."
+      # Writes the failing tests first, from the endpoint table.
+      - id: qa
+        agent_ref: "local:agents/qa"
+        runtime: codex
+        profile: default
+        cwd: "."
+    edges:
+      - kind: delegates_to
+        from: build
+        to: qa
+
+  - id: review
+    label: Review
+    members:
+      - id: reviewer
+        agent_ref: "local:agents/reviewer"
+        runtime: codex
+        profile: default
+        cwd: "."
+    edges: []
+
+edges:
+  - kind: delegates_to
+    from: orch.lead
+    to: dev.build
+  - kind: delegates_to
+    from: orch.lead
+    to: review.reviewer
+  - kind: can_observe
+    from: review.reviewer
+    to: dev.build

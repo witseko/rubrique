@@ -1,7 +1,7 @@
 # Episode 21: Compare two agents side by side. Sourced by record.zsh.
-# The stand-in agents answer with docs/screenshots/tools/ai/*.md.
-install_sample_agents "$tools/ai"
-start_window dark todo.md false claude
+# The stand-in agents answer with docs/videos/answers/*.md.
+install_sample_agents "$videos/answers"
+start_window dark build-plan.md false claude
 "$drive" activate "$pid"
 sleep 0.5
 start_recording
@@ -30,7 +30,7 @@ at choose-left
 click_at 328 244
 
 at choose-right
-click_at 1000 499
+click_at 1000 523
 
 at result
 glide_to 782 480 800

@@ -1,0 +1,49 @@
+# Episode 22: Skills, a way of writing your agent can reuse.
+# The skill is i-have-adhd by Ayoub Ghriss (MIT), in skills/i-have-adhd/.
+
+[mark hook]
+A skill teaches your agent a way of writing. Pick it once, and it shapes
+the answer.
+[pause 600]
+
+[mark problem]
+This build plan is correct, but it reads like prose. Long sentences hide
+the next step, and nothing says how long anything takes.
+[pause 400]
+
+[mark open]
+I press Command K,
+[mark skills]
+and open Skills. Rubrique reads the same skill folders as Claude Code,
+Codex, Gemini and Grok, so one skill works everywhere.
+[pause 400]
+
+[mark pick]
+I pick i-have-adhd, an open source simplification skill by Ayoub Ghriss.
+It puts the next action first, numbers the steps, and gives real time
+estimates.
+[pause 400]
+
+[mark run]
+It runs at once. You can see the skill's instructions go with the request,
+to whichever agent I use.
+[pause 1500]
+
+[mark review]
+Review in merge.
+[pause 400]
+
+[mark all]
+Every block changed, and I like all of it, so I take everything from the
+right.
+[pause 500]
+
+[mark apply]
+Apply. Now anyone can start from the first line, and every step says how
+long it takes.
+[pause 600]
+
+[mark recap]
+So: put a skill in your skills folder, pick it from Command K, and the
+agent writes your way. Next, notes that agents resolve.
+[pause 800]

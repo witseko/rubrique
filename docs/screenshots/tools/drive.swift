@@ -6,12 +6,13 @@
 //
 //   swift drive.swift window PID TITLE-PART   prints "id x y width height"
 //   swift drive.swift activate PID              brings the app to the front
+//   swift drive.swift front PID                 fails unless the app is in front
 //   swift drive.swift frame ID                  prints "x y width height"
 //   swift drive.swift move ID X Y               moves the pointer
 //   swift drive.swift glide ID X Y [MS]         moves the pointer smoothly (for video)
 //   swift drive.swift click ID X Y              clicks there
 //   swift drive.swift type TEXT                 types the text
-//   swift drive.swift key NAME                  presses enter, escape, tab or cmd+LETTER
+//   swift drive.swift key NAME                  presses a key: escape, backspace, up, cmd+k, cmd+shift+e
 import AppKit
 import CoreGraphics
 import Foundation
@@ -103,21 +104,32 @@ func press(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
     post(up)
 }
 
-/// The left Command key.
-let commandKey: CGKeyCode = 55
+/// Modifier keys: their left-hand key codes and the flag each one sets.
+let modifierKeys: [String: (code: CGKeyCode, flag: CGEventFlags)] = [
+    "cmd": (55, .maskCommand), "shift": (56, .maskShift), "alt": (58, .maskAlternate),
+]
 
-/// Cmd+key: the Command key goes down and up around it, as on a real
-/// keyboard. Setting the flag on the letter alone is not enough: the app
-/// learns about modifiers from the modifier key's own events, and would
-/// take every later letter as a Command shortcut.
-func pressWithCommand(_ code: CGKeyCode) {
-    let commandDown = CGEvent(keyboardEventSource: nil, virtualKey: commandKey, keyDown: true)
-    commandDown?.flags = .maskCommand
-    post(commandDown)
-    press(code, .maskCommand)
-    let commandUp = CGEvent(keyboardEventSource: nil, virtualKey: commandKey, keyDown: false)
-    commandUp?.flags = []
-    post(commandUp)
+/// Press `code` with modifiers held: each modifier key goes down before it
+/// and up after it, as on a real keyboard. Setting the flags on the key
+/// alone is not enough: the app learns about modifiers from the modifier
+/// keys' own events, and would take every later letter as a shortcut.
+func pressWithModifiers(_ code: CGKeyCode, _ modifiers: [String]) {
+    var flags: CGEventFlags = []
+    for name in modifiers {
+        guard let modifier = modifierKeys[name] else { fail("unknown modifier \(name)") }
+        flags.insert(modifier.flag)
+        let down = CGEvent(keyboardEventSource: nil, virtualKey: modifier.code, keyDown: true)
+        down?.flags = flags
+        post(down)
+    }
+    press(code, flags)
+    for name in modifiers.reversed() {
+        let modifier = modifierKeys[name]!
+        flags.remove(modifier.flag)
+        let up = CGEvent(keyboardEventSource: nil, virtualKey: modifier.code, keyDown: false)
+        up?.flags = flags
+        post(up)
+    }
 }
 
 /// Type `text` one character at a time (as unicode, no key codes needed).
@@ -135,7 +147,13 @@ func type(_ text: String) {
     }
 }
 
-/// ANSI key codes for the letters, for cmd+LETTER.
+/// Key codes for named keys.
+let namedKeys: [String: CGKeyCode] = [
+    "enter": 36, "escape": 53, "tab": 48, "space": 49, "backspace": 51,
+    "left": 123, "right": 124, "down": 125, "up": 126,
+]
+
+/// ANSI key codes for the letters.
 let letterCodes: [Character: CGKeyCode] = [
     "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12, "w": 13,
     "e": 14, "r": 15, "y": 16, "t": 17, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40, "n": 45, "m": 46,
@@ -160,6 +178,12 @@ case "activate" where args.count == 2:
         fail("no process \(args[args.startIndex + 1])")
     }
     app.activate()
+case "front" where args.count == 2:
+    guard let pid = Int32(args[args.startIndex + 1]) else { fail("invalid process ID") }
+    let front = NSWorkspace.shared.frontmostApplication
+    guard front?.processIdentifier == pid else {
+        fail("\(front?.localizedName ?? "another app") is in front, not process \(pid): stopped so no input goes there")
+    }
 case "frame" where args.count == 2:
     let f = window(args[args.startIndex + 1]).frame
     print("\(Int(f.minX)) \(Int(f.minY)) \(Int(f.width)) \(Int(f.height))")
@@ -175,17 +199,13 @@ case "click" where args.count == 4:
 case "type" where args.count == 2:
     type(args[args.startIndex + 1])
 case "key" where args.count == 2:
-    let name = args[args.startIndex + 1]
-    switch name {
-    case "enter": press(36)
-    case "escape": press(53)
-    case "tab": press(48)
-    default:
-        guard name.hasPrefix("cmd+"), let letter = name.dropFirst(4).first, let code = letterCodes[letter] else {
-            fail("unknown key \(name)")
-        }
-        pressWithCommand(code)
+    // A key name or letter, after any modifiers: escape, cmd+k, cmd+shift+e.
+    var parts = args[args.startIndex + 1].split(separator: "+").map(String.init)
+    let keyName = parts.removeLast()
+    guard let code = namedKeys[keyName] ?? keyName.first.flatMap({ keyName.count == 1 ? letterCodes[$0] : nil }) else {
+        fail("unknown key \(keyName)")
     }
+    pressWithModifiers(code, parts)
 default:
     fail("usage: drive.swift window|activate|frame|move|glide|click|type|key ... (see the top of the file)")
 }

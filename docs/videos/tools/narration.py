@@ -12,6 +12,7 @@ import re
 from dataclasses import dataclass
 from xml.sax.saxutils import escape, quoteattr
 
+IPA_PREFIX = "ipa:"
 MARK_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 TOKEN = re.compile(r"\[(mark|pause)\s+([^\]]*)\]")
 LONGEST_PAUSE_MS = 5000
@@ -109,7 +110,11 @@ def _check_unique_marks(parts: list[Part]) -> None:
 
 
 def parse_lexicon(source: str) -> dict[str, str]:
-    """Read ``written<TAB>spoken`` lines into a mapping. ``#`` starts a comment line."""
+    """Read ``written<TAB>spoken`` lines into a mapping. ``#`` starts a comment line.
+
+    ``spoken`` is either how to say the word ("tee mux") or ``ipa:SOUNDS``
+    ("ipa:ʁy.bʁik"), its pronunciation in the International Phonetic Alphabet.
+    """
     lexicon: dict[str, str] = {}
     for number, line in enumerate(source.splitlines(), start=1):
         if not line.strip() or line.lstrip().startswith("#"):
@@ -130,7 +135,7 @@ def _lexicon_pattern(lexicon: dict[str, str]) -> re.Pattern[str] | None:
 
 
 def speech_ssml(text: str, lexicon: dict[str, str]) -> str:
-    """Escape ``text`` for SSML and wrap each lexicon word in ``<sub alias>``."""
+    """Escape ``text`` for SSML and wrap each lexicon word in ``<sub>`` or ``<phoneme>``."""
     pattern = _lexicon_pattern(lexicon)
     if pattern is None:
         return escape(text)
@@ -139,18 +144,31 @@ def speech_ssml(text: str, lexicon: dict[str, str]) -> str:
     for match in pattern.finditer(text):
         pieces.append(escape(text[position : match.start()]))
         written = match.group(0)
-        pieces.append(f"<sub alias={quoteattr(lexicon[written])}>{escape(written)}</sub>")
+        pieces.append(_word_ssml(written, lexicon[written]))
         position = match.end()
     pieces.append(escape(text[position:]))
     return "".join(pieces)
 
 
+def _word_ssml(written: str, spoken: str) -> str:
+    if spoken.startswith(IPA_PREFIX):
+        sounds = spoken.removeprefix(IPA_PREFIX)
+        return f'<phoneme alphabet="ipa" ph={quoteattr(sounds)}>{escape(written)}</phoneme>'
+    return f"<sub alias={quoteattr(spoken)}>{escape(written)}</sub>"
+
+
+def _aliases(lexicon: dict[str, str]) -> dict[str, str]:
+    """The lexicon words said with another spelling (not given as IPA sounds)."""
+    return {written: spoken for written, spoken in lexicon.items() if not spoken.startswith(IPA_PREFIX)}
+
+
 def spoken_text(text: str, lexicon: dict[str, str]) -> str:
     """Replace each lexicon word with how it is said, for voices without SSML."""
-    pattern = _lexicon_pattern(lexicon)
+    aliases = _aliases(lexicon)
+    pattern = _lexicon_pattern(aliases)
     if pattern is None:
         return text
-    return pattern.sub(lambda match: lexicon[match.group(0)], text)
+    return pattern.sub(lambda match: aliases[match.group(0)], text)
 
 
 def to_ssml(parts: list[Part], lexicon: dict[str, str], voice: str, rate: str) -> str:
@@ -169,6 +187,40 @@ def to_ssml(parts: list[Part], lexicon: dict[str, str], voice: str, rate: str) -
         + "\n".join(body)
         + "</prosody></voice></speak>\n"
     )
+
+
+def repair_azure_words(words: list[Word], lexicon: dict[str, str]) -> list[Word]:
+    """Fix the words Azure reports around a ``<sub>`` substitution.
+
+    Azure reports the alias words ("rig", "dot", "yammel"), then one word that
+    joins the end of the tag, the written form and the next real word:
+    '">rig.yaml opens'. Put the written form back in place of the alias words,
+    so a caption never splits it, and keep the real word after it.
+    """
+    written_forms = sorted(lexicon, key=len, reverse=True)
+    repaired: list[Word] = []
+    for word in words:
+        if not word.text.startswith('">'):
+            repaired.append(word)
+            continue
+        rest = word.text[2:]
+        written = next((form for form in written_forms if rest.startswith(form)), None)
+        if written is not None:
+            rest = rest[len(written) :]
+            _merge_alias(repaired, written, lexicon[written])
+        if rest.strip():
+            repaired.append(Word(rest.strip(), word.start, word.end, word.punctuation))
+    return repaired
+
+
+def _merge_alias(repaired: list[Word], written: str, alias: str) -> None:
+    """Replace the alias words at the end of ``repaired`` with one written word."""
+    count = len(alias.split())
+    tail = repaired[-count:]
+    if len(tail) != count or " ".join(word.text for word in tail) != alias:
+        return
+    del repaired[-count:]
+    repaired.append(Word(written, tail[0].start, tail[-1].end))
 
 
 def build_cues(words: list[Word], max_chars: int = 42, max_gap: float = 0.6) -> list[Cue]:
@@ -211,7 +263,7 @@ def _starts_new_cue(current: list[Word], word: Word, max_chars: int, max_gap: fl
 
 def unspeak(cues: list[Cue], lexicon: dict[str, str]) -> list[Cue]:
     """Show lexicon words as written in captions, if the voice reported the spoken form."""
-    spoken = {said: written for written, said in lexicon.items()}
+    spoken = {said: written for written, said in _aliases(lexicon).items()}
     pattern = _lexicon_pattern(spoken)
     if pattern is None:
         return cues

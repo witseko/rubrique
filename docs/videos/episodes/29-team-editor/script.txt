@@ -1,0 +1,40 @@
+# Episode 29: OpenRig 3, edit your software factory as a form.
+
+[mark hook]
+Your software factory is one YAML file. Rubrique opens it as a form.
+[pause 600]
+
+[mark open]
+This is the OpenRig team that builds the invoice export. With Use OpenRig
+turned on, rig.yaml opens with its pods and seats.
+[pause 400]
+
+[mark seat]
+I click a seat to see how it runs: the agent, the runtime, and its folder.
+[pause 400]
+
+[mark edit]
+QA already runs on Codex. For a second opinion, the reviewer switches to
+Claude Code.
+[pause 600]
+
+[mark source]
+Command E opens the YAML itself. My comments are still there, and so is
+everything the form does not show.
+[pause 600]
+
+[mark validate]
+Validate asks OpenRig to check the spec, and whether the team is ready to
+launch.
+[pause 800]
+
+[mark launch]
+Launch first shows what it would start,
+[mark confirm]
+and starts the team only when I confirm.
+[pause 1500]
+
+[mark recap]
+So: edit the factory as a form, keep the YAML exact, and launch when it is
+ready. Next, sending a spec step to a seat on a remote machine.
+[pause 800]

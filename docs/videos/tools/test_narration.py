@@ -15,6 +15,7 @@ from narration import (
     format_timings,
     parse_lexicon,
     parse_script,
+    repair_azure_words,
     speech_ssml,
     spoken_text,
     to_ssml,
@@ -60,6 +61,16 @@ def test_ssml_escapes_text_and_substitutes_whole_words_longest_first():
     )
 
 
+def test_ipa_entries_wrap_the_word_in_phoneme_and_stay_written_elsewhere():
+    lexicon = {"Rubrique": "ipa:ʁy.bʁik", "tmux": "tee mux"}
+
+    assert speech_ssml("Rubrique and tmux.", lexicon) == (
+        '<phoneme alphabet="ipa" ph="ʁy.bʁik">Rubrique</phoneme> and <sub alias="tee mux">tmux</sub>.'
+    )
+    assert spoken_text("Rubrique and tmux.", lexicon) == "Rubrique and tee mux."
+    assert unspeak([Cue(0.0, 1.0, "Rubrique and tee mux")], lexicon) == [Cue(0.0, 1.0, "Rubrique and tmux")]
+
+
 def test_spoken_text_replaces_written_forms_for_plain_voices():
     assert spoken_text("Rubrique opens rig.yaml.", LEXICON) == "roo-breek opens rig dot yammel."
 
@@ -86,6 +97,16 @@ def test_cues_end_at_sentences_long_gaps_and_length():
         Cue(0.7, 0.9, "One"),
         Cue(2.0, 2.5, "paragraph"),
         Cue(2.5, 3.0, "averyveryverylongwordthatfillsthecue"),
+    ]
+
+
+def test_azure_word_after_a_substitution_keeps_only_the_next_word():
+    # Events as Azure reports them for "<sub alias='tee mux'>tmux</sub> panes."
+    words = [Word("tee", 0.0, 0.2), Word("mux", 0.2, 0.4), Word('">tmux panes', 0.4, 0.8), Word('">tmux', 0.8, 0.9)]
+
+    assert repair_azure_words(words, {"tmux": "tee mux"}) == [
+        Word("tmux", 0.0, 0.4),
+        Word("panes", 0.4, 0.8),
     ]
 
 

@@ -11,8 +11,8 @@ then asking another and copying lines across, Rubrique asks both at once.
 [pause 400]
 
 [mark open]
-Here is the handoff note from our tidepool survey. I want it shorter, so I
-press Command K.
+Here is the build plan for my agent team. I want it shorter, so I press
+Command K.
 [pause 300]
 
 [mark type]
@@ -35,8 +35,8 @@ right, and the result in the middle.
 For the first change, I like Claude's wording.
 [pause 300]
 [mark choose-right]
-For the second, Codex says exactly what the file name should hold, so I
-take its version.
+For the second, Codex puts the spec name first, which is how I scan
+release notes, so I take its version.
 [pause 400]
 
 [mark result]

@@ -1,0 +1,44 @@
+# Episode 06: See what you changed before you save.
+
+[mark hook]
+Before you save, Rubrique shows you exactly what you changed.
+[pause 600]
+
+[mark edit]
+I am tightening the spec before the agents start. I open this paragraph
+and add a rule: log every export with the caller ID.
+[pause 800]
+[mark edit-done]
+and a bar appears beside it. The bar means: edited since the last save.
+[pause 500]
+
+[mark delete]
+Now I delete a block I no longer need. A dashed line marks where it was.
+[pause 600]
+
+[mark hover]
+Hover the bar to see the saved text next to the new one.
+[pause 400]
+[mark revert]
+If I prefer the old version, Revert would put it back with one click.
+[pause 600]
+
+[mark status]
+The status bar counts every change.
+[mark panel]
+Click it, and the Changes panel lists each block that will change when I
+save.
+[pause 800]
+
+[mark close]
+And if I am not ready to save at all? I close the tab and choose Keep for
+later.
+[pause 600]
+[mark reopen]
+When I open the file again, my edits come back.
+[pause 800]
+
+[mark recap]
+So: bars for edits, dashed lines for deletions, and nothing is lost until
+you decide. Next, how to keep private notes in encrypted scratch files.
+[pause 800]

@@ -27,14 +27,26 @@ count.
 H.264) and, with Azure, `EPISODE.srt` for YouTube's captions. If the voice
 runs ahead of the screen, set `CAPTURE_LATENCY` (seconds, default 0.3).
 
+## Sample project
+
+Episodes show a software engineer's work: `sample/invoice-export/` holds a
+spec and the build plan for an agent team, copied to `/tmp/invoice-export`
+for each take. The stand-in `claude` and `codex` commands answer with the
+files in `answers/`, so Ask and Compare give the same result every take.
+
 ## Episode folder
 
 - `script.txt`: the narration. `[mark NAME]` is a point the recording
   syncs to; `[pause MS]` is silence; lines that start with `#` are notes.
 - `steps.zsh`: sourced by `record.zsh`. It starts the sample window with
   the helpers in `docs/screenshots/tools/capture.zsh`, calls
-  `start_recording`, then runs each step after `at NAME`. Window points
-  count from the top left of the title bar.
+  `start_recording`, then runs each step after `at NAME`. `click_at X Y`
+  and `glide_to X Y` take points of the recorded picture.
+
+To find those points, run `PROBE=1 docs/videos/tools/record.zsh ...`: it
+runs the steps without voice or video and saves a screenshot at each mark
+to `out/EPISODE/probe/` (2x pixels; halve them for points). A run stops
+when another app comes to the front, so no input lands there.
 
 `drive.swift` (in `docs/screenshots/tools/`) has `glide ID X Y [MS]` for
 pointer moves a viewer can follow; use it before each `click`.

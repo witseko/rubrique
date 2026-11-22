@@ -35,6 +35,7 @@ from narration import (
     format_timings,
     parse_lexicon,
     parse_script,
+    repair_azure_words,
     spoken_text,
     to_ssml,
     unspeak,
@@ -144,7 +145,8 @@ def main() -> None:
         (out / "captions.srt").unlink(missing_ok=True)
     else:
         marks, words = synthesize_azure(ssml, wav)
-        (out / "captions.srt").write_text(format_srt(unspeak(build_cues(words), lexicon)))
+        cues = build_cues(repair_azure_words(words, lexicon))
+        (out / "captions.srt").write_text(format_srt(unspeak(cues, lexicon)))
     check_marks_reported(parts, marks)
     (out / "timings.tsv").write_text(format_timings(marks))
     log.info("Wrote %s (%d marks)", out, len(marks))
