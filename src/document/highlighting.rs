@@ -1,5 +1,5 @@
 //! Color Markdown, YAML, Helm template and code syntax (Python, JavaScript,
-//! TypeScript, Rust, JSON, XML, HTML, SQL) in the editor and in preview code blocks with the current
+//! TypeScript, Rust, JSON, XML, HTML, SQL, shell) in the editor and in preview code blocks with the current
 //! theme, and lay plain text out with the same line height, colored by the
 //! user's text highlight rules.
 
@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::format::Language;
 use crate::highlight::text_rules::{CompiledRules, HighlightRule, RuleColor};
-use crate::highlight::{code, xml};
+use crate::highlight::{code, shell, xml};
 use crate::markdown::highlight::{Kind, Span};
 use crate::theme::code_colors::{CodeColors, SyntaxColors, installed_code_colors};
 use crate::theme::style::EDITOR_LINE_HEIGHT;
@@ -36,6 +36,8 @@ pub enum Syntax {
     /// HTML, with Angular's template syntax.
     Html,
     Sql,
+    /// Shell scripts: sh, bash, zsh.
+    Shell,
 }
 
 /// The text highlight rules color this file: plain text (no code colors),
@@ -53,6 +55,8 @@ impl Syntax {
             Some(Syntax::Yaml)
         } else if crate::markdown::html::is_html_path(path) {
             Some(Syntax::Html)
+        } else if shell::is_shell_path(path) {
+            Some(Syntax::Shell)
         } else {
             let extension = path.extension()?.to_str()?.to_ascii_lowercase();
             match extension.as_str() {
@@ -77,6 +81,7 @@ impl Syntax {
             "tsx" => Some(Syntax::Tsx),
             "rust" | "rs" => Some(Syntax::Rust),
             "html" | "htm" | "angular" => Some(Syntax::Html),
+            "sh" | "bash" | "zsh" | "ksh" | "shell" => Some(Syntax::Shell),
             _ => Language::from_code_info(info).map(Syntax::of_format),
         }
     }
@@ -107,6 +112,7 @@ impl Syntax {
             Syntax::Xml => xml::highlight(text),
             Syntax::Html => xml::highlight_html(text),
             Syntax::Sql => code::highlight(text, &code::SQL),
+            Syntax::Shell => shell::highlight(text),
         }
     }
 }
@@ -341,6 +347,8 @@ mod tests {
         assert_eq!(Syntax::of(Path::new("pom.xml")), Some(Syntax::Xml));
         assert_eq!(Syntax::of(Path::new("notes.md")), Some(Syntax::Markdown));
         assert_eq!(Syntax::of(Path::new("query.sql")), Some(Syntax::Sql));
+        assert_eq!(Syntax::of(Path::new("deploy.sh")), Some(Syntax::Shell));
+        assert_eq!(Syntax::of(Path::new(".zshrc")), Some(Syntax::Shell));
         assert_eq!(Syntax::of(Path::new("Makefile")), None);
     }
 
@@ -356,6 +364,8 @@ mod tests {
         assert_eq!(Syntax::from_code_info("svg"), Some(Syntax::Xml));
         assert_eq!(Syntax::from_code_info("sql"), Some(Syntax::Sql));
         assert_eq!(Syntax::from_code_info("PostgreSQL"), Some(Syntax::Sql));
+        assert_eq!(Syntax::from_code_info("bash"), Some(Syntax::Shell));
+        assert_eq!(Syntax::from_code_info("sh"), Some(Syntax::Shell));
         assert_eq!(Syntax::from_code_info(""), None);
     }
 

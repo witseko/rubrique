@@ -151,7 +151,7 @@ suggestions with Codex run only in folders where you allowed AI.
 <img src="docs/screenshots/themes.png" alt="The Tidepool survey field guide in Rubrique's Light, Indigo, Sepia, Midnight and High contrast themes" width="880">
 
 Five themes (Indigo is the default dark one), or follow the system, or [add your own](themes/). Code in Python,
-JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, JSON, XML and YAML is colored with the
+JavaScript, TypeScript, React (JSX and TSX), Angular templates, HTML, Rust, shell, SQL, JSON, XML and YAML is colored with the
 theme's colors or VS Code's (Settings → Appearance → Code colors). Highlight file paths, links, IP addresses, UUIDs,
 hashes, numbers and your own patterns in plain text and Markdown (Settings → Highlights).
 Toggle those highlights with `Cmd+Shift+H`. Text size, line numbers and other options are in
