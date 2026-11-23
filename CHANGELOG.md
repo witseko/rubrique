@@ -8,6 +8,8 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-11-23
+
 ### Added
 
 - **Open file.** File → Open file... shows the system's file window; pick
