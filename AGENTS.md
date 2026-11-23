@@ -139,3 +139,13 @@ PNGs in `docs/screenshots/` before copying them to the website.
 
 When updating rubrique.dev, use these same PNGs. Follow the website
 README's screenshot instructions to regenerate its AVIF and WebP files.
+
+## Tutorial videos
+
+`docs/videos/` holds the YouTube tutorials as narration scripts and
+driven screen recordings; its README has the commands. Episodes reuse the
+screenshot sample folder and `capture.zsh`, so keep `capture.zsh`,
+`drive.swift` and the episodes' `steps.zsh` working together. After a UI
+change moves something an episode clicks, update its coordinates and
+render the episode again. Test the narration tools with
+`uv run --python 3.12 --with pytest pytest docs/videos/tools`.

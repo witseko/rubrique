@@ -1,0 +1,46 @@
+# Episode 04: Read, Edit and Source, three views of one file.
+
+[mark hook]
+One file, three views. Read it, change it in place, or open the Markdown.
+[pause 600]
+
+[mark read]
+This is the spec for an invoice export, in Read mode. The front matter
+shows as a card, and the checklist and the endpoint table render like a
+page.
+[pause 300]
+
+[mark edit]
+To change something, press Command Shift E. Now I am in Edit mode.
+[pause 300]
+
+[mark block]
+I click a paragraph, and only that block opens for editing.
+[mark type]
+I add one more rule for the agents: log every export with the caller ID.
+[pause 600]
+[mark done]
+Done, and it renders again.
+[pause 500]
+
+[mark insert]
+To add a block between two others, I hover the gap and click the plus.
+[mark insert-type]
+A new block appears, and I write one more rule: return 404 for invoices of
+other accounts.
+[pause 1000]
+[mark insert-done]
+[pause 400]
+
+[mark undo]
+Changed my mind? Command Z undoes it, right here in the preview.
+[pause 600]
+
+[mark source]
+And when I want the Markdown itself, Command E opens Source. The sentence I
+added is right there.
+[pause 600]
+
+[mark recap]
+So: Command Shift E to edit in place, Command E for the source.
+[pause 800]

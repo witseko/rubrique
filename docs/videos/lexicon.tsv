@@ -1,0 +1,11 @@
+# How the narrator says words the voice gets wrong: written<TAB>spoken.
+# Whole words only; the longest written form wins. Captions keep the written form.
+# spoken is how to say it ("tee mux") or ipa:SOUNDS in the International Phonetic Alphabet.
+# Rubrique is French.
+Rubrique	ipa:ʁy.ˈbʁik
+tmux	tee mux
+whisper.cpp	whisper C P P
+rig.yaml	rig dot yammel
+YAML	yammel
+OpenRig	Open Rig
+i-have-adhd	I have A D H D

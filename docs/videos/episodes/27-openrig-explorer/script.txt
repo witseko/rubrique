@@ -1,0 +1,31 @@
+# Episode 27: your OpenRig team in the explorer.
+
+[mark hook]
+Your whole agent team, right in the explorer.
+[pause 600]
+
+[mark section]
+With Use OpenRig turned on, running seats get their own OpenRig section,
+grouped by rig and by pod: orchestration, development and review.
+[pause 500]
+
+[mark states]
+A dot shows each seat's state. The builder and the reviewer are working,
+the lead is idle, and qa needs me.
+[pause 500]
+
+[mark open]
+I click the qa seat. It opens as a tab,
+[mark answer]
+and I answer it right here.
+[pause 1000]
+
+[mark menu]
+Right-click a seat to send it a step, copy its attach command, open it in
+the Terminal app, or stop it.
+[pause 800]
+
+[mark recap]
+So: every seat on this machine in one place, and the one that needs you is
+marked.
+[pause 800]

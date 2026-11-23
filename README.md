@@ -8,6 +8,9 @@ two agents' suggestions side by side and choose what to keep.
 
 <img src="docs/screenshots/ai.png" alt="Claude Code and Codex suggest edits to a survey handoff. The Compare screen shows both versions and the result." width="880">
 
+Watch the [video tutorials](https://www.youtube.com/playlist?list=PLC-VfxkED4aA):
+short narrated tours of editing, Git, agents and OpenRig teams.
+
 ## Install
 
 Download a package from the [latest release](https://github.com/witseko/rubrique/releases/latest).

@@ -2,23 +2,7 @@
 # Capture a Compare review. The two commands print fixture text and exit.
 source "$(dirname "$0")/capture.zsh"
 "$drive" permissions input
-# A changed menu must never invoke another installed agent during capture.
-for tool in gemini grok ollama; do
-  ln -s /usr/bin/false "$work/bin/$tool"
-done
-for tool in claude codex; do
-  cat > "$work/bin/$tool" <<'STUB'
-#!/bin/sh
-name=${0##*/}
-case "$name" in
-  claude) sleep 2 ;;
-  codex) sleep 3 ;;
-esac
-cat "$RUBRIQUE_SAMPLE_ANSWERS/$name.md" && touch "$RUBRIQUE_SAMPLE_RUNS/$name.done"
-STUB
-  chmod +x "$work/bin/$tool"
-done
-export RUBRIQUE_SAMPLE_ANSWERS="$tools/ai" RUBRIQUE_SAMPLE_RUNS="$work"
+install_sample_agents "$tools/ai"
 start_window dark todo.md false claude
 "$drive" activate "$pid"
 sleep 0.5

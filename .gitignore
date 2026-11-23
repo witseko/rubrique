@@ -1,2 +1,5 @@
 /target
 /dist
+/docs/videos/out
+__pycache__/
+.pytest_cache/

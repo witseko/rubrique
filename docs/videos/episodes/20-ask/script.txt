@@ -1,0 +1,49 @@
+# Episode 20: Ask, Command K on any passage.
+
+[mark hook]
+Press one shortcut, and an agent edits your text. You decide what stays.
+[pause 600]
+
+[mark problem]
+Copying text into a chat window and back again is slow and easy to get
+wrong. In Rubrique, the agent works on the file you have open.
+[pause 400]
+
+[mark open]
+This is the build plan I hand to my agent team. It is too wordy, so I
+press Command K.
+[pause 300]
+
+[mark presets]
+I can write my own request, or pick one: Shorter, Fix grammar, Table,
+Translate, or Explain.
+[mark shorter]
+I choose Shorter.
+[pause 300]
+The agent runs on my computer, with the Claude Code I already have
+installed.
+[pause 1500]
+
+[mark answer]
+The answer appears below the document, rendered like the page.
+[pause 400]
+
+[mark review]
+Review in merge shows my original on the left, the suggestion on the
+right, and the result in the middle.
+[pause 500]
+
+[mark accept]
+I take the first change.
+[pause 300]
+[mark reject]
+For the second, I prefer my own wording, so I keep the original.
+[pause 500]
+
+[mark apply]
+Apply, and the change bars show what moved in. Nothing was saved yet.
+[pause 600]
+
+[mark recap]
+So: Command K, a request, and a review before anything changes.
+[pause 800]

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Stand-in for the OpenRig CLI in episode 29: fixed JSON answers, starts nothing.
+case "$1 $2" in
+  "spec validate") echo '{"valid": true, "errors": [], "advisories": []}' ;;
+  "spec preflight") echo '{"ready": true, "warnings": [], "errors": []}' ;;
+  up\ *)
+    case " $* " in
+      *" --plan "*) echo '{"ok": true, "message": "Would start 4 seats in 3 pods: lead, build, qa, reviewer."}' ;;
+      *) sleep 2; echo '{"ok": true, "rigResult": "launched", "message": "invoice-factory is running with 4 seats."}' ;;
+    esac ;;
+  *) exit 1 ;;
+esac
