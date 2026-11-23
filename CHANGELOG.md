@@ -14,6 +14,10 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   one file or several and each opens in a tab. A file outside every
   explorer folder brings its folder into the explorer. The same command is
   in the Files menu and on a right click of the Add folder button.
+- **Shell colors.** Shell scripts (`.sh`, `.bash`, `.zsh`, `.bashrc`,
+  `.zshrc`) and `bash`, `sh`, `shell` and `zsh` code blocks are colored:
+  command names, comments, strings, heredocs, variables and keywords like
+  `if`, `for` and `done`.
 
 ### Fixed
 
