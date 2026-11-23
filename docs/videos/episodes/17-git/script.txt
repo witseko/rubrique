@@ -1,0 +1,41 @@
+# Episode 17: Git from the status bar.
+
+[mark hook]
+Your specs live in Git. Rubrique handles the everyday part from the status
+bar.
+[pause 600]
+
+[mark trust]
+Git runs only in repositories you trust. I click Not trusted,
+[mark trust-confirm]
+and trust this one.
+[pause 500]
+
+[mark branch]
+The status bar now shows the branch. I open it and type a name to create a
+new branch.
+[pause 400]
+[mark branch-create]
+[pause 1200]
+
+[mark edit]
+I switch to Edit, open the first paragraph, and add a rule to the spec: log
+every export with the caller ID.
+[pause 1200]
+[mark save]
+And save. The status bar picks up the change in a few seconds.
+[pause 2500]
+
+[mark commit]
+The branch menu counts one changed file. Commit,
+[mark message]
+a short message that says what changed, and Enter.
+[pause 3000]
+
+[mark done]
+Committed. Pull, stash and switching branches are in the same menu.
+[pause 600]
+
+[mark recap]
+So: trust once, then branch and commit without leaving the spec.
+[pause 800]

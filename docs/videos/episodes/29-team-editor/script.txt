@@ -36,5 +36,5 @@ and starts the team only when I confirm.
 
 [mark recap]
 So: edit the factory as a form, keep the YAML exact, and launch when it is
-ready. Next, sending a spec step to a seat on a remote machine.
+ready.
 [pause 800]

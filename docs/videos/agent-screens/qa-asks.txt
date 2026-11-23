@@ -1,0 +1,11 @@
+
+ qa · invoice-export
+
+ > Check tests/test_exports.py against the spec.
+
+   The DELETE test expects 200. The spec says 204 for a cancelled job.
+
+   Edit tests/test_exports.py?
+   Do you want to make this edit?
+   › 1. Yes
+     2. No

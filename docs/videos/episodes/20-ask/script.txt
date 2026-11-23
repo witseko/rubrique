@@ -46,5 +46,4 @@ Apply, and the change bars show what moved in. Nothing was saved yet.
 
 [mark recap]
 So: Command K, a request, and a review before anything changes.
-Next, the same request to two agents at once.
 [pause 800]

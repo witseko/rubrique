@@ -69,7 +69,30 @@ stop_recorder() {
     recorder=""
   fi
 }
-trap 'stop_recorder; cleanup' EXIT
+# The sandbox's own tmux server, separate from yours through TMUX_TMPDIR.
+sandbox_tmux() {
+  env -u TMUX TMUX_TMPDIR="$work/tmux" tmux "$@"
+}
+
+stop_sandbox_tmux() {
+  sandbox_tmux kill-server 2>/dev/null || true
+}
+trap 'stop_recorder; stop_sandbox_tmux; cleanup' EXIT
+
+# Start a tmux session NAME in the sample folder that runs a stand-in AGENT
+# (claude or codex) showing SCREEN and, after one line of input, AFTER.
+# Call it before start_window: Rubrique folds an empty Terminals list.
+start_agent_session() {
+  local name="$1" agent="$2" screen="$3" after="${4:-}"
+  local agents="$work/agentbin"
+  if [[ ! -x "$agents/claude" ]]; then
+    mkdir -p "$agents"
+    swiftc -O "$videos/tools/stand-in-agent.swift" -o "$agents/claude"
+    cp "$agents/claude" "$agents/codex"
+  fi
+  sandbox_tmux new-session -d -s "$name" -x 100 -y 30 -c "$notes" \
+    "$agents/$agent" "$screen" ${after:+"$after"}
+}
 
 # Record the window's content (its bottom window_height points, below the
 # title bar) for the length of the voice plus a lead-in and a tail.
@@ -100,9 +123,20 @@ require_front() {
   "$drive" front "$pid"
 }
 
+# The height of the window's title bar, above the recorded picture. Steps
+# may point before start_recording, so measure it on first use.
+measure_title_bar() {
+  local x y width height
+  read -r x y width height <<< "$("$drive" frame "$id")"
+  title_bar=$(( height - window_height ))
+}
+
 # Move the pointer smoothly to (X, Y) of the recorded picture.
 glide_to() {
   require_front
+  if (( title_bar == 0 )); then
+    measure_title_bar
+  fi
   "$drive" glide "$id" "$1" $(( $2 + title_bar )) ${3:+"$3"}
 }
 
@@ -110,6 +144,12 @@ glide_to() {
 click_at() {
   glide_to "$1" "$2"
   "$drive" click "$id" "$1" $(( $2 + title_bar ))
+}
+
+# Glide to (X, Y) of the recorded picture and right-click there.
+right_click_at() {
+  glide_to "$1" "$2"
+  "$drive" rightclick "$id" "$1" $(( $2 + title_bar ))
 }
 
 # Wait until the voice reaches MARK, so the next step happens as it is said.

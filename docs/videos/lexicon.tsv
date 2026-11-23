@@ -2,7 +2,7 @@
 # Whole words only; the longest written form wins. Captions keep the written form.
 # spoken is how to say it ("tee mux") or ipa:SOUNDS in the International Phonetic Alphabet.
 # Rubrique is French.
-Rubrique	ipa:ʁy.bʁik
+Rubrique	ipa:ʁy.ˈbʁik
 tmux	tee mux
 whisper.cpp	whisper C P P
 rig.yaml	rig dot yammel

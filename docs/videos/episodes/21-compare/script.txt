@@ -48,5 +48,4 @@ And if I change my mind, Command Z undoes it.
 
 [mark recap]
 So: Command K, Compare with, and keep what you like from each.
-Next, how to call your own named agents and skills with at A I dash.
 [pause 800]

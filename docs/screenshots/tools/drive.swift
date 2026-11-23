@@ -11,6 +11,7 @@
 //   swift drive.swift move ID X Y               moves the pointer
 //   swift drive.swift glide ID X Y [MS]         moves the pointer smoothly (for video)
 //   swift drive.swift click ID X Y              clicks there
+//   swift drive.swift rightclick ID X Y         right-clicks there
 //   swift drive.swift type TEXT                 types the text
 //   swift drive.swift key NAME                  presses a key: escape, backspace, up, cmd+k, cmd+shift+e
 import AppKit
@@ -92,6 +93,13 @@ func click(at point: CGPoint) {
     usleep(150_000)
     post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left))
     post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left))
+}
+
+func rightClick(at point: CGPoint) {
+    move(to: point)
+    usleep(150_000)
+    post(CGEvent(mouseEventSource: nil, mouseType: .rightMouseDown, mouseCursorPosition: point, mouseButton: .right))
+    post(CGEvent(mouseEventSource: nil, mouseType: .rightMouseUp, mouseCursorPosition: point, mouseButton: .right))
 }
 
 /// Press and release a key, with modifier flags.
@@ -196,6 +204,8 @@ case "glide" where args.count == 4 || args.count == 5:
     glide(to: target, milliseconds: milliseconds)
 case "click" where args.count == 4:
     click(at: point(in: window(args[args.startIndex + 1]), args[args.startIndex + 2], args[args.startIndex + 3]))
+case "rightclick" where args.count == 4:
+    rightClick(at: point(in: window(args[args.startIndex + 1]), args[args.startIndex + 2], args[args.startIndex + 3]))
 case "type" where args.count == 2:
     type(args[args.startIndex + 1])
 case "key" where args.count == 2:
@@ -207,5 +217,5 @@ case "key" where args.count == 2:
     }
     pressWithModifiers(code, parts)
 default:
-    fail("usage: drive.swift window|activate|frame|move|glide|click|type|key ... (see the top of the file)")
+    fail("usage: drive.swift window|activate|frame|move|glide|click|rightclick|type|key ... (see the top of the file)")
 }

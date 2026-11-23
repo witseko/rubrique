@@ -1,0 +1,36 @@
+# Episode 25: Terminals with agent status.
+
+[mark hook]
+Run every agent in its own terminal, and see at a glance which one needs
+you.
+[pause 600]
+
+[mark list]
+The Terminals list shows each tmux session in this folder. A dot shows the
+agent's state: build is working, lead is idle, and qa needs me.
+[pause 500]
+
+[mark open]
+I click qa, and it opens as a tab.
+[pause 400]
+
+[mark answer]
+It wants to fix a test that expects the wrong status code. I type 1 and
+press Enter, right here in the editor.
+[pause 600]
+
+[mark working]
+qa goes back to work, and the list shows it working again.
+[pause 500]
+
+[mark full]
+Command Shift Enter makes the terminal full screen.
+[pause 800]
+[mark back]
+The same keys bring the explorer back.
+[pause 600]
+
+[mark recap]
+So: one list for all your agents, and you answer the one that needs you
+without leaving the editor.
+[pause 800]

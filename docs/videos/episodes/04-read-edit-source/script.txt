@@ -43,5 +43,4 @@ added is right there.
 
 [mark recap]
 So: Command Shift E to edit in place, Command E for the source.
-Next, how Rubrique shows what you changed before you save.
 [pause 800]

@@ -40,5 +40,5 @@ When I open the file again, my edits come back.
 
 [mark recap]
 So: bars for edits, dashed lines for deletions, and nothing is lost until
-you decide. Next, how to keep private notes in encrypted scratch files.
+you decide.
 [pause 800]

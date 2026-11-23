@@ -1,0 +1,7 @@
+
+ lead · invoice-export
+
+   Split spec.md into 4 tasks and handed them to the team.
+   build has the export job, qa checks the tests, reviewer reads every diff.
+
+ >

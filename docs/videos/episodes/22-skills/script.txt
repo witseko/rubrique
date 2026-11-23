@@ -45,5 +45,5 @@ long it takes.
 
 [mark recap]
 So: put a skill in your skills folder, pick it from Command K, and the
-agent writes your way. Next, notes that agents resolve.
+agent writes your way.
 [pause 800]
