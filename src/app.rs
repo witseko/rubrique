@@ -2031,6 +2031,7 @@ impl RubriqueApp {
                 self.move_terminal(terminal_rows, &name, &anchor, after);
             }
             ExplorerAction::AddFolder => self.choose_folder_to_add(),
+            ExplorerAction::ChooseFiles => self.choose_files_to_open(),
             ExplorerAction::OpenPath => self.start_open_path(),
             ExplorerAction::CloneRepository => self.start_clone_repo(),
             ExplorerAction::AddRemoteFolder => self.open_add_remote(),

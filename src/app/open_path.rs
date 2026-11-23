@@ -1,7 +1,8 @@
 //! "Open path" (Cmd+O): open a file, or show a folder in the explorer,
 //! from a typed or pasted path. `~` is the home folder, a relative path
 //! starts at the explorer folder of the open file (or the first folder),
-//! and `file.md:12` opens the file on line 12.
+//! and `file.md:12` opens the file on line 12. "Open file" picks files in
+//! the system dialog instead.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -103,15 +104,37 @@ impl RubriqueApp {
     /// arguments, a file outside every explorer folder brings its folder in.
     pub(super) fn open_system_documents(&mut self, ctx: &Context) {
         for path in crate::open_documents::take() {
-            let is_folder = path.is_dir();
-            if !is_folder
-                && let Some(folder) = path.parent()
-                && !self.roots.iter().any(|root| path.starts_with(&root.path))
-            {
-                self.add_folder(folder.to_path_buf());
+            if path.is_dir() {
+                self.open_target(ctx, Target { path, line: None, is_folder: true });
+            } else {
+                self.open_file_with_its_folder(path);
             }
-            self.open_target(ctx, Target { path, line: None, is_folder });
         }
+    }
+
+    /// "Open file": let the user pick files in the system dialog and open
+    /// each in a tab. The dialog starts in the folder of the open file.
+    pub(super) fn choose_files_to_open(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("Open file");
+        let start =
+            self.open_file.path().and_then(Path::parent).map(Path::to_path_buf).or_else(|| self.relative_base());
+        if let Some(start) = start {
+            dialog = dialog.set_directory(start);
+        }
+        for path in dialog.pick_files().unwrap_or_default() {
+            self.open_file_with_its_folder(path);
+        }
+    }
+
+    /// Open a file in a tab. A file outside every explorer folder brings
+    /// its folder in, so the tree shows where the file is.
+    fn open_file_with_its_folder(&mut self, path: PathBuf) {
+        if let Some(folder) = path.parent()
+            && !self.roots.iter().any(|root| path.starts_with(&root.path))
+        {
+            self.add_folder(folder.to_path_buf());
+        }
+        self.open_in_tab(path);
     }
 
     /// The folder a relative path starts from: the explorer folder holding
@@ -290,6 +313,25 @@ mod tests {
         assert_eq!(resolve("  ", None, None).unwrap_err(), "Type or paste a path.");
         assert!(resolve("relative.md", None, None).unwrap_err().contains("full path"));
         assert!(resolve("~/x", None, None).unwrap_err().contains("home folder"));
+    }
+
+    #[test]
+    fn file_outside_the_explorer_brings_its_folder_in() {
+        let inside = TempFolder::new();
+        let outside = TempFolder::new();
+        let known = inside.write("known.md", "x");
+        let stray = outside.write("notes/stray.md", "x");
+        let roots = vec![inside.path().to_path_buf()];
+        let mut app = RubriqueApp::new(&Context::default(), crate::settings::Settings::default(), roots, None);
+        let root_paths = |app: &RubriqueApp| app.roots.iter().map(|root| root.path.clone()).collect::<Vec<_>>();
+
+        app.open_file_with_its_folder(known.clone());
+        assert_eq!(app.open_file.path(), Some(known.as_path()));
+        assert_eq!(root_paths(&app), [inside.path().to_path_buf()]);
+
+        app.open_file_with_its_folder(stray.clone());
+        assert_eq!(app.open_file.path(), Some(stray.as_path()));
+        assert_eq!(root_paths(&app), [inside.path().to_path_buf(), outside.path().join("notes")]);
     }
 
     #[test]

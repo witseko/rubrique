@@ -44,6 +44,8 @@ pub enum ExplorerAction {
     RemoveRoot(PathBuf),
     /// Ask the system for a folder to add as a root.
     AddFolder,
+    /// Ask the system for files to open.
+    ChooseFiles,
     /// Show the "Open path" dialog, to open a file or folder by its path.
     OpenPath,
     /// Show the "Clone repository" dialog, to clone a git repository and add it.
@@ -407,12 +409,16 @@ fn files_header(
             {
                 *action = Some(ExplorerAction::AddRemoteFolder);
             }
-            let folder_tip = "Add a folder to the explorer (right click to type a path or clone a repository)";
+            let folder_tip =
+                "Add a folder to the explorer (right click to open a file, type a path or clone a repository)";
             let folder = small_icon_button(ui, Icon::FolderPlus, HEADER_BUTTON_SIZE, "Add folder", folder_tip);
             if folder.clicked() {
                 *action = Some(ExplorerAction::AddFolder);
             }
             folder.context_menu(|ui| {
+                if ui.button("Open file...").clicked() {
+                    *action = Some(ExplorerAction::ChooseFiles);
+                }
                 if ui.button("Open path... (Cmd+O)").clicked() {
                     *action = Some(ExplorerAction::OpenPath);
                 }
@@ -449,6 +455,7 @@ fn files_menu(
         fold_all_item(ui, roots);
         let mut folders = vec![
             ("Add folder...", ExplorerAction::AddFolder),
+            ("Open file...", ExplorerAction::ChooseFiles),
             ("Open path... (Cmd+O)", ExplorerAction::OpenPath),
             ("Clone repository...", ExplorerAction::CloneRepository),
         ];

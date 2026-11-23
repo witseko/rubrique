@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Open file.** File → Open file... shows the system's file window; pick
+  one file or several and each opens in a tab. A file outside every
+  explorer folder brings its folder into the explorer. The same command is
+  in the Files menu and on a right click of the Add folder button.
+
 ### Fixed
 
 - **Seat inspector header in a narrow window.** The seat's title and its
