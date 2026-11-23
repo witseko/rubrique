@@ -30,6 +30,7 @@ pub(super) enum MenuCommand {
     NewEncryptedScratch,
     ImportFromSublime,
     AddFolder,
+    OpenFile,
     OpenPath,
     CloneRepository,
     Save,
@@ -99,6 +100,7 @@ impl RubriqueApp {
             item("Import from Sublime Text", MenuCommand::ImportFromSublime, None),
             MenuEntry::Separator,
             item("Add folder...", MenuCommand::AddFolder, None),
+            item("Open file...", MenuCommand::OpenFile, None),
             item("Open path...", MenuCommand::OpenPath, Some(&OPEN_PATH)),
             item("Clone repository...", MenuCommand::CloneRepository, None),
             MenuEntry::Separator,
@@ -187,6 +189,7 @@ impl RubriqueApp {
             MenuCommand::NewEncryptedScratch => self.new_scratch(ctx, true),
             MenuCommand::ImportFromSublime => self.import_from_sublime(),
             MenuCommand::AddFolder => self.choose_folder_to_add(),
+            MenuCommand::OpenFile => self.choose_files_to_open(),
             MenuCommand::OpenPath => self.start_open_path(),
             MenuCommand::CloneRepository => self.start_clone_repo(),
             MenuCommand::Save => {
