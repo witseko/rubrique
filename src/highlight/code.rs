@@ -550,7 +550,7 @@ fn number_end(text: &str, start: usize) -> usize {
 /// Where the string ends: just past the closing `quote` (backslash escapes
 /// skipped). Without one, at the end of the line, or of the text when
 /// `spans_lines` is set.
-fn closing_quote(text: &str, from: usize, quote: &[u8], spans_lines: bool) -> usize {
+pub(super) fn closing_quote(text: &str, from: usize, quote: &[u8], spans_lines: bool) -> usize {
     let bytes = text.as_bytes();
     let mut index = from;
     while index < bytes.len() {
@@ -573,7 +573,7 @@ fn followed_by_colon(text: &str, position: usize) -> bool {
 }
 
 /// The end of the line that `position` is on (before its newline).
-fn line_end(text: &str, position: usize) -> usize {
+pub(super) fn line_end(text: &str, position: usize) -> usize {
     text[position..].find('\n').map_or(text.len(), |offset| position + offset)
 }
 

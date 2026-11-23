@@ -8,6 +8,13 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Added
+
+- **Shell colors.** Shell scripts (`.sh`, `.bash`, `.zsh`, `.bashrc`,
+  `.zshrc`) and `bash`, `sh`, `shell` and `zsh` code blocks are colored:
+  command names, comments, strings, heredocs, variables and keywords like
+  `if`, `for` and `done`.
+
 ### Fixed
 
 - **Seat inspector header in a narrow window.** The seat's title and its
