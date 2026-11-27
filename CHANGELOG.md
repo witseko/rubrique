@@ -8,6 +8,18 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **New interface font.** The app now uses Inter, a font made for screens,
+  in place of the thin default font. Headings, bold text and dialog titles
+  are truly bold, and interface text is a point smaller and crisper, so
+  the explorer, tabs and status bar look calmer and fit more.
+- **Luminous theme.** The default dark theme, formerly Indigo, is now
+  called Luminous: its links, cursor, focus outlines and selection are
+  Luminous Blue, after the WGSN and Coloro colour of the year 2027, in
+  place of lavender. A saved choice of Indigo keeps working.
+- **Blue app icon.** The "R" icon now sits on a Luminous Blue tile.
+
 ## [1.11.0] - 2026-11-23
 
 ### Added

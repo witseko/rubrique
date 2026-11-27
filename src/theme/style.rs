@@ -1,8 +1,10 @@
 //! Turn a theme into egui styles and install it.
 
+use std::sync::Arc;
+
 use eframe::egui::style::ScrollAnimation;
 use eframe::egui::{
-    self, Color32, Context, CornerRadius, FontDefinitions, FontFamily, FontId, Stroke, Style, TextStyle,
+    self, Color32, Context, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Stroke, Style, TextStyle,
     ThemePreference, Visuals,
 };
 
@@ -10,13 +12,14 @@ use super::catalog::{ThemeChoice, Themes};
 use super::palette::{Base, Palette, Rgb, Theme};
 use crate::settings::accessibility::{AccessibilitySettings, EDITOR_FONT_SIZE};
 
-/// Font size of labels, buttons and fields. egui's 13 points read small
-/// next to macOS text; one point more fills the same rows comfortably.
-const BODY_SIZE: f32 = 14.0;
+/// Font size of labels, buttons and fields: the 13 points of macOS and
+/// T3 Code interfaces. Inter's tall lowercase reads as large as egui's old
+/// font did at 14.
+const BODY_SIZE: f32 = 13.0;
 /// Font size of hints and secondary details (egui's 9 points are hard to read).
 const SMALL_SIZE: f32 = 11.0;
 /// Font size of dialog titles.
-const HEADING_SIZE: f32 = 20.0;
+const HEADING_SIZE: f32 = 18.0;
 /// Height of a line in the source editor as a multiple of the editor font
 /// size: the breathing room of a writing app rather than a terminal.
 pub const EDITOR_LINE_HEIGHT: f32 = 1.5;
@@ -50,23 +53,43 @@ pub fn apply_theme(ctx: &Context, themes: &Themes, choice: &ThemeChoice) {
     }
 }
 
-/// Install the built-in fonts with Hack as a fallback for the interface
-/// font. Ubuntu-Light, egui's interface font, has no arrows (the symlink
-/// marker `↗`, the `↑ up` button) and egui 0.37 no longer falls back to an
-/// emoji font, so those drew as empty boxes. Hack is already bundled for the
-/// editor and covers them.
+/// Font of labels, buttons, fields and preview text. Inter is a screen
+/// font with real weights; egui's own Ubuntu-Light is thin and has no bold.
+const INTERFACE_FONT: &str = "Inter-Regular";
+/// Font of headings and bold text (see [`bold_family`]).
+const BOLD_FONT: &str = "Inter-SemiBold";
+
+/// The font family of bold text. egui's `strong()` only brightens the color,
+/// so text that should look bold also needs this family.
+pub fn bold_family() -> FontFamily {
+    FontFamily::Name(BOLD_FONT.into())
+}
+
+/// Install Inter as the interface font, its semibold weight as the bold
+/// family, and Hack as a fallback for both. egui 0.37 no longer falls back
+/// to an emoji font, so arrows (the symlink marker `↗`, the `↑ up` button)
+/// need a font that has them; Hack is already bundled for the editor.
 pub fn install_fonts(ctx: &Context) {
     ctx.set_fonts(font_definitions());
 }
 
-/// egui's default fonts with Hack added right after the interface font.
+/// egui's default fonts with Inter first and Hack right after it.
 fn font_definitions() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
+    for (name, bytes) in [
+        (INTERFACE_FONT, include_bytes!("../../assets/fonts/Inter-Regular.ttf").as_slice()),
+        (BOLD_FONT, include_bytes!("../../assets/fonts/Inter-SemiBold.ttf").as_slice()),
+    ] {
+        fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(bytes)));
+    }
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
-    // Right after the main font, so it wins over the icon fallbacks but never
-    // replaces a letter Ubuntu-Light has.
-    let position = proportional.iter().position(|name| name == "Ubuntu-Light").map_or(0, |index| index + 1);
-    proportional.insert(position, "Hack".to_owned());
+    // Hack before egui's icon fallbacks, so it wins for arrows but never
+    // replaces a letter Inter has.
+    proportional.insert(0, "Hack".to_owned());
+    let fallbacks = proportional.clone();
+    proportional.insert(0, INTERFACE_FONT.to_owned());
+    let bold = std::iter::once(BOLD_FONT.to_owned()).chain(fallbacks).collect();
+    fonts.families.insert(bold_family(), bold);
     fonts
 }
 
@@ -138,7 +161,7 @@ fn style(theme: &Theme) -> Style {
         (TextStyle::Small, FontId::proportional(SMALL_SIZE)),
         (TextStyle::Body, FontId::proportional(BODY_SIZE)),
         (TextStyle::Button, FontId::proportional(BODY_SIZE)),
-        (TextStyle::Heading, FontId::proportional(HEADING_SIZE)),
+        (TextStyle::Heading, FontId::new(HEADING_SIZE, bold_family())),
         (TextStyle::Monospace, FontId::monospace(f32::from(EDITOR_FONT_SIZE))),
     ]
     .into();
@@ -226,7 +249,9 @@ mod tests {
         ctx.fonts_mut(|fonts| {
             assert!(fonts.has_glyphs(&font, "↗↑"));
             // Letters still come from the interface font, not the fallback.
-            assert_eq!(fonts.characters(&FontFamily::Proportional)[&'a'][0], "Ubuntu-Light");
+            assert_eq!(fonts.characters(&FontFamily::Proportional)[&'a'][0], INTERFACE_FONT);
+            assert!(fonts.has_glyphs(&FontId::new(14.0, bold_family()), "Bold ↗"));
+            assert_eq!(fonts.characters(&bold_family())[&'a'][0], BOLD_FONT);
         });
     }
 
@@ -298,9 +323,9 @@ mod tests {
     }
 
     #[test]
-    fn text_is_larger_than_egui_default() {
+    fn interface_text_sizes() {
         let text_styles = style(&Theme::builtin(Base::Light)).text_styles;
-        assert_eq!(text_styles[&TextStyle::Body], FontId::proportional(14.0));
+        assert_eq!(text_styles[&TextStyle::Body], FontId::proportional(13.0));
         assert_eq!(text_styles[&TextStyle::Small], FontId::proportional(11.0));
         assert_eq!(text_styles[&TextStyle::Monospace], FontId::monospace(14.0));
     }

@@ -193,7 +193,7 @@ mod tests {
         let light = Theme::builtin(Base::Light);
         let dark = Theme::builtin(Base::Dark);
         assert_eq!((light.id.as_str(), light.name.as_str()), ("light", "Light"));
-        assert_eq!((dark.id.as_str(), dark.name.as_str()), ("dark", "Indigo"));
+        assert_eq!((dark.id.as_str(), dark.name.as_str()), ("dark", "Luminous"));
         assert_ne!(light.palette.background, dark.palette.background);
         assert!(!light.palette.background.is_dark());
         assert!(dark.palette.background.is_dark());

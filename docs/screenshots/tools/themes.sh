@@ -3,7 +3,7 @@
 source "$(dirname "$0")/capture.zsh"
 "$drive" permissions capture
 themes=(light dark sepia midnight high-contrast)
-labels=("Light" "Indigo" "Sepia" "Midnight" "High contrast")
+labels=("Light" "Luminous" "Sepia" "Midnight" "High contrast")
 parts=()
 for index in {1..5}; do
   theme="${themes[$index]}"

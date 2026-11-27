@@ -278,8 +278,8 @@ mod tests {
         // Light theme accent and error: dark fills, white labels.
         assert_eq!(text_on(Color32::from_rgb(0x2f, 0x6f, 0xde)), Color32::WHITE);
         assert_eq!(text_on(Color32::from_rgb(0xc6, 0x2f, 0x2f)), Color32::WHITE);
-        // Indigo accent and error: light fills, dark labels.
-        assert_ne!(text_on(Color32::from_rgb(0xa7, 0x9b, 0xff)), Color32::WHITE);
+        // Luminous accent and error: light fills, dark labels.
+        assert_ne!(text_on(Color32::from_rgb(0x7b, 0x9f, 0xee)), Color32::WHITE);
         assert_ne!(text_on(Color32::from_rgb(0xf0, 0x72, 0x72)), Color32::WHITE);
     }
 
