@@ -150,7 +150,7 @@ pub(super) fn terminal_group(
 ) {
     let folded = context.folded_terminal_groups.contains(&group.key);
     // Folder colors show only with several folders, as on the tabs.
-    let color = group.root.filter(|_| context.can_remove_roots).map(group_color);
+    let color = group.root.filter(|_| context.several_roots).map(group_color);
     let header = group_header(ui, group, folded, color);
     if header.clicked() {
         *action = Some(ExplorerAction::ToggleTerminalGroup(group.key.clone()));
