@@ -1,13 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
   <title>rubrique</title>
-  <!-- App icon: a capital "R" whose leg ends in a marker tip, on the Indigo theme's colors
-       (deep indigo tile, lavender-white stroke, yellow tip).
+  <!-- App icon: a capital "R" whose leg ends in a marker tip, on the Luminous theme's colors
+       (Luminous Blue tile, blue-white stroke, yellow tip).
        The tile follows the macOS grid: an 824 px rounded square inside 1024. The "R" is centered:
        the same gap to the tile edge on the left and right, and top and bottom. -->
-  <rect x="100" y="100" width="824" height="824" rx="185" fill="#2b2170"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="#0044a7"/>
   <g transform="translate(512 512) scale(1.12) translate(-445 -518)">
     <path d="M300 730 V300 H450 Q590 300 590 415 Q590 530 450 530 H300 M450 530 Q590 530 590 640"
-          fill="none" stroke="#ebe8ff" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+          fill="none" stroke="#e8efff" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
     <polygon points="544,640 636,640 620,760 560,782" fill="#ffc233"/>
   </g>
 </svg>

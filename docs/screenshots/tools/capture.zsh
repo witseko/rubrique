@@ -60,6 +60,8 @@ start_window() {
       printf 'tab=%s/%s\n' "$notes" "$tab"
     done
     printf 'ai_allowed_folder=%s\n' "$notes"
+    # Trust the sample repository, so the status bar shows its branch.
+    printf 'trusted_repository=%s\n' "$notes"
     if [[ -n "${sample_settings:-}" ]]; then
       printf '%s\n' "$sample_settings"
     fi

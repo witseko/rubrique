@@ -9,6 +9,7 @@ use eframe::egui::{self, Color32, Margin, RichText, Ui, vec2};
 use super::front_matter::{FrontMatter, TrustTier, actor_parts, list_items, mapping, readable_date};
 use super::inlines::is_openable_url;
 use super::render::{local_markdown_link, request_open};
+use crate::theme::style::bold_family;
 
 /// Text sizes of the card, set from the page's look and zoom.
 pub(super) struct CardSizes {
@@ -51,7 +52,9 @@ pub(super) fn render_front_matter(ui: &mut Ui, sizes: &CardSizes, front: &FrontM
             header_line(ui, sizes, front);
         }
         if let Some(title) = front.get("title") {
-            ui.label(RichText::new(title).size(sizes.title).color(ui.visuals().strong_text_color()));
+            ui.label(
+                RichText::new(title).size(sizes.title).family(bold_family()).color(ui.visuals().strong_text_color()),
+            );
         }
         if let Some(description) = front.get("description") {
             ui.label(RichText::new(description).size(sizes.body));

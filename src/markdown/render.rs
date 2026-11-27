@@ -18,7 +18,7 @@ use super::table_edit::TableCell;
 use crate::document::highlighting::{HighlightStyle, Syntax, highlighted};
 use crate::media::{MAX_IMAGE_BYTES, MediaKind, image_uri, is_image_path, media_kind_of_url};
 use crate::theme::palette::Rgb;
-use crate::theme::style::page_fill;
+use crate::theme::style::{bold_family, page_fill};
 
 /// Sizes and spacing for one place Markdown is drawn.
 struct Look {
@@ -40,12 +40,12 @@ struct Look {
 
 /// The preview of the open file, at 100% zoom.
 const PAGE: Look = Look {
-    heading_sizes: [32.0, 26.0, 21.0, 18.0, 16.0, 16.0],
+    heading_sizes: [28.0, 22.0, 18.0, 16.0, 15.0, 15.0],
     heading_gaps: [28.0, 24.0, 18.0, 14.0, 14.0, 14.0],
     ruled_level: 2,
     rule_gap: 8.0,
-    body_size: 16.0,
-    body_line_height: 26.0,
+    body_size: 15.0,
+    body_line_height: 24.0,
     block_gap: 12.0,
     file_tools: true,
 };
@@ -74,7 +74,8 @@ pub fn set_page_zoom(zoom: f32) {
     PAGE_ZOOM.store(zoom.to_bits(), Ordering::Relaxed);
 }
 
-fn page_zoom() -> f32 {
+/// Zoom of the page's text in the preview (1.0 is 100%).
+pub fn page_zoom() -> f32 {
     f32::from_bits(PAGE_ZOOM.load(Ordering::Relaxed))
 }
 
@@ -91,11 +92,11 @@ fn read_only_page_look() -> Look {
 
 /// Smaller and tighter, for AI answers.
 const COMPACT: Look = Look {
-    heading_sizes: [19.0, 17.0, 15.5, 14.5, 14.0, 14.0],
+    heading_sizes: [18.0, 16.0, 15.0, 14.0, 13.0, 13.0],
     heading_gaps: [14.0, 12.0, 10.0, 8.0, 8.0, 8.0],
     ruled_level: 1,
     rule_gap: 4.0,
-    body_size: 14.0,
+    body_size: 13.0,
     body_line_height: 20.0,
     block_gap: 8.0,
     file_tools: false,
@@ -1137,14 +1138,22 @@ fn code_label(ui: &mut Ui, text: egui::WidgetText, style: &TextStyle, scroll: Op
 }
 
 /// How far a code span's baseline sits above the body text's when both are
-/// centered in a row, rounded to whole pixels so the text stays sharp.
+/// centered in a row as tall as a body line, rounded to whole pixels so the
+/// text stays sharp. Measured from laid-out text, so egui's own rounding of
+/// each glyph's position is part of it.
 fn code_baseline_drop(ui: &Ui, style: &TextStyle) -> f32 {
-    let centered_baseline = |font_id: egui::FontId| {
-        let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap("x".to_owned(), font_id, Color32::PLACEHOLDER));
-        galley.rows[0].row.glyphs.first().map_or(0.0, |glyph| glyph.font_ascent - glyph.font_height / 2.0)
+    let centered_baseline = |font_id: egui::FontId, line_height: Option<f32>| {
+        let mut job = egui::text::LayoutJob::single_section(
+            "x".to_owned(),
+            egui::TextFormat { font_id, line_height, ..Default::default() },
+        );
+        job.wrap.max_width = f32::INFINITY;
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let top = (style.line_height - galley.size().y) / 2.0;
+        galley.rows[0].row.glyphs.first().map_or(0.0, |glyph| top + glyph.pos.y)
     };
-    let drop = centered_baseline(egui::FontId::proportional(style.size))
-        - centered_baseline(egui::FontId::monospace(style.size * INLINE_CODE_SCALE));
+    let drop = centered_baseline(egui::FontId::proportional(style.size), Some(style.line_height))
+        - centered_baseline(egui::FontId::monospace(style.size * INLINE_CODE_SCALE), None);
     let pixels_per_point = ui.pixels_per_point();
     (drop * pixels_per_point).round() / pixels_per_point
 }
@@ -1171,7 +1180,7 @@ fn span_rich_text(text: String, style: &TextStyle) -> RichText {
         rich = rich.underline();
     }
     if style.strong {
-        rich = rich.strong();
+        rich = rich.strong().family(bold_family());
     }
     if style.italic {
         rich = rich.italics();

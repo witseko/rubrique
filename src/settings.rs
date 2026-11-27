@@ -504,7 +504,7 @@ mod tests {
     }
 
     #[test]
-    fn theme_defaults_to_indigo() {
+    fn theme_defaults_to_luminous() {
         assert_eq!(Settings::parse("").theme, ThemeChoice::Named("dark".to_string()));
         assert_eq!(Settings::parse("theme=system\n").theme, ThemeChoice::System);
         assert_eq!(Settings::parse("theme=light\n").theme, ThemeChoice::Named("light".to_string()));

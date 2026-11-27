@@ -1,8 +1,8 @@
-# Rubrique built-in theme: Indigo (the default dark theme, id "dark": neutral greys with an indigo accent)
+# Rubrique built-in theme: Luminous (the default dark theme, id "dark": neutral greys with a Luminous Blue accent, after the WGSN and Coloro colour of the year 2027, Coloro 125-28-38)
 # Copy this file to ~/.config/rubrique/themes/ (macOS: ~/Library/Application
 # Support/rubrique/themes/) under a new name to make your own theme.
 # Colors are #rrggbb. Keys you leave out come from the `base` theme.
-name=Indigo
+name=Luminous
 base=dark
 
 # Editor and preview page, text fields, dialogs
@@ -21,9 +21,9 @@ text_strong=#f4f5f7
 # Hints, quotes, info strings
 text_weak=#8a9099
 # Links, text cursor, focus outline
-accent=#a79bff
+accent=#7b9fee
 # Selected text and the open file in the explorer
-selection=#38336f
+selection=#183d70
 code_background=#26292e
 warning=#e0b252
 error=#f07272

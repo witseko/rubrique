@@ -126,7 +126,15 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, label: &str, tip: &str, active: bool
     } else {
         Color32::TRANSPARENT
     };
-    let color = if active { visuals.strong_text_color() } else { ui.style().interact(&response).fg_stroke.color };
+    // Muted at rest, so rows of icons stay quiet beside the text; full
+    // strength under the mouse, with keyboard focus, or while active.
+    let color = if active {
+        visuals.strong_text_color()
+    } else if response.hovered() || response.has_focus() {
+        ui.style().interact(&response).fg_stroke.color
+    } else {
+        visuals.weak_text_color()
+    };
     let painter = ui.painter();
     painter.rect_filled(rect, visuals.widgets.inactive.corner_radius, fill);
     // A badge cuts a gap into the shape in the color behind the icon.

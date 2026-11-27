@@ -631,17 +631,19 @@ fn option_tip(name: &str, on: bool) -> String {
 }
 
 /// An on / off button at least `min_size`: filled and outlined in the
-/// accent while on, only outlined while off, so the state reads at a glance.
+/// accent while on, plain muted text while off, so the state reads at a
+/// glance without a row of boxes.
 fn option_toggle(ui: &mut Ui, on: bool, label: &str, min_size: Vec2) -> egui::Response {
     let visuals = ui.visuals();
-    let (fill, stroke, color) = if on {
-        (visuals.selection.bg_fill, Stroke::new(ACCENT_STROKE, visuals.hyperlink_color), visuals.strong_text_color())
+    let button = if on {
+        let stroke = Stroke::new(ACCENT_STROKE, visuals.hyperlink_color);
+        egui::Button::new(RichText::new(label).color(visuals.strong_text_color()))
+            .fill(visuals.selection.bg_fill)
+            .stroke(stroke)
     } else {
-        (Color32::TRANSPARENT, Stroke::new(1.0, outline_color(visuals)), visuals.text_color())
+        egui::Button::new(RichText::new(label).color(visuals.weak_text_color())).frame(false)
     };
-    let button =
-        egui::Button::new(RichText::new(label).color(color)).selected(on).fill(fill).stroke(stroke).min_size(min_size);
-    add_steady(ui, button)
+    add_steady(ui, button.selected(on).min_size(min_size))
 }
 
 /// Add `widget` without egui's hover growth: a hovered or pressed button is
@@ -666,7 +668,7 @@ fn step_buttons(ui: &mut Ui, has_matches: bool, metrics: &BarMetrics) -> Option<
     ];
     let mut event = None;
     for (enabled, glyph, name, tip, clicked) in buttons {
-        let button = egui::Button::new(glyph).min_size(Vec2::splat(metrics.row));
+        let button = egui::Button::new(glyph).frame(false).min_size(Vec2::splat(metrics.row));
         let response = ui
             .add_enabled_ui(enabled, |ui| add_steady(ui, button))
             .inner

@@ -2895,7 +2895,9 @@ impl RubriqueApp {
             }
             let left = egui::Layout::left_to_right(egui::Align::Center);
             ui.allocate_ui_with_layout(ui.available_size(), left, |ui| {
-                ui.add(egui::Label::new(path_text.as_str()).truncate()).on_hover_text(path_text.as_str());
+                // Secondary to the page, so weaker than the buttons beside it.
+                let path_label = egui::Label::new(egui::RichText::new(path_text.as_str()).weak()).truncate();
+                ui.add(path_label).on_hover_text(path_text.as_str());
             });
         });
     }

@@ -19,14 +19,14 @@ const SYSTEM_ID: &str = "system";
 /// Which theme the user picked.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ThemeChoice {
-    /// Light, or Indigo (the dark theme) when the operating system is dark.
+    /// Light, or Luminous (the dark theme) when the operating system is dark.
     System,
     /// A theme by id (`light`, `dark`, or a file name in the themes folder).
     Named(String),
 }
 
 impl Default for ThemeChoice {
-    /// New installs start on Indigo, which is the built-in `dark` theme.
+    /// New installs start on Luminous, which is the built-in `dark` theme.
     fn default() -> Self {
         ThemeChoice::Named("dark".to_string())
     }
@@ -124,7 +124,7 @@ mod tests {
         let ids: Vec<&str> = themes.list.iter().map(|theme| theme.id.as_str()).collect();
         assert_eq!(ids, ["light", "dark", "sepia", "midnight", "high-contrast"]);
         let names: Vec<&str> = themes.list.iter().map(|theme| theme.name.as_str()).collect();
-        assert_eq!(names, ["Light", "Indigo", "Sepia", "Midnight", "High contrast"]);
+        assert_eq!(names, ["Light", "Luminous", "Sepia", "Midnight", "High contrast"]);
     }
 
     #[test]
@@ -145,7 +145,7 @@ mod tests {
         temp.write("notes.md", "name=Not a theme\n");
         let themes = Themes::load(Some(temp.path()));
         let names: Vec<&str> = themes.list.iter().map(|theme| theme.name.as_str()).collect();
-        assert_eq!(names, ["Light", "Indigo", "Sepia", "Midnight", "High contrast", "night owl", "Zen"]);
+        assert_eq!(names, ["Light", "Luminous", "Sepia", "Midnight", "High contrast", "night owl", "Zen"]);
         assert_eq!(themes.find("Night").map(|theme| theme.base), Some(Base::Dark));
     }
 
