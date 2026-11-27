@@ -28,6 +28,10 @@ use crate::voice::view::{MemoAction, take_memo_action};
 const EDITOR_MARGIN: (i8, i8) = (16, 12);
 /// Space (x, y) between the page edge and the preview text.
 const PREVIEW_MARGIN: (i8, i8) = (32, 24);
+/// Widest the preview's text column grows at 100% zoom, in points: about
+/// 100 characters of body text. Longer lines are hard to follow back to
+/// the start of the next one, so a wide window centers the column instead.
+const PREVIEW_MAX_WIDTH: f32 = 720.0;
 /// Space between the page edge and the line numbers.
 const GUTTER_LEAD: f32 = 8.0;
 /// Space between the line numbers and the gutter's divider line.
@@ -463,84 +467,86 @@ pub fn show_preview(
     set_image_folder(ui.ctx(), path.parent().map(Path::to_path_buf));
     egui::ScrollArea::vertical().id_salt(("preview-scroll", path)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
-            for (index, source) in blocks.iter().enumerate() {
-                let gap = top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0;
-                // Bottom of the block above (the first block has the page margin above it).
-                let above = ui.cursor().top();
-                if index > 0 {
-                    ui.add_space(gap);
-                }
-                let found = match editing.as_deref_mut() {
-                    // A new block typed in this gap: its box, then the gap again.
-                    Some(edit) if edit.inserting && edit.index == index => {
-                        let found = edit_box(ui, edit, mentions);
-                        ui.add_space(gap.max(0.0));
-                        found
+            reading_column(ui, |ui| {
+                for (index, source) in blocks.iter().enumerate() {
+                    let gap = top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0;
+                    // Bottom of the block above (the first block has the page margin above it).
+                    let above = ui.cursor().top();
+                    if index > 0 {
+                        ui.add_space(gap);
                     }
-                    _ if editable => insert_line(ui, index, above, ui.cursor().top()),
-                    _ => None,
-                };
-                if event.is_none() {
-                    event = found;
+                    let found = match editing.as_deref_mut() {
+                        // A new block typed in this gap: its box, then the gap again.
+                        Some(edit) if edit.inserting && edit.index == index => {
+                            let found = edit_box(ui, edit, mentions);
+                            ui.add_space(gap.max(0.0));
+                            found
+                        }
+                        _ if editable => insert_line(ui, index, above, ui.cursor().top()),
+                        _ => None,
+                    };
+                    if event.is_none() {
+                        event = found;
+                    }
+                    let here = changes_at(&mut pending_changes, index);
+                    if let Some(found) = deleted_rows(ui, &here)
+                        && event.is_none()
+                    {
+                        event = Some(found);
+                    }
+                    let mark_background = ui.painter().add(egui::Shape::Noop);
+                    let top = ui.cursor().top();
+                    let found = match editing.as_deref_mut() {
+                        Some(edit) if edit.index == index && !edit.inserting => match edit.cell {
+                            Some(cell) => cell_edit_block(ui, index, source, edit, cell),
+                            None => edit_box(ui, edit, mentions),
+                        },
+                        _ if editable => clickable_block(ui, index, source),
+                        _ => reading_block(ui, index, source),
+                    };
+                    let span = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
+                    let marked = here.iter().find(|change| change.kind != ChangeKind::Deleted);
+                    if let Some(change) = marked
+                        && block_mark(ui, span, mark_background, change)
+                        && event.is_none()
+                    {
+                        event = Some(PreviewEvent::RevertChange((*change).clone()));
+                    }
+                    if ui.rect_contains_pointer(span) {
+                        hovered = Some(index);
+                    }
+                    if scroll_target == Some(index) {
+                        ui.scroll_to_rect(span, Some(Align::TOP));
+                    }
+                    if top_offset.is_none() && span.bottom() > ui.clip_rect().top() {
+                        top_offset = Some(source.range.start);
+                    }
+                    if event.is_none() {
+                        event = found;
+                    }
                 }
-                let here = changes_at(&mut pending_changes, index);
+                // Blocks deleted after the last one.
+                let here = changes_at(&mut pending_changes, blocks.len());
                 if let Some(found) = deleted_rows(ui, &here)
                     && event.is_none()
                 {
                     event = Some(found);
                 }
-                let mark_background = ui.painter().add(egui::Shape::Noop);
-                let top = ui.cursor().top();
-                let found = match editing.as_deref_mut() {
-                    Some(edit) if edit.index == index && !edit.inserting => match edit.cell {
-                        Some(cell) => cell_edit_block(ui, index, source, edit, cell),
-                        None => edit_box(ui, edit, mentions),
-                    },
-                    _ if editable => clickable_block(ui, index, source),
-                    _ => reading_block(ui, index, source),
+                // Under the last block: the new block being typed, or empty
+                // space that starts one when clicked.
+                let found = match editing {
+                    Some(edit) if edit.index >= blocks.len() => edit_box(ui, edit, mentions),
+                    Some(_) => None,
+                    None if editable => new_block_space(ui),
+                    None => {
+                        ui.add_space(NEW_BLOCK_SPACE);
+                        None
+                    }
                 };
-                let span = egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().top());
-                let marked = here.iter().find(|change| change.kind != ChangeKind::Deleted);
-                if let Some(change) = marked
-                    && block_mark(ui, span, mark_background, change)
-                    && event.is_none()
-                {
-                    event = Some(PreviewEvent::RevertChange((*change).clone()));
-                }
-                if ui.rect_contains_pointer(span) {
-                    hovered = Some(index);
-                }
-                if scroll_target == Some(index) {
-                    ui.scroll_to_rect(span, Some(Align::TOP));
-                }
-                if top_offset.is_none() && span.bottom() > ui.clip_rect().top() {
-                    top_offset = Some(source.range.start);
-                }
                 if event.is_none() {
                     event = found;
                 }
-            }
-            // Blocks deleted after the last one.
-            let here = changes_at(&mut pending_changes, blocks.len());
-            if let Some(found) = deleted_rows(ui, &here)
-                && event.is_none()
-            {
-                event = Some(found);
-            }
-            // Under the last block: the new block being typed, or empty
-            // space that starts one when clicked.
-            let found = match editing {
-                Some(edit) if edit.index >= blocks.len() => edit_box(ui, edit, mentions),
-                Some(_) => None,
-                None if editable => new_block_space(ui),
-                None => {
-                    ui.add_space(NEW_BLOCK_SPACE);
-                    None
-                }
-            };
-            if event.is_none() {
-                event = found;
-            }
+            });
         });
     });
     ui.ctx().data_mut(|data| match top_offset {
@@ -565,28 +571,39 @@ pub fn show_read_only_preview(ui: &mut Ui, path: &Path, blocks: &[SourceBlock]) 
     set_image_folder(ui.ctx(), path.parent().map(Path::to_path_buf));
     egui::ScrollArea::vertical().id_salt(("preview-scroll", path)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(PREVIEW_MARGIN.0, PREVIEW_MARGIN.1)).show(ui, |ui| {
-            for (index, source) in blocks.iter().enumerate() {
-                if index > 0 {
-                    ui.add_space(top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0);
+            reading_column(ui, |ui| {
+                for (index, source) in blocks.iter().enumerate() {
+                    if index > 0 {
+                        ui.add_space(top_gap(&source.block) - f32::from(BLOCK_PAD) * 2.0);
+                    }
+                    // The same padding as an editable block, so both previews line up.
+                    egui::Frame::new().inner_margin(BLOCK_PAD).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        render_read_only_block(ui, &source.block);
+                    });
+                    if let Some(action) = take_code_action(ui.ctx()) {
+                        event = Some(PreviewEvent::Code { index, action });
+                    }
+                    if let Some(path) = take_play_request(ui.ctx()) {
+                        event = Some(PreviewEvent::PlayVideo(path));
+                    }
+                    if let Some(path) = take_open_request(ui.ctx()) {
+                        event = Some(PreviewEvent::OpenFile(path));
+                    }
                 }
-                // The same padding as an editable block, so both previews line up.
-                egui::Frame::new().inner_margin(BLOCK_PAD).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    render_read_only_block(ui, &source.block);
-                });
-                if let Some(action) = take_code_action(ui.ctx()) {
-                    event = Some(PreviewEvent::Code { index, action });
-                }
-                if let Some(path) = take_play_request(ui.ctx()) {
-                    event = Some(PreviewEvent::PlayVideo(path));
-                }
-                if let Some(path) = take_open_request(ui.ctx()) {
-                    event = Some(PreviewEvent::OpenFile(path));
-                }
-            }
+            });
         });
     });
     event
+}
+
+/// Run `add` in a column at most [`PREVIEW_MAX_WIDTH`] wide (scaled with the
+/// text area zoom), centered in the space left.
+fn reading_column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let zoom = crate::markdown::render::page_zoom();
+    let available = ui.available_rect_before_wrap();
+    let side = ((available.width() - PREVIEW_MAX_WIDTH * zoom) / 2.0).max(0.0);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(available.shrink2(egui::vec2(side, 0.0))), add).inner
 }
 
 /// The changes on block `index` (or deleted just before it), taken from
@@ -1485,6 +1502,28 @@ mod preview_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_column_stops_at_reading_width_and_centers() {
+        let ctx = Context::default();
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(2000.0, 600.0)));
+        let mut column = egui::Rect::NOTHING;
+        let mut narrow = 0.0;
+        ctx.run_ui(egui::RawInput { screen_rect, ..Default::default() }, |ui| {
+            column = reading_column(ui, |ui| ui.max_rect());
+            let page = egui::Rect::from_min_size(egui::pos2(0.0, 300.0), egui::vec2(400.0, 300.0));
+            narrow = ui
+                .scope_builder(egui::UiBuilder::new().max_rect(page), |ui| {
+                    reading_column(ui, |ui| ui.max_rect().width())
+                })
+                .inner;
+        })
+        .drop_without_applying_deltas();
+        assert!((column.width() - PREVIEW_MAX_WIDTH).abs() < 0.5, "{column:?}");
+        assert!((column.center().x - 1000.0).abs() < 1.0, "{column:?}");
+        // A narrow page keeps all of its width.
+        assert!((narrow - 400.0).abs() < 0.5, "{narrow}");
+    }
 
     #[test]
     fn cursor_line_counts_line_breaks_before_the_cursor() {

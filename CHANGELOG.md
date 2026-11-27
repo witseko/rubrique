@@ -19,6 +19,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
   Luminous Blue, after the WGSN and Coloro colour of the year 2027, in
   place of lavender. A saved choice of Indigo keeps working.
 - **Blue app icon.** The "R" icon now sits on a Luminous Blue tile.
+- **Calmer layout.** The preview keeps its text in a centered column of
+  comfortable reading width in a wide window. Icons in the toolbars and
+  status bar rest in a muted color and brighten under the mouse, the file
+  path in the status bar is quieter, and the Find bar's buttons lose their
+  boxes.
 
 ## [1.11.0] - 2026-11-23
 

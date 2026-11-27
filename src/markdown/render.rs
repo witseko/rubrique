@@ -74,7 +74,8 @@ pub fn set_page_zoom(zoom: f32) {
     PAGE_ZOOM.store(zoom.to_bits(), Ordering::Relaxed);
 }
 
-fn page_zoom() -> f32 {
+/// Zoom of the page's text in the preview (1.0 is 100%).
+pub fn page_zoom() -> f32 {
     f32::from_bits(PAGE_ZOOM.load(Ordering::Relaxed))
 }
 
