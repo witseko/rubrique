@@ -135,21 +135,12 @@ fn about_card(ui: &mut Ui) {
                 let center = tile.center() + vec2(0.0, 0.5 * LOGO_SCALE);
                 paint_openrig_mark(ui.painter(), center, LOGO_SCALE, visuals.text_color(), visuals.hyperlink_color);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("OpenRig").size(16.0).strong());
-                    ui.label(
-                        RichText::new("Teams of coding agents (Claude Code, Codex) working together on your projects.")
-                            .weak(),
-                    );
-                });
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let link = RichText::new("openrig.dev ↗").color(visuals.hyperlink_color);
-                    let button = egui::Button::new(link)
-                        .fill(Color32::TRANSPARENT)
-                        .stroke(visuals.widgets.noninteractive.bg_stroke)
-                        .min_size(vec2(0.0, FIELD_HEIGHT));
-                    if ui.add(button).on_hover_text(WEBSITE).clicked() {
-                        ui.ctx().open_url(egui::OpenUrl::new_tab(WEBSITE));
-                    }
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("OpenRig").size(16.0).strong());
+                        ui.hyperlink_to("openrig.dev ↗", WEBSITE).on_hover_text(WEBSITE);
+                    });
+                    let about = "Teams of coding agents (Claude Code, Codex) working together on your projects.";
+                    ui.add(egui::Label::new(RichText::new(about).weak()).wrap());
                 });
             });
         });

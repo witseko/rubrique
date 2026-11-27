@@ -12,6 +12,9 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 - **Remove the last folder.** Remove from explorer works on the only folder
   left, so the explorer can be empty again.
+- **OpenRig settings card.** The openrig.dev link no longer covers the
+  description at the top of Settings → OpenRig; it now sits next to the
+  name, and the description wraps below.
 
 ## [1.12.1] - 2026-11-27
 
