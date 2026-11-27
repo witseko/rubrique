@@ -731,13 +731,6 @@ impl RubriqueApp {
         self.sort_tabs_into_groups();
     }
 
-    /// Ask to remove a root; unsaved files inside it need the question.
-    fn request_remove_root(&mut self, path: PathBuf) {
-        if self.roots.len() > 1 {
-            self.request(GuardedAction::RemoveRoot(path));
-        }
-    }
-
     /// Move root `from` to go before root `to` (dragged in the explorer),
     /// and its tab group with it.
     fn move_root(&mut self, from: usize, to: usize) {
@@ -746,12 +739,8 @@ impl RubriqueApp {
         self.sort_tabs_into_groups();
     }
 
-    /// Take a root out of the explorer, keeping at least one, and close the
-    /// tabs inside it.
+    /// Take a root out of the explorer and close the tabs inside it.
     fn remove_root_now(&mut self, path: &Path) {
-        if self.roots.len() <= 1 {
-            return;
-        }
         self.roots.retain(|root| root.path != path);
         self.close_tabs_inside(path);
         self.remember_roots();
@@ -1940,7 +1929,7 @@ impl RubriqueApp {
         let scratch_folder = self.settings.scratch_folder_or_default();
         let context = TreeContext {
             root: Path::new(""),
-            can_remove_roots: self.roots.len() > 1,
+            several_roots: self.roots.len() > 1,
             filter: self.settings.explorer_filter,
             open_file: open_path.as_deref(),
             dirty_files: &dirty_files,
@@ -2024,7 +2013,7 @@ impl RubriqueApp {
             ExplorerAction::ResumeAgentSession { terminal, id, new_terminal } => {
                 self.resume_agent_session(&terminal, &id, new_terminal);
             }
-            ExplorerAction::RemoveRoot(path) => self.request_remove_root(path),
+            ExplorerAction::RemoveRoot(path) => self.request(GuardedAction::RemoveRoot(path)),
             ExplorerAction::MoveRoot { from, to } => self.move_root(from, to),
             ExplorerAction::ToggleTerminalGroup(key) => self.toggle_terminal_group(key),
             ExplorerAction::MoveTerminal { name, anchor, after } => {
@@ -3530,6 +3519,16 @@ mod tests {
     };
     use crate::markdown::blocks::parse_source_blocks;
     use eframe::egui::{Context, Event, Key, Modifiers, RawInput};
+
+    #[test]
+    fn removing_the_last_folder_leaves_the_explorer_empty() {
+        let folder = std::env::temp_dir().join("rubrique-remove-last-folder-test");
+        let ctx = Context::default();
+        let mut app = super::RubriqueApp::new(&ctx, crate::settings::Settings::default(), vec![folder.clone()], None);
+        app.request(super::GuardedAction::RemoveRoot(folder));
+        assert!(app.roots.is_empty());
+        assert_eq!(app.settings.folders, Vec::<std::path::PathBuf>::new());
+    }
 
     #[test]
     fn linux_ctrl_wheel_zooms_on_the_first_event() {

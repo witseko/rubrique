@@ -239,8 +239,8 @@ fn hovered_id() -> egui::Id {
 pub struct TreeContext<'a> {
     /// Root folder of the entry being drawn, for "Copy relative path".
     pub root: &'a Path,
-    /// More than one root is shown, so a root may be removed.
-    pub can_remove_roots: bool,
+    /// More than one root is shown, so roots get colors and can be dragged.
+    pub several_roots: bool,
     /// Which files the tree hides.
     pub filter: ExplorerFilter,
     /// File shown in the editor, highlighted in the tree.
@@ -343,7 +343,7 @@ pub fn show_explorer(
         let mut drag = ListDrag::default();
         for (index, root) in roots.iter_mut().enumerate() {
             let root_path = root.path.clone();
-            let root_color = context.can_remove_roots.then(|| group_color(index));
+            let root_color = context.several_roots.then(|| group_color(index));
             let context = TreeContext { root: &root_path, root_color, ..context };
             let top = ui.cursor().top();
             let row = show_root(ui, root, &context, edits, &mut files, &mut action);
@@ -625,7 +625,7 @@ fn show_root(
 ) -> egui::Response {
     let label = RichText::new(format!("{ICON_GAP}{}", root.name)).strong();
     let mut response = tree_row(ui, is_revealed(context, &root.path), label);
-    if context.can_remove_roots {
+    if context.several_roots {
         response = draggable(&response);
     }
     let response = response.on_hover_text(absolute_path_text(&root.path));
@@ -1016,10 +1016,7 @@ fn root_menu(
         open_in_file_manager_item(ui, path, action);
         copy_items(ui, path, context, action);
         ui.separator();
-        let remove = ui
-            .add_enabled(context.can_remove_roots, egui::Button::new("Remove from explorer"))
-            .on_hover_text("Hide this folder here; nothing on disk changes")
-            .on_disabled_hover_text("The explorer needs at least one folder");
+        let remove = ui.button("Remove from explorer").on_hover_text("Hide this folder here; nothing on disk changes");
         if remove.clicked() {
             *action = Some(ExplorerAction::RemoveRoot(path.to_path_buf()));
             ui.close();
@@ -1250,7 +1247,7 @@ mod tests {
                     let mut files = FileRows::new(ui, &mut self.selection, open);
                     let context = super::TreeContext {
                         root: Path::new("."),
-                        can_remove_roots: false,
+                        several_roots: false,
                         filter: super::ExplorerFilter::default(),
                         open_file: open,
                         dirty_files: &[],
@@ -1614,7 +1611,7 @@ mod tests {
             egui::CentralPanel::default().show(ui, |ui| {
                 let context = super::TreeContext {
                     root: Path::new(""),
-                    can_remove_roots: false,
+                    several_roots: false,
                     filter: super::ExplorerFilter::default(),
                     open_file: None,
                     dirty_files: &[],

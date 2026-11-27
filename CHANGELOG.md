@@ -8,6 +8,11 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remove the last folder.** Remove from explorer works on the only folder
+  left, so the explorer can be empty again.
+
 ## [1.12.1] - 2026-11-27
 
 ### Fixed
