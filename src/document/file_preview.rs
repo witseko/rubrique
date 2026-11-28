@@ -33,8 +33,6 @@ pub use table::{Delimited, DelimitedPreview};
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Maximum number of bytes of text shown in a document or slide.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
-/// Maximum declared size of all contents in an Office ZIP archive.
-const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Formats that open as read-only documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,27 +210,13 @@ fn load(kind: Kind, bytes: &Arc<Vec<u8>>, selected: usize) -> Result<Content, St
 fn workbook(kind: Kind, bytes: &[u8], selected: usize) -> Result<Content, String> {
     let (names, table) = match kind {
         Kind::Xls => xls::sheet(bytes, selected)?,
-        Kind::Xlsx => {
-            check_archive(bytes)?;
-            xlsx::sheet(bytes, selected)?
-        }
-        Kind::Ods => {
-            check_archive(bytes)?;
-            ods::sheet(bytes, selected)?
-        }
+        Kind::Xlsx => xlsx::sheet(bytes, selected)?,
+        Kind::Ods => ods::sheet(bytes, selected)?,
         Kind::Pdf | Kind::Doc | Kind::Docx | Kind::Odt | Kind::Rtf | Kind::Pptx => {
             return Err("Choose a workbook to show its sheets.".into());
         }
     };
     Ok(Content::Sheet { names, table })
-}
-
-/// Check the declared expansion size before loading an Office archive.
-fn check_archive(bytes: &[u8]) -> Result<(), String> {
-    if zip_archive::ZipArchive::new(bytes)?.declared_size() > MAX_ARCHIVE_BYTES {
-        return Err("This Office archive expands beyond the preview limit.".into());
-    }
-    Ok(())
 }
 
 /// Mark truncated output without splitting a Unicode character.

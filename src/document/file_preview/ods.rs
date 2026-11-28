@@ -8,7 +8,7 @@
 
 use super::odt::{OFFICE, TEXT};
 use super::package::{read_part, require_root};
-use super::table::{MAX_COLUMNS, MAX_ROWS, Table};
+use super::table::{MAX_CELL_CHARS, MAX_COLUMNS, MAX_ROWS, Table};
 use super::xml::{Element, Event, XmlReader};
 use super::zip_archive::ZipArchive;
 
@@ -41,12 +41,41 @@ pub(super) fn sheet(bytes: &[u8], selected: usize) -> Result<(Vec<String>, Table
     Ok((names, table))
 }
 
+/// Most bytes of paragraph text kept for one cell: more than
+/// `MAX_CELL_CHARS` characters of any width, so the table still marks a
+/// longer cell as cut short.
+const MAX_CELL_TEXT_BYTES: usize = 4 * MAX_CELL_CHARS + 4;
+
 /// The value of a cell while its element is read.
 struct Cell {
     /// Text from the value attributes, when the cell type has one.
     value: Option<String>,
     paragraphs: Vec<String>,
+    /// Bytes in `paragraphs`, counting one line break between each.
+    text_bytes: usize,
     columns: usize,
+}
+
+impl Cell {
+    /// Start a paragraph, unless the cell already holds all it can show.
+    fn start_paragraph(&mut self) {
+        if self.text_bytes < MAX_CELL_TEXT_BYTES {
+            self.text_bytes += usize::from(!self.paragraphs.is_empty());
+            self.paragraphs.push(String::new());
+        }
+    }
+
+    /// Add text to the last paragraph, up to `MAX_CELL_TEXT_BYTES` in all.
+    fn push_text(&mut self, text: &str) {
+        let room = MAX_CELL_TEXT_BYTES.saturating_sub(self.text_bytes);
+        let Some(paragraph) = self.paragraphs.last_mut() else { return };
+        let mut end = text.len().min(room);
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        paragraph.push_str(&text[..end]);
+        self.text_bytes += end;
+    }
 }
 
 /// Read the rows of the `table:table` whose start tag was just read.
@@ -75,6 +104,7 @@ fn read_table(reader: &mut XmlReader<'_>) -> Result<Table, String> {
                 cell = Some(Cell {
                     value: typed_value(&element),
                     paragraphs: Vec::new(),
+                    text_bytes: 0,
                     columns: repeat(&element, "number-columns-repeated"),
                 });
             }
@@ -82,12 +112,12 @@ fn read_table(reader: &mut XmlReader<'_>) -> Result<Table, String> {
             Event::Start(element) if element.name.is(TEXT, "p") => {
                 in_paragraph = true;
                 if let Some(cell) = &mut cell {
-                    cell.paragraphs.push(String::new());
+                    cell.start_paragraph();
                 }
             }
             Event::Start(element) if in_paragraph && element.name.is(TEXT, "s") => {
                 let count = element.attribute_in(TEXT, "c").and_then(|count| count.parse().ok()).unwrap_or(1_usize);
-                push_text(&mut cell, &" ".repeat(count.min(super::table::MAX_CELL_CHARS)));
+                push_text(&mut cell, &" ".repeat(count.min(MAX_CELL_CHARS + 1)));
             }
             Event::Start(element) if in_paragraph && element.name.is(TEXT, "tab") => push_text(&mut cell, "\t"),
             Event::Start(element) if in_paragraph && element.name.is(TEXT, "line-break") => push_text(&mut cell, "\n"),
@@ -110,8 +140,8 @@ fn read_table(reader: &mut XmlReader<'_>) -> Result<Table, String> {
 
 /// Add text to the last paragraph of the cell being read.
 fn push_text(cell: &mut Option<Cell>, text: &str) {
-    if let Some(paragraph) = cell.as_mut().and_then(|cell| cell.paragraphs.last_mut()) {
-        paragraph.push_str(text);
+    if let Some(cell) = cell {
+        cell.push_text(text);
     }
 }
 
@@ -167,5 +197,19 @@ mod tests {
         assert_eq!(table.rows, [vec!["a  b", "a  b", "3"]]);
         assert!(!table.truncated);
         assert!(sheet(&archive, 2).is_err());
+    }
+
+    #[test]
+    fn keeps_only_what_a_cell_can_show_from_repeated_spaces() {
+        let mut cell = Cell { value: None, paragraphs: Vec::new(), text_bytes: 0, columns: 1 };
+        cell.start_paragraph();
+        for _ in 0..1000 {
+            cell.push_text(&" ".repeat(MAX_CELL_CHARS));
+            cell.start_paragraph();
+        }
+        cell.push_text("é".repeat(MAX_CELL_CHARS).as_str());
+        let text = cell.paragraphs.join("\n");
+        assert!(text.len() <= MAX_CELL_TEXT_BYTES);
+        assert!(text.chars().count() > MAX_CELL_CHARS);
     }
 }

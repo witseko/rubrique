@@ -62,11 +62,6 @@ impl<'a> ZipArchive<'a> {
         Ok(Self { bytes, entries })
     }
 
-    /// The sum of the uncompressed sizes the entries declare.
-    pub(super) fn declared_size(&self) -> u64 {
-        self.entries.iter().fold(0, |total, entry| total.saturating_add(entry.size))
-    }
-
     /// The uncompressed bytes of entry `name`, refused when it declares or
     /// inflates to more than `limit` bytes.
     pub(super) fn read(&self, name: &str, limit: u64) -> Result<Vec<u8>, String> {
@@ -284,7 +279,6 @@ pub(super) mod tests {
         let zip = ZipArchive::new(&archive).unwrap();
         assert_eq!(zip.read("a.txt", 100).unwrap(), b"hello");
         assert_eq!(zip.read("b.txt", 100).unwrap(), b"");
-        assert_eq!(zip.declared_size(), 5);
         assert!(zip.read("c.txt", 100).is_err());
         assert!(zip.read("a.txt", 4).is_err());
 
