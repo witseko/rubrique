@@ -44,8 +44,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Native "choose a folder" window for adding explorer folders. On Linux it
 # uses the desktop's XDG portal, so no GTK libraries are needed.
 rfd = { version = "0.18.0", default-features = false, features = ["xdg-portal"] }
-# Atomic, no-overwrite moves on macOS and Linux.
-rustix = { version = "1.1.6", features = ["fs"] }
+# Atomic, no-overwrite moves on macOS and Linux, and the user id for the
+# Linux Trash on other drives.
+rustix = { version = "1.1.6", features = ["fs", "process"] }
 # Microphone and speakers for voice memos: CoreAudio on macOS, ALSA on Linux
 # (which reaches PipeWire and PulseAudio through their ALSA plugins). macOS
 # has no built-in command-line recorder, so running one would mean asking
@@ -60,35 +61,31 @@ zeroize = "1"
 # Random salts and nonces from the operating system (already used by the
 # two crates above; named here so the source is explicit).
 getrandom = "0.4"
-# "Delete" in the explorer moves local files to the system Trash (macOS
-# Finder Trash, the freedesktop.org trash on Linux), so a delete can be undone.
-trash = "5.3"
 # The user's text highlight rules (Settings → Appearance) are regular
 # expressions. This crate matches in linear time, so no pattern can hang the
 # editor on a long line.
 regex = "1.13.1"
-# "Import from Sublime Text" reads its session file, which is JSON; the
-# Chromium HTML preview talks JSON to the browser too.
-serde_json = "1.0.154"
-# Read-only previews of tables, PDF pages and Office documents.
-csv = "1.4"
-calamine = "0.38"
-hayro = "0.9"
-quick-xml = "0.42"
-zip = { version = "9.7", default-features = false, features = ["deflate"] }
-rclip-rtf = { version = "0.1", features = ["codepage"] }
-# The Chromium HTML preview gets the page's picture as base64 text.
-base64 = "0.23"
-# Checks the downloaded whisper model against the SHA-256 built into the app.
-sha2 = "0.11"
+# Inflates ZIP entries for Office and OpenDocument previews (already built for
+# PNG). ZIP, XML, spreadsheets, CSV and RTF are our own code; PDF pages are
+# drawn by the system (Core Graphics on macOS, poppler-utils on Linux).
+miniz_oxide = "0.8"
 # The OpenRig team editor saves a rig spec (YAML) by editing it in place,
 # so comments, key order and the fields the form does not show stay as written.
 yaml-edit = { version = "0.3.6", default-features = false }
 
-# The menu bar at the top of the screen on macOS (File, View, Settings), in
-# place of the menu bar drawn inside the window on other systems.
 [target.'cfg(target_os = "macos")'.dependencies]
-muda = { version = "0.21.2", default-features = false }
+# The menu bar at the top of the screen on macOS (File, View, Settings), in
+# place of the menu bar drawn inside the window on other systems. AppKit is
+# already in the tree through winit; only these classes are turned on.
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSApplication",
+    "NSCell",
+    "NSEvent",
+    "NSMenu",
+    "NSMenuItem",
+    "NSResponder",
+] }
 # Touch ID for encrypted scratches: the scratch key goes into the data
 # protection keychain behind the fingerprint (security-framework, a safe
 # wrapper over the Security framework), and LocalAuthentication says whether
@@ -100,12 +97,26 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "NSString",
+    "NSDictionary",
     "NSAppleEventDescriptor",
     "NSAppleEventManager",
     "NSNotification",
     "NSURL",
 ] }
 objc2-local-authentication = { version = "0.3", default-features = false, features = ["std", "LAContext"] }
+# PDF previews through Core Graphics (both crates are already in the tree
+# through winit; only the PDF and bitmap parts are added).
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFCGTypes", "CFData"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "CGBitmapContext",
+    "CGColorSpace",
+    "CGContext",
+    "CGDataProvider",
+    "CGImage",
+    "CGPDFDocument",
+    "CGPDFPage",
+] }
 
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than
 # `forbid` because date.rs needs one FFI call (`localtime_r`) and
@@ -139,8 +150,9 @@ panic = "abort"
 [package.metadata.deb]
 maintainer = "witseko"
 section = "editors"
-# Terminals run in tmux, which Ubuntu and Debian do not install by default.
-recommends = "tmux"
+# Terminals run in tmux, which Ubuntu and Debian do not install by default;
+# PDF previews use poppler-utils (pdftoppm and pdfinfo).
+recommends = "tmux, poppler-utils"
 extended-description = "A fast editor, agentic on demand. This version edits Markdown and other text, runs Claude Code, Codex, Grok or a local model, and reviews every change in a merge screen."
 assets = [
     ["target/release/rubrique", "usr/bin/", "755"],

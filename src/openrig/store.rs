@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use crate::json::{self, Value};
 
 use super::{RigHost, Seat, TaskLink, valid_seat, valid_task_id};
 use crate::document::text_file::write_atomically;
@@ -29,13 +29,13 @@ pub fn save(folder: &Path, task: &TaskLink) -> io::Result<()> {
         RigHost::Local => Value::Null,
         RigHost::Ssh(host) => Value::from(host.as_str()),
     };
-    let value = json!({
-        "document": document,
-        "host": host,
-        "endpoint": task.endpoint.to_string(),
-        "rigId": task.seat.rig_id,
-        "seat": task.seat.address,
-    });
+    let value = Value::object([
+        ("document", Value::from(document)),
+        ("host", host),
+        ("endpoint", Value::from(task.endpoint.to_string())),
+        ("rigId", Value::from(task.seat.rig_id.as_str())),
+        ("seat", Value::from(task.seat.address.as_str())),
+    ]);
     fs::create_dir_all(folder)?;
     write_atomically(&folder.join(format!("{}.json", task.id)), value.to_string().as_bytes())
 }
@@ -63,7 +63,7 @@ fn read_link(path: &Path) -> Option<TaskLink> {
     if !valid_task_id(&id) {
         return None;
     }
-    let value: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    let value = json::parse_bytes(&fs::read(path).ok()?).ok()?;
     let endpoint: std::net::SocketAddr = value["endpoint"].as_str()?.parse().ok()?;
     let address = value["seat"].as_str()?.to_owned();
     let host = match &value["host"] {

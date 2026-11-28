@@ -15,8 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use base64::Engine as _;
-use serde_json::{Value, json};
+use crate::json::{self, Value};
 
 use crate::ai::find_on_path;
 
@@ -210,36 +209,48 @@ impl Browser {
     }
 
     fn snapshot(&mut self, request: &SnapshotRequest) -> Result<Snapshot, String> {
-        let target = self.call("Target.createTarget", &json!({ "url": "about:blank" }), None)?;
+        let target = self.call("Target.createTarget", &Value::object([("url", Value::from("about:blank"))]), None)?;
         let target_id = target["targetId"].as_str().ok_or("The browser made no page")?.to_string();
-        let attached = self.call("Target.attachToTarget", &json!({ "targetId": target_id, "flatten": true }), None)?;
+        let attached = self.call(
+            "Target.attachToTarget",
+            &Value::object([("targetId", Value::from(target_id)), ("flatten", Value::from(true))]),
+            None,
+        )?;
         let session = attached["sessionId"].as_str().ok_or("The browser did not attach to the page")?.to_string();
         let session = Some(session.as_str());
-        self.call("Emulation.setScriptExecutionDisabled", &json!({ "value": true }), session)?;
-        let metrics = json!({
-            "width": request.width,
-            "height": request.height,
-            "deviceScaleFactor": request.scale,
-            "mobile": false,
-        });
+        self.call("Emulation.setScriptExecutionDisabled", &Value::object([("value", Value::from(true))]), session)?;
+        let metrics = Value::object([
+            ("width", Value::from(request.width)),
+            ("height", Value::from(request.height)),
+            ("deviceScaleFactor", Value::from(f64::from(request.scale))),
+            ("mobile", Value::from(false)),
+        ]);
         self.call("Emulation.setDeviceMetricsOverride", &metrics, session)?;
-        self.call("Page.enable", &json!({}), session)?;
-        self.call("Page.navigate", &json!({ "url": request.page_url }), session)?;
+        self.call("Page.enable", &Value::object([]), session)?;
+        self.call("Page.navigate", &Value::object([("url", Value::from(request.page_url.as_str()))]), session)?;
         self.wait_for_load()?;
-        let layout = self.call("Page.getLayoutMetrics", &json!({}), session)?;
+        let layout = self.call("Page.getLayoutMetrics", &Value::object([]), session)?;
         let content_height = layout["cssContentSize"]["height"].as_f64().unwrap_or(f64::from(request.height));
         let (height, cut) = capture_height(content_height, request.scale, request.max_pixels);
-        let clip = json!({ "x": 0, "y": 0, "width": request.width, "height": height, "scale": 1 });
+        let clip = Value::object([
+            ("x", Value::from(0_u32)),
+            ("y", Value::from(0_u32)),
+            ("width", Value::from(request.width)),
+            ("height", Value::from(height)),
+            ("scale", Value::from(1_u32)),
+        ]);
         let shot = self.call(
             "Page.captureScreenshot",
-            &json!({ "format": "png", "captureBeyondViewport": true, "clip": clip }),
+            &Value::object([
+                ("format", Value::from("png")),
+                ("captureBeyondViewport", Value::from(true)),
+                ("clip", clip),
+            ]),
             session,
         )?;
         let data = shot["data"].as_str().ok_or("The browser sent no picture")?;
-        let png = base64::engine::general_purpose::STANDARD
-            .decode(data)
-            .map_err(|error| format!("The browser's picture is broken: {error}"))?;
-        let _ = self.send("Browser.close", &json!({}), None);
+        let png = decode_base64(data).map_err(|error| format!("The browser's picture is broken: {error}"))?;
+        let _ = self.send("Browser.close", &Value::object([]), None);
         Ok(Snapshot { png, cut })
     }
 
@@ -261,9 +272,13 @@ impl Browser {
 
     fn send(&mut self, method: &str, params: &Value, session: Option<&str>) -> Result<u64, String> {
         self.next_id += 1;
-        let mut message = json!({ "id": self.next_id, "method": method, "params": params });
-        if let Some(session) = session {
-            message["sessionId"] = json!(session);
+        let mut message = Value::object([
+            ("id", Value::from(self.next_id)),
+            ("method", Value::from(method)),
+            ("params", params.clone()),
+        ]);
+        if let (Some(session), Value::Object(entries)) = (session, &mut message) {
+            entries.push(("sessionId".to_string(), Value::from(session)));
         }
         let mut bytes = message.to_string().into_bytes();
         bytes.push(0);
@@ -338,7 +353,45 @@ fn take_messages(pending: &mut Vec<u8>) -> Vec<Value> {
         return Vec::new();
     };
     let complete: Vec<u8> = pending.drain(..=last_end).collect();
-    complete.split(|byte| *byte == 0).filter_map(|message| serde_json::from_slice(message).ok()).collect()
+    complete.split(|byte| *byte == 0).filter_map(|message| json::parse_bytes(message).ok()).collect()
+}
+
+/// Decode standard base64 with padding (RFC 4648), as the browser sends its
+/// pictures.
+fn decode_base64(text: &str) -> Result<Vec<u8>, String> {
+    let bytes = text.as_bytes();
+    if !bytes.len().is_multiple_of(4) {
+        return Err("the base64 text has a wrong length".into());
+    }
+    let groups = bytes.len() / 4;
+    let mut decoded = Vec::with_capacity(groups * 3);
+    for (index, group) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        let padding = group.iter().rev().take_while(|byte| **byte == b'=').count();
+        if padding > 2 || (padding > 0 && index + 1 != groups) {
+            return Err("the base64 text has padding in the wrong place".into());
+        }
+        let mut value = 0u32;
+        for byte in &group[..4 - padding] {
+            value = value << 6 | u32::from(base64_digit(*byte)?);
+        }
+        for _ in 0..padding {
+            value <<= 6;
+        }
+        decoded.extend_from_slice(&value.to_be_bytes()[1..4 - padding]);
+    }
+    Ok(decoded)
+}
+
+/// The 6-bit value of one base64 character.
+fn base64_digit(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'A'..=b'Z' => Ok(byte - b'A'),
+        b'a'..=b'z' => Ok(byte - b'a' + 26),
+        b'0'..=b'9' => Ok(byte - b'0' + 52),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err(format!("the base64 text has the character {:?}", char::from(byte))),
+    }
 }
 
 #[cfg(test)]
@@ -346,13 +399,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decodes_base64_as_in_rfc_4648() {
+        for (text, expected) in [("", ""), ("Zg==", "f"), ("Zm8=", "fo"), ("Zm9v", "foo"), ("Zm9vYmFy", "foobar")] {
+            assert_eq!(decode_base64(text).unwrap(), expected.as_bytes());
+        }
+        assert_eq!(decode_base64("+/+/").unwrap(), [0xfb, 0xff, 0xbf]);
+        for broken in ["Zg=", "Zg==Zg==", "Z===", "Zm9*", "Zm 9"] {
+            assert!(decode_base64(broken).is_err(), "{broken}");
+        }
+    }
+
+    #[test]
     fn splits_messages_on_nul_bytes() {
         let mut pending = b"{\"id\":1}\0{\"id\":2}\0{\"id\"".to_vec();
         let messages = take_messages(&mut pending);
-        assert_eq!(messages, vec![json!({ "id": 1 }), json!({ "id": 2 })]);
+        let id = |number: u32| Value::object([("id", Value::from(number))]);
+        assert_eq!(messages, vec![id(1), id(2)]);
         assert_eq!(pending, b"{\"id\"");
         pending.extend_from_slice(b":3}\0");
-        assert_eq!(take_messages(&mut pending), vec![json!({ "id": 3 })]);
+        assert_eq!(take_messages(&mut pending), vec![id(3)]);
         assert_eq!(pending, b"");
         let mut broken = b"not json\0".to_vec();
         assert_eq!(take_messages(&mut broken), Vec::<Value>::new());

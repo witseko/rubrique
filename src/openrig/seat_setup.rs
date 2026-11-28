@@ -4,7 +4,7 @@
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use serde_json::Value;
+use crate::json::{self, Value};
 
 use super::{Rig, valid_seat, valid_token};
 
@@ -395,9 +395,9 @@ fn seat_runtime<'a>(nodes: &'a Value, status: &'a Value) -> Option<&'a str> {
 /// rig's own `message` or `error` text from its JSON stdout, on one line and
 /// shortened. Never stderr, which can hold private task data.
 fn rig_message(stdout: &str) -> Option<String> {
-    let reply: Value = serde_json::from_str(stdout.trim()).ok()?;
+    let reply = json::parse(stdout.trim()).ok()?;
     let text =
-        ["message", "error"].iter().find_map(|key| reply[key].as_str().or_else(|| reply[key]["message"].as_str()))?;
+        ["message", "error"].iter().find_map(|key| reply[*key].as_str().or_else(|| reply[*key]["message"].as_str()))?;
     let line: String = text
         .chars()
         .map(|character| if character.is_control() { ' ' } else { character })
@@ -422,7 +422,11 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    use serde_json::json;
+    use crate::json::parse as parse_json;
+
+    fn parse(text: &str) -> Value {
+        parse_json(text).unwrap()
+    }
 
     use super::*;
     use crate::openrig::RigHost;
@@ -444,11 +448,11 @@ mod tests {
     /// A terminal seat has no effort levels, so its effort is not asked for.
     #[test]
     fn a_terminal_seat_has_no_known_runtime() {
-        let nodes = json!({"entries": [{"runtime": "terminal", "model": null}]});
+        let nodes = parse(r#"{"entries": [{"runtime": "terminal", "model": null}]}"#);
         let runtime = seat_runtime(&nodes, &Value::Null);
         assert_eq!(runtime, Some("terminal"));
         assert_eq!(runtime.and_then(Runtime::from_id), None);
-        assert_eq!(seat_runtime(&json!({"entries": []}), &json!({"runtime": "codex"})), Some("codex"));
+        assert_eq!(seat_runtime(&parse(r#"{"entries": []}"#), &parse(r#"{"runtime": "codex"}"#)), Some("codex"));
     }
 
     /// Settings with every field filled.
@@ -555,9 +559,9 @@ mod tests {
     /// permission mode and the launch folder, and skips unusable values.
     #[test]
     fn reads_a_seat_state_from_the_three_replies() {
-        let nodes = json!({"entries": [{"runtime": "pi", "model": "zai/glm-5.3"}], "truncated": false});
-        let effort = json!({"saved": {"choice": "high", "effective": "high"}});
-        let status = json!({"launch_cwd": "/work/app", "permissions": {"selectionState": "full_bypass"}});
+        let nodes = parse(r#"{"entries": [{"runtime": "pi", "model": "zai/glm-5.3"}], "truncated": false}"#);
+        let effort = parse(r#"{"saved": {"choice": "high", "effective": "high"}}"#);
+        let status = parse(r#"{"launch_cwd": "/work/app", "permissions": {"selectionState": "full_bypass"}}"#);
         let state = parse_state(&nodes, &effort, &status).unwrap();
         assert_eq!(state.runtime, "pi");
         assert_eq!(
@@ -569,12 +573,12 @@ mod tests {
                 folder: Some("/work/app".into()),
             }
         );
-        let nodes = json!([{"runtime": "codex", "model": null}]);
-        let effort = json!({"saved": {"choice": null, "effective": "medium"}});
-        let status = json!({"launch_cwd": "relative", "permissions": {"selectionState": "custom"}});
+        let nodes = parse(r#"[{"runtime": "codex", "model": null}]"#);
+        let effort = parse(r#"{"saved": {"choice": null, "effective": "medium"}}"#);
+        let status = parse(r#"{"launch_cwd": "relative", "permissions": {"selectionState": "custom"}}"#);
         let state = parse_state(&nodes, &effort, &status).unwrap();
         assert_eq!(state.settings, SeatSettings::default());
-        assert!(parse_state(&json!({"entries": []}), &effort, &status).is_err());
+        assert!(parse_state(&parse(r#"{"entries": []}"#), &effort, &status).is_err());
     }
 
     /// rig's own reason comes from stdout JSON only, on one shortened line.

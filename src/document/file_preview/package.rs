@@ -1,56 +1,120 @@
 //! Read bounded XML parts from ZIP-based documents without extracting them.
 
-use std::io::{Cursor, Read};
-
-use quick_xml::NsReader;
-use quick_xml::escape::resolve_xml_entity;
-use quick_xml::events::{BytesRef, Event};
-use quick_xml::name::ResolveResult;
-use zip::ZipArchive;
+use super::xml::{Event, XmlReader};
+use super::zip_archive::ZipArchive;
 
 /// Maximum size of one uncompressed XML part.
 const MAX_PART_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Read a named part from the archive and enforce its declared and actual size.
-pub(super) fn read_part(archive: &mut ZipArchive<Cursor<&[u8]>>, name: &str) -> Result<Vec<u8>, String> {
-    let part = archive.by_name(name).map_err(|error| format!("Cannot read {name}: {error}"))?;
-    if part.size() > MAX_PART_BYTES {
-        return Err("This document part exceeds the preview limit.".into());
-    }
-    let mut xml = Vec::new();
-    part.take(MAX_PART_BYTES + 1).read_to_end(&mut xml).map_err(|error| error.to_string())?;
-    if xml.len() as u64 > MAX_PART_BYTES {
-        return Err("This document part exceeds the preview limit.".into());
-    }
-    Ok(xml)
-}
+/// Relationship attributes in Office Open XML parts (transitional and strict).
+pub(super) const DOCUMENT_REL: &[&str] = &[
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "http://purl.oclc.org/ooxml/officeDocument/relationships",
+];
+/// The `.rels` parts that list a part's relationships.
+pub(super) const PACKAGE_REL: &[&str] = &[
+    "http://schemas.openxmlformats.org/package/2006/relationships",
+    "http://purl.oclc.org/ooxml/package/relationships",
+];
 
-/// Compare the resolved namespace URI independently of its prefix.
-pub(super) fn in_namespace(namespace: &ResolveResult<'_>, uris: &[&str]) -> bool {
-    matches!(namespace, ResolveResult::Bound(value) if uris.contains(&value.as_ref()))
+/// Read a named part from the archive and enforce its declared and actual size.
+pub(super) fn read_part(archive: &ZipArchive<'_>, name: &str) -> Result<Vec<u8>, String> {
+    archive.read(name, MAX_PART_BYTES)
 }
 
 /// Verify the XML part's root element before reading its content.
-pub(super) fn require_root(reader: &mut NsReader<&[u8]>, local_name: &str, uris: &[&str]) -> Result<(), String> {
+pub(super) fn require_root(reader: &mut XmlReader<'_>, local_name: &str, uris: &[&str]) -> Result<(), String> {
     loop {
-        let (namespace, event) = reader.read_resolved_event().map_err(|error| error.to_string())?;
-        match event {
-            Event::Start(tag) if tag.local_name().as_ref() == local_name && in_namespace(&namespace, uris) => {
-                return Ok(());
-            }
-            Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
-            Event::Text(text) if text.as_ref().trim().is_empty() => {}
+        match reader.next()? {
+            Event::Start(element) if element.name.is(uris, local_name) => return Ok(()),
+            Event::Text(text) if text.trim().is_empty() => {}
             _ => return Err(format!("The document part is missing its {local_name} root element.")),
         }
     }
 }
 
-/// Append a numeric character or a predefined XML entity to the preview.
-pub(super) fn push_reference(text: &mut String, reference: &BytesRef<'_>) -> Result<(), quick_xml::Error> {
-    if let Some(character) = reference.resolve_char_ref()? {
-        text.push(character);
-    } else if let Some(entity) = resolve_xml_entity(reference.as_ref()) {
-        text.push_str(entity);
+/// The relationship targets in a `.rels` part, as (Id, Type, Target) for
+/// internal targets only.
+pub(super) fn relationships(xml: &[u8]) -> Result<Vec<(String, String, String)>, String> {
+    let mut reader = XmlReader::new(xml)?;
+    require_root(&mut reader, "Relationships", PACKAGE_REL)?;
+    let mut found = Vec::new();
+    loop {
+        match reader.next()? {
+            Event::Start(element) if element.name.is(PACKAGE_REL, "Relationship") => {
+                if element.attribute("TargetMode").is_some_and(|mode| mode != "Internal") {
+                    continue;
+                }
+                if let (Some(id), Some(kind), Some(target)) =
+                    (element.attribute("Id"), element.attribute("Type"), element.attribute("Target"))
+                {
+                    found.push((id.to_string(), kind.to_string(), target.to_string()));
+                }
+            }
+            Event::Eof => return Ok(found),
+            _ => {}
+        }
     }
-    Ok(())
+}
+
+/// Whether a relationship type is the Office document relationship `kind`
+/// (such as `slide` or `worksheet`).
+pub(super) fn is_relationship_type(relationship_type: &str, kind: &str) -> bool {
+    relationship_type
+        .strip_suffix(kind)
+        .and_then(|prefix| prefix.strip_suffix('/'))
+        .is_some_and(|prefix| DOCUMENT_REL.contains(&prefix))
+}
+
+/// Resolve a target relative to the folder `base`, entirely inside the
+/// package.
+pub(super) fn part_path(base: &str, target: &str) -> Result<String, String> {
+    let invalid = || "This document has an invalid package path.".to_string();
+    if target.is_empty() || target.starts_with("//") || target.contains([':', '?', '#', '\\']) {
+        return Err(invalid());
+    }
+    let (target, mut path) =
+        target.strip_prefix('/').map_or((target, base.split('/').collect::<Vec<_>>()), |part| (part, Vec::new()));
+    for part in target.split('/') {
+        match part {
+            "" => return Err(invalid()),
+            "." => {}
+            ".." => {
+                path.pop().ok_or_else(invalid)?;
+            }
+            name => path.push(name),
+        }
+    }
+    if path.is_empty() {
+        return Err(invalid());
+    }
+    Ok(path.join("/"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keeps_package_paths_inside_the_package() {
+        assert!(part_path("ppt", "../../escape.xml").is_err());
+        assert!(part_path("ppt", "https://example.org/slide.xml").is_err());
+        assert_eq!(part_path("ppt", "/ppt/slides/slide3.xml").unwrap(), "ppt/slides/slide3.xml");
+        assert_eq!(part_path("xl", "worksheets/sheet1.xml").unwrap(), "xl/worksheets/sheet1.xml");
+    }
+
+    #[test]
+    fn lists_internal_relationships_only() {
+        let xml = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+            <Relationship Id="s1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+                TargetMode="External" Target="https://example.org/slide.xml"/>
+            <Relationship Id="s2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide"
+                Target="slides/slide2.xml"/>
+            </Relationships>"#;
+        let found = relationships(xml).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "s2");
+        assert!(is_relationship_type(&found[0].1, "slide"));
+        assert!(!is_relationship_type(&found[0].1, "worksheet"));
+    }
 }

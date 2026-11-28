@@ -12,6 +12,8 @@ use std::time::SystemTime;
 use crate::document::text_file::write_atomically;
 use crate::remote::{self, commands};
 
+mod trash;
+
 /// A file's version, to notice when another program changed it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stamp {
@@ -131,7 +133,7 @@ pub fn rename(from: &Path, to: &Path) -> io::Result<()> {
 /// The file is gone, permissions, no Trash on this system, or no connection.
 pub fn delete(path: &Path) -> io::Result<()> {
     let Some(remote) = remote::from_mirror(path) else {
-        return trash::delete(path).map_err(io::Error::other);
+        return trash::move_to_trash(path);
     };
     commands::delete(&remote.host, &remote.path)?;
     // The mirror copy is only a cache, so failing here is fine.

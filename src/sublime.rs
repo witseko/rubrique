@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::Value;
+use crate::json::{self, Value};
 
 /// The session files Sublime Text writes into its `Local` folder: the first
 /// while it runs (hot exit), the second when it quits.
@@ -64,8 +64,7 @@ fn newest_session_file(folders: &[PathBuf]) -> Option<PathBuf> {
 ///
 /// The JSON cannot be read.
 pub fn unsaved_texts(json: &str) -> Result<Vec<UnsavedText>, String> {
-    let session: Value =
-        serde_json::from_str(json).map_err(|error| format!("Cannot read the Sublime Text session: {error}"))?;
+    let session = json::parse(json).map_err(|error| format!("Cannot read the Sublime Text session: {error}"))?;
     let buffers = session
         .get("windows")
         .and_then(Value::as_array)
@@ -120,22 +119,25 @@ mod tests {
         let temp = TempFolder::new();
         let saved = temp.write("saved.txt", "same text");
         let edited = temp.write("plan.txt", "old text");
-        let json = serde_json::json!({
-            "windows": [
-                {"buffers": [
-                    {"contents": "shopping list\nmilk", "settings": {"name": "shopping list"}},
-                    {"contents": "  \n", "settings": {}},
-                    {"file": saved, "contents": "same text"},
-                    {"file": "/no/such/file.txt"},
-                ]},
-                {"buffers": [
-                    {"file": edited, "contents": "new text"},
-                    {"contents": "no name", "settings": {"buffer_size": 7}},
-                ]},
-            ]
-        });
+        // Paths as JSON strings, quoted and escaped.
+        let saved = Value::from(saved.to_str().unwrap());
+        let edited = Value::from(edited.to_str().unwrap());
+        let json = format!(
+            r#"{{"windows": [
+                {{"buffers": [
+                    {{"contents": "shopping list\nmilk", "settings": {{"name": "shopping list"}}}},
+                    {{"contents": "  \n", "settings": {{}}}},
+                    {{"file": {saved}, "contents": "same text"}},
+                    {{"file": "/no/such/file.txt"}}
+                ]}},
+                {{"buffers": [
+                    {{"file": {edited}, "contents": "new text"}},
+                    {{"contents": "no name", "settings": {{"buffer_size": 7}}}}
+                ]}}
+            ]}}"#
+        );
         assert_eq!(
-            unsaved_texts(&json.to_string()).unwrap(),
+            unsaved_texts(&json).unwrap(),
             vec![
                 UnsavedText { name: "shopping list".to_string(), text: "shopping list\nmilk".to_string() },
                 UnsavedText { name: "plan".to_string(), text: "new text".to_string() },
