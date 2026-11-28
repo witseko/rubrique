@@ -85,7 +85,8 @@ jobs:
         # each download and give up after 10 minutes.
         timeout-minutes: 10
         if: runner.os == 'Linux'
-        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev
+        # poppler-utils draws PDF pages for the PDF preview tests.
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y libxkbcommon-dev libwayland-dev libx11-dev libgl1-mesa-dev libasound2-dev poppler-utils
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Test
         run: cargo test --locked

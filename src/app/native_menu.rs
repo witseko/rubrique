@@ -6,18 +6,31 @@
 //! shortcut to the menu before the window sees it, so Cmd+S, Cmd+N and the
 //! rest would skip the checks Rubrique makes before acting on them (an open
 //! dialog, a field being renamed). The keys keep working as before; the
-//! menus are for clicking.
+//! menus are for clicking. Only the system entries (Hide, Quit) keep their
+//! usual shortcuts.
+//!
+//! Each Rubrique entry carries a tag (its index in `commands`) and calls one
+//! small Objective-C object, `MenuTarget`, which sends the tag to the app.
 
 use std::sync::mpsc::{Receiver, channel};
 
 use eframe::egui::Context;
-use muda::{AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use objc2::rc::Retained;
+use objc2::sel;
+use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2_app_kit::{
+    NSApplication, NSControlStateValueOff, NSControlStateValueOn, NSEventModifierFlags, NSMenu, NSMenuItem,
+};
+use objc2_foundation::NSString;
 
 use super::RubriqueApp;
 use super::menu_bar::{MenuCommand, MenuEntry};
+use cocoa::{MenuTarget, menu_item, set_target};
 
-/// Id of the app menu's "Settings..." entry.
-const SETTINGS_ID: &str = "app-settings";
+/// Tag of the app menu's "Settings..." entry.
+const SETTINGS_TAG: isize = -1;
+/// Tag of the app menu's "About Rubrique" entry.
+const ABOUT_TAG: isize = -2;
 
 /// Whether the menus are in the menu bar yet.
 #[derive(Debug)]
@@ -32,13 +45,16 @@ pub(super) enum NativeMenuState {
 /// The installed menu bar and what its entries do.
 pub(super) struct NativeMenu {
     /// Kept alive: the menu bar goes away with it.
-    menu: Menu,
-    /// The command of each entry, by its id.
-    commands: Vec<(MenuId, MenuCommand)>,
+    menu: Retained<NSMenu>,
+    /// Receives every entry's clicks; kept alive because a menu item does
+    /// not own its target.
+    target: Retained<MenuTarget>,
+    /// The command of each entry, by its tag.
+    commands: Vec<MenuCommand>,
     /// Entries with a check mark, refreshed every frame from the settings.
-    checks: Vec<(CheckMenuItem, MenuCommand)>,
-    /// Ids of clicked entries, sent from the menu's event handler.
-    clicks: Receiver<MenuId>,
+    checks: Vec<(Retained<NSMenuItem>, MenuCommand)>,
+    /// Tags of clicked entries, sent from the menu target.
+    clicks: Receiver<isize>,
 }
 
 impl std::fmt::Debug for NativeMenu {
@@ -52,77 +68,192 @@ impl NativeMenu {
     /// Call on the main thread once the app is running (the first frame).
     /// A failure leaves the system's default menu.
     fn install(app: &RubriqueApp, ctx: &Context) -> Option<Self> {
+        let mtm = MainThreadMarker::new()?;
         let (sender, clicks) = channel();
-        let repaint = ctx.clone();
-        // A click wakes the app, which may be idle and not drawing frames.
-        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
-            let _ = sender.send(event.id);
-            repaint.request_repaint();
-        }));
-        let mut native = NativeMenu { menu: Menu::new(), commands: Vec::new(), checks: Vec::new(), clicks };
-        native.menu.append(&app_menu().ok()?).ok()?;
+        let target = MenuTarget::new(mtm, sender, ctx.clone());
+        let mut native =
+            NativeMenu { menu: NSMenu::new(mtm), target, commands: Vec::new(), checks: Vec::new(), clicks };
+        let application = NSApplication::sharedApplication(mtm);
+        let app_menu = native.app_menu(mtm, &application);
+        native.menu.addItem(&submenu_item(mtm, "Rubrique", &app_menu));
         for (label, entries) in app.menus() {
-            let submenu = Submenu::new(label, true);
-            native.append_entries(app, &submenu, &entries).ok()?;
-            native.menu.append(&submenu).ok()?;
+            let submenu = new_menu(mtm, label);
+            native.append_entries(app, mtm, &submenu, &entries);
+            native.menu.addItem(&submenu_item(mtm, label, &submenu));
         }
-        native.menu.init_for_nsapp();
+        application.setMainMenu(Some(&native.menu));
         Some(native)
     }
 
-    /// Add `entries` to `submenu`, remembering what each one does.
-    fn append_entries(&mut self, app: &RubriqueApp, submenu: &Submenu, entries: &[MenuEntry]) -> muda::Result<()> {
+    /// Add `entries` to `menu`, remembering what each one does.
+    fn append_entries(&mut self, app: &RubriqueApp, mtm: MainThreadMarker, menu: &NSMenu, entries: &[MenuEntry]) {
         for entry in entries {
             match entry {
-                MenuEntry::Separator => submenu.append(&PredefinedMenuItem::separator())?,
+                MenuEntry::Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
                 MenuEntry::Submenu { label, entries } => {
-                    let inner = Submenu::new(*label, true);
-                    self.append_entries(app, &inner, entries)?;
-                    submenu.append(&inner)?;
+                    let inner = new_menu(mtm, label);
+                    self.append_entries(app, mtm, &inner, entries);
+                    menu.addItem(&submenu_item(mtm, label, &inner));
                 }
                 MenuEntry::Item { label, command, .. } => {
-                    let id = MenuId::new(format!("command-{}", self.commands.len()));
-                    match app.menu_check(command) {
-                        Some(on) => {
-                            let check = CheckMenuItem::with_id(id.clone(), label, true, on, None);
-                            submenu.append(&check)?;
-                            self.checks.push((check, command.clone()));
-                        }
-                        None => submenu.append(&MenuItem::with_id(id.clone(), label, true, None))?,
+                    let Ok(tag) = isize::try_from(self.commands.len()) else { continue };
+                    let item = self.entry(mtm, label, tag);
+                    if let Some(on) = app.menu_check(command) {
+                        item.setState(if on { NSControlStateValueOn } else { NSControlStateValueOff });
+                        self.checks.push((item.clone(), command.clone()));
                     }
-                    self.commands.push((id, command.clone()));
+                    menu.addItem(&item);
+                    self.commands.push(command.clone());
                 }
             }
         }
-        Ok(())
+    }
+
+    /// A Rubrique entry that sends `tag` to the app when clicked.
+    fn entry(&self, mtm: MainThreadMarker, title: &str, tag: isize) -> Retained<NSMenuItem> {
+        let item = menu_item(mtm, title, Some(sel!(entryClicked:)), "");
+        item.setTag(tag);
+        set_target(&item, &self.target);
+        item
+    }
+
+    /// The app menu, named after the app by macOS: About, Settings, the
+    /// system's Services, Hide and Quit.
+    fn app_menu(&self, mtm: MainThreadMarker, application: &NSApplication) -> Retained<NSMenu> {
+        let menu = new_menu(mtm, "Rubrique");
+        let services = new_menu(mtm, "Services");
+        application.setServicesMenu(Some(&services));
+        let hide_others = menu_item(mtm, "Hide Others", Some(sel!(hideOtherApplications:)), "h");
+        hide_others.setKeyEquivalentModifierMask(NSEventModifierFlags::Option | NSEventModifierFlags::Command);
+        let items = [
+            self.entry(mtm, "About Rubrique", ABOUT_TAG),
+            NSMenuItem::separatorItem(mtm),
+            self.entry(mtm, "Settings...", SETTINGS_TAG),
+            NSMenuItem::separatorItem(mtm),
+            submenu_item(mtm, "Services", &services),
+            NSMenuItem::separatorItem(mtm),
+            menu_item(mtm, "Hide Rubrique", Some(sel!(hide:)), "h"),
+            hide_others,
+            menu_item(mtm, "Show All", Some(sel!(unhideAllApplications:)), ""),
+            NSMenuItem::separatorItem(mtm),
+            menu_item(mtm, "Quit Rubrique", Some(sel!(terminate:)), "q"),
+        ];
+        for item in &items {
+            menu.addItem(item);
+        }
+        menu
     }
 }
 
-/// The app menu, named after the app by macOS: About, Settings, the
-/// system's Services, Hide and Quit.
-fn app_menu() -> muda::Result<Submenu> {
-    let about = AboutMetadata {
-        name: Some("Rubrique".to_string()),
-        version: Some(env!("CARGO_PKG_VERSION").to_string()),
-        ..AboutMetadata::default()
+/// An empty menu with `title`.
+fn new_menu(mtm: MainThreadMarker, title: &str) -> Retained<NSMenu> {
+    NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(title))
+}
+
+/// A menu bar or menu entry that opens `submenu`.
+fn submenu_item(mtm: MainThreadMarker, title: &str, submenu: &NSMenu) -> Retained<NSMenuItem> {
+    let item = menu_item(mtm, title, None, "");
+    item.setSubmenu(Some(submenu));
+    item
+}
+
+/// The Objective-C side: the click target class, menu item creation and the
+/// About panel. These are the `unsafe` calls of this module.
+#[expect(unsafe_code, reason = "Objective-C class definition and calls from the objc2 bindings")]
+mod cocoa {
+    use std::sync::mpsc::Sender;
+
+    use eframe::egui::Context;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject, Sel};
+    use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
+    use objc2_app_kit::{
+        NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion, NSApplication, NSMenuItem,
     };
-    Submenu::with_items(
-        "Rubrique",
-        true,
-        &[
-            &PredefinedMenuItem::about(None, Some(about)),
-            &PredefinedMenuItem::separator(),
-            &MenuItem::with_id(SETTINGS_ID, "Settings...", true, None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::services(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::hide(None),
-            &PredefinedMenuItem::hide_others(None),
-            &PredefinedMenuItem::show_all(None),
-            &PredefinedMenuItem::separator(),
-            &PredefinedMenuItem::quit(None),
-        ],
-    )
+    use objc2_foundation::{NSDictionary, NSString};
+
+    use super::ABOUT_TAG;
+
+    /// Where a click goes: the channel the app reads, and the context to
+    /// wake it (it may be idle and not drawing frames).
+    pub(super) struct TargetState {
+        clicks: Sender<isize>,
+        repaint: Context,
+    }
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements, and this class
+        // implements no `Drop` or `dealloc`.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = TargetState]
+        pub(super) struct MenuTarget;
+
+        impl MenuTarget {
+            /// The action of every Rubrique entry: send its tag to the app.
+            #[unsafe(method(entryClicked:))]
+            fn entry_clicked(&self, item: &NSMenuItem) {
+                if item.tag() == ABOUT_TAG {
+                    show_about(MainThreadMarker::from(self));
+                    return;
+                }
+                let _ = self.ivars().clicks.send(item.tag());
+                self.ivars().repaint.request_repaint();
+            }
+        }
+    );
+
+    impl MenuTarget {
+        /// A target that sends clicked tags to `clicks`.
+        pub(super) fn new(mtm: MainThreadMarker, clicks: Sender<isize>, repaint: Context) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(TargetState { clicks, repaint });
+            // SAFETY: `init` is NSObject's designated initializer, called once
+            // on a freshly allocated object.
+            unsafe { msg_send![super(this), init] }
+        }
+    }
+
+    /// A menu item with `title`, an `action` sent up the responder chain
+    /// (or to its target), and a key equivalent (`""` for none).
+    pub(super) fn menu_item(
+        mtm: MainThreadMarker,
+        title: &str,
+        action: Option<Sel>,
+        key: &str,
+    ) -> Retained<NSMenuItem> {
+        // SAFETY: every selector passed in is a method of NSApplication or
+        // of `MenuTarget`, taking the sender as its one argument.
+        unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(title),
+                action,
+                &NSString::from_str(key),
+            )
+        }
+    }
+
+    /// Send the item's action to `target`.
+    pub(super) fn set_target(item: &NSMenuItem, target: &MenuTarget) {
+        let target: &AnyObject = target;
+        // SAFETY: the item keeps a weak reference; `NativeMenu` owns the
+        // target as long as the menu exists, and the target implements the
+        // item's action.
+        unsafe { item.setTarget(Some(target)) };
+    }
+
+    /// The standard About panel with the app's name and full version
+    /// (including a release candidate suffix the bundle cannot hold).
+    fn show_about(mtm: MainThreadMarker) {
+        let name = NSString::from_str("Rubrique");
+        let version = NSString::from_str(env!("CARGO_PKG_VERSION"));
+        // SAFETY: AppKit defines these constant keys for the app's lifetime.
+        let keys = unsafe { [NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion] };
+        let values: [&AnyObject; 2] = [&name, &version];
+        let options = NSDictionary::from_slices(&keys, &values);
+        // SAFETY: both values are strings, as these two keys require.
+        unsafe { NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanelWithOptions(&options) };
+    }
 }
 
 impl RubriqueApp {
@@ -142,11 +273,11 @@ impl RubriqueApp {
         let clicked: Vec<MenuCommand> = native
             .clicks
             .try_iter()
-            .filter_map(|id| {
-                if id.0 == SETTINGS_ID {
+            .filter_map(|tag| {
+                if tag == SETTINGS_TAG {
                     return Some(MenuCommand::OpenSettings);
                 }
-                native.commands.iter().find(|(known, _)| *known == id).map(|(_, command)| command.clone())
+                native.commands.get(usize::try_from(tag).ok()?).cloned()
             })
             .collect();
         for command in clicked {
@@ -155,10 +286,11 @@ impl RubriqueApp {
         let NativeMenuState::Installed(native) = &self.native_menu else {
             return;
         };
-        for (check, command) in &native.checks {
-            let on = self.menu_check(command).unwrap_or(false);
-            if check.is_checked() != on {
-                check.set_checked(on);
+        for (item, command) in &native.checks {
+            let state =
+                if self.menu_check(command).unwrap_or(false) { NSControlStateValueOn } else { NSControlStateValueOff };
+            if item.state() != state {
+                item.setState(state);
             }
         }
     }

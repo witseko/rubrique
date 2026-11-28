@@ -1,19 +1,19 @@
 //! Build and draw a bounded preview of a spreadsheet or delimited text file.
 
-use std::io::{Read, Seek};
+use std::iter::Peekable;
 use std::path::Path;
+use std::str::Chars;
 
-use calamine::{Data, Range, Xlsx};
 use eframe::egui::{self, RichText, Ui};
 
 use crate::document::text_file::Document;
 
 /// Maximum number of rows kept in a table preview.
-const MAX_ROWS: u32 = 1_000;
+pub(super) const MAX_ROWS: u32 = 1_000;
 /// Maximum number of columns kept in a table preview.
-const MAX_COLUMNS: u32 = 48;
+pub(super) const MAX_COLUMNS: u32 = 48;
 /// Maximum number of characters copied from each cell.
-const MAX_CELL_CHARS: usize = 512;
+pub(super) const MAX_CELL_CHARS: usize = 512;
 /// Width of a cell in logical pixels.
 const CELL_WIDTH: f32 = 136.0;
 /// Width of the row number in logical pixels.
@@ -40,10 +40,10 @@ impl Delimited {
     }
 
     /// The separator between fields.
-    fn delimiter(self) -> u8 {
+    fn delimiter(self) -> char {
         match self {
-            Self::Csv => b',',
-            Self::Tsv => b'\t',
+            Self::Csv => ',',
+            Self::Tsv => '\t',
         }
     }
 }
@@ -53,7 +53,7 @@ impl Delimited {
 pub struct DelimitedPreview {
     revision: u64,
     kind: Delimited,
-    table: Result<Table, csv::Error>,
+    table: Table,
 }
 
 impl DelimitedPreview {
@@ -64,14 +64,7 @@ impl DelimitedPreview {
             *cache = Some(Self { revision, kind, table: delimited(kind, &document.text) });
         }
         if let Some(preview) = cache {
-            match &preview.table {
-                Ok(table) => {
-                    ui.push_id(document.id(), |ui| table.show(ui));
-                }
-                Err(error) => {
-                    ui.label(format!("Cannot read this table: {error}"));
-                }
-            }
+            ui.push_id(document.id(), |ui| preview.table.show(ui));
         }
     }
 }
@@ -79,13 +72,13 @@ impl DelimitedPreview {
 /// Cell values and whether any data fell outside the preview limits.
 #[derive(Debug, Default)]
 pub(super) struct Table {
-    rows: Vec<Vec<String>>,
-    truncated: bool,
+    pub(super) rows: Vec<Vec<String>>,
+    pub(super) truncated: bool,
 }
 
 impl Table {
     /// Set one cell by its zero-based row and column.
-    fn set(&mut self, row: usize, column: usize, text: &str) {
+    pub(super) fn set(&mut self, row: usize, column: usize, text: &str) {
         if row >= MAX_ROWS as usize || column >= MAX_COLUMNS as usize {
             self.truncated = true;
             return;
@@ -144,16 +137,19 @@ impl Table {
     }
 }
 
+/// Show a stored number as the shortest decimal that reads back the same
+/// (`42`, not `42.0`); text that is not a number stays as written.
+pub(super) fn number_text(raw: &str) -> String {
+    raw.trim().parse::<f64>().map_or_else(|_| raw.to_string(), |number| number.to_string())
+}
+
 /// Parse quoted fields and ragged records using the selected separator.
-fn delimited(kind: Delimited, text: &str) -> Result<Table, csv::Error> {
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(kind.delimiter())
-        .flexible(true)
-        .has_headers(false)
-        .from_reader(text.as_bytes());
+fn delimited(kind: Delimited, text: &str) -> Table {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let mut characters = text.chars().peekable();
     let mut table = Table::default();
-    for (row, record) in reader.records().take(MAX_ROWS as usize + 1).enumerate() {
-        let record = record?;
+    let mut row = 0;
+    while let Some(record) = next_record(&mut characters, kind.delimiter()) {
         if row == MAX_ROWS as usize {
             table.truncated = true;
             break;
@@ -161,40 +157,51 @@ fn delimited(kind: Delimited, text: &str) -> Result<Table, csv::Error> {
         for (column, text) in record.iter().take(MAX_COLUMNS as usize + 1).enumerate() {
             table.set(row, column, text);
         }
-    }
-    Ok(table)
-}
-
-/// Read XLSX cells directly so a sparse sheet never becomes a dense allocation.
-pub(super) fn xlsx(workbook: &mut Xlsx<impl Read + Seek>, name: &str) -> Result<Table, String> {
-    let mut reader = workbook.worksheet_cells_reader(name).map_err(|error| error.to_string())?;
-    let mut table = Table::default();
-    while let Some(cell) = reader.next_cell().map_err(|error| error.to_string())? {
-        let (row, column) = cell.get_position();
-        if row as usize >= MAX_ROWS as usize {
-            table.truncated = true;
-            break;
-        }
-        table.set(row as usize, column as usize, &Data::from(cell.get_value().clone()).to_string());
-    }
-    Ok(table)
-}
-
-/// Copy a bounded part of a legacy Excel or `OpenDocument` sheet.
-pub(super) fn workbook_range(range: &Range<Data>) -> Table {
-    let mut table = Table::default();
-    let Some((last_row, last_column)) = range.end() else {
-        return table;
-    };
-    table.truncated = last_row as usize >= MAX_ROWS as usize || last_column as usize >= MAX_COLUMNS as usize;
-    for row in 0..MAX_ROWS.min(last_row.saturating_add(1)) {
-        for column in 0..MAX_COLUMNS.min(last_column.saturating_add(1)) {
-            if let Some(value) = range.get_value((row, column)) {
-                table.set(row as usize, column as usize, &value.to_string());
-            }
-        }
+        row += 1;
     }
     table
+}
+
+/// Read one record of delimited text (RFC 4180, but lenient like
+/// spreadsheets: a quote inside an unquoted field is kept, and an unclosed
+/// quote runs to the end of the text). Empty lines are skipped; `None` at
+/// the end of the text.
+fn next_record(characters: &mut Peekable<Chars<'_>>, delimiter: char) -> Option<Vec<String>> {
+    while characters.next_if(|character| matches!(character, '\r' | '\n')).is_some() {}
+    characters.peek()?;
+    let mut record = Vec::new();
+    let mut field = String::new();
+    let mut quoted = false;
+    let mut field_start = true;
+    while let Some(character) = characters.next() {
+        if quoted {
+            if character != '"' {
+                field.push(character);
+            } else if characters.next_if_eq(&'"').is_some() {
+                field.push('"');
+            } else {
+                quoted = false;
+            }
+            continue;
+        }
+        if character == delimiter {
+            record.push(std::mem::take(&mut field));
+            field_start = true;
+            continue;
+        }
+        match character {
+            '"' if field_start => quoted = true,
+            '\r' => {
+                characters.next_if_eq(&'\n');
+                break;
+            }
+            '\n' => break,
+            _ => field.push(character),
+        }
+        field_start = false;
+    }
+    record.push(field);
+    Some(record)
 }
 
 #[cfg(test)]
@@ -222,8 +229,7 @@ mod tests {
 
     #[test]
     fn csv_keeps_first_row_and_reads_quoted_fields() {
-        let table =
-            delimited(Delimited::Csv, "\u{feff}Name,Description\r\nA,\"one,two\"\r\nB,\"three\nfour\"\r\nC").unwrap();
+        let table = delimited(Delimited::Csv, "\u{feff}Name,Description\r\nA,\"one,two\"\r\nB,\"three\nfour\"\r\nC");
         assert_eq!(
             table.rows,
             [vec!["Name", "Description"], vec!["A", "one,two"], vec!["B", "three\nfour"], vec!["C"]],
@@ -234,9 +240,15 @@ mod tests {
     #[test]
     fn tsv_preserves_commas_and_reports_a_truncated_cell() {
         let long = "é".repeat(MAX_CELL_CHARS + 1);
-        let table = delimited(Delimited::Tsv, &format!("one,two\t{long}")).unwrap();
+        let table = delimited(Delimited::Tsv, &format!("one,two\t{long}"));
         assert_eq!(table.rows[0][0], "one,two");
         assert_eq!(table.rows[0][1], format!("{}…", "é".repeat(MAX_CELL_CHARS)));
         assert!(table.truncated);
+    }
+
+    #[test]
+    fn csv_handles_escaped_quotes_empty_fields_and_blank_lines() {
+        let table = delimited(Delimited::Csv, "a,\"say \"\"hi\"\"\",\n\n\r\nx\"y,,\"open");
+        assert_eq!(table.rows, [vec!["a", "say \"hi\"", ""], vec!["x\"y", "", "open"]]);
     }
 }

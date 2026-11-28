@@ -8,6 +8,15 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ## [Unreleased]
 
+### Changed
+
+- **Linux needs poppler-utils for PDF previews.** On Linux, install
+  `poppler-utils` (the `.deb` package recommends it) to keep previewing PDF
+  files; without it the preview says what to install. macOS draws PDF pages
+  with Core Graphics and needs nothing new.
+- **Faster to build.** Rubrique builds with about 70 fewer libraries (281
+  to 212 on macOS, 293 to 228 on Linux), so `cargo install` is faster.
+
 ### Fixed
 
 - **Remove the last folder.** Remove from explorer works on the only folder

@@ -246,7 +246,7 @@ pub fn model_recipe(model: &Path, url: &str, sha256: &'static str, find: &dyn Fn
 
 /// Check that the file at `path` has the SHA-256 `expected` (lowercase hex).
 pub fn check_sha256(path: &Path, expected: &str) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
+    use crate::sha256::Sha256;
     use std::fmt::Write;
     use std::io::Read;
     let cannot_read = |error: std::io::Error| format!("Cannot read {}: {error}", path.display());

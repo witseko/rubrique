@@ -45,7 +45,8 @@ the libraries listed under [Build](#build) first.
   tables, footnotes, code blocks, figures and admonitions such as
   `.. note::`. Switch to Source to edit it.
 - **PDF and Word.** Open a PDF to browse its pages, or a DOC or DOCX to
-  read its text. On Linux, install `antiword` for legacy DOC previews.
+  read its text. On Linux, install `poppler-utils` for PDF previews and
+  `antiword` for legacy DOC previews.
 - **PowerPoint, OpenDocument Text and Rich Text.** Browse the text from
   each PPTX slide or read the body text of ODT and RTF documents.
   Use **Open in default app** to see the full layout or edit the file.

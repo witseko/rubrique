@@ -10,7 +10,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use crate::json::{self, Value};
 
 use crate::ai::find_on_path;
 use crate::ai::run::{AiRun, RunEnd};
@@ -494,7 +494,7 @@ fn remote_error(host: &str, error: &io::Error) -> String {
 
 /// Parse the JSON reply without displaying stderr, which can contain private task data.
 fn parse_reply(success: bool, stdout: &str, partial: bool) -> Result<(Value, bool), String> {
-    let value = serde_json::from_str::<Value>(stdout);
+    let value = json::parse(stdout);
     if !success {
         return Err(if value.as_ref().is_ok_and(|reply| reply["error"] == "qitem_not_found") {
             "OpenRig has no queue item with this ID yet."
@@ -517,7 +517,7 @@ fn spec_argument(spec: &Path) -> Result<&str, RigCallError> {
 /// The JSON object rig printed: the whole output, or else its last line
 /// (rig may print a notice before it).
 fn reply_object(stdout: &str) -> Option<Value> {
-    let parse = |text: &str| serde_json::from_str::<Value>(text).ok().filter(Value::is_object);
+    let parse = |text: &str| json::parse(text).ok().filter(Value::is_object);
     parse(stdout.trim()).or_else(|| stdout.trim().lines().last().and_then(parse))
 }
 
@@ -665,7 +665,11 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
 
-    use serde_json::json;
+    use crate::json::parse as parse_json;
+
+    fn parse(text: &str) -> Value {
+        parse_json(text).unwrap()
+    }
 
     use super::*;
     use crate::remote::testing::use_fake_ssh;
@@ -726,11 +730,13 @@ mod tests {
     /// Include only local agent seats from an `OpenRig` node-list reply.
     #[test]
     fn filters_non_agent_and_remote_inventory_entries() {
-        let reply = json!({"entries": [
+        let reply = parse(
+            r#"{"entries": [
             {"nodeKind": "agent", "rigId": "demo-id", "canonicalSessionName": "dev@demo"},
             {"nodeKind": "agent", "rigId": "remote-id", "canonicalSessionName": "dev@demo@host"},
-            {"nodeKind": "infrastructure", "rigId": "demo-id", "canonicalSessionName": "tracer@demo"},
-        ], "truncated": true});
+            {"nodeKind": "infrastructure", "rigId": "demo-id", "canonicalSessionName": "tracer@demo"}
+        ], "truncated": true}"#,
+        );
         let (seats, partial) = parse_seats(&reply, false).unwrap();
         assert_eq!(seats, [Seat { address: "dev@demo".into(), rig_id: "demo-id".into() }]);
         assert!(partial);
@@ -753,10 +759,10 @@ mod tests {
     /// Do not follow a remote, ambiguous or truncated handoff.
     #[test]
     fn follows_only_one_local_successor() {
-        let local = json!({"successors": [{"qitemId": "qitem-local"}]});
-        let remote = json!({"successors": [{"qitemId": "qitem-local@elsewhere"}]});
-        let several = json!({"successors": [{"qitemId": "qitem-local"}, {"qitemId": "qitem-other"}]});
-        let truncated = json!({"successors": [{"qitemId": "qitem-local"}], "successorsTruncated": true});
+        let local = parse(r#"{"successors": [{"qitemId": "qitem-local"}]}"#);
+        let remote = parse(r#"{"successors": [{"qitemId": "qitem-local@elsewhere"}]}"#);
+        let several = parse(r#"{"successors": [{"qitemId": "qitem-local"}, {"qitemId": "qitem-other"}]}"#);
+        let truncated = parse(r#"{"successors": [{"qitemId": "qitem-local"}], "successorsTruncated": true}"#);
         assert_eq!(next_task_id(&local), Some("qitem-local"));
         for reply in [remote, several, truncated] {
             assert_eq!(next_task_id(&reply), None);

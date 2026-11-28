@@ -1,5 +1,8 @@
 //! Load a read-only document, presentation, or workbook outside the UI thread.
 
+mod codepage;
+mod converter;
+mod ods;
 mod odt;
 mod package;
 mod pdf;
@@ -8,14 +11,17 @@ mod rtf;
 mod table;
 mod view;
 mod word;
+mod xls;
+mod xlsx;
+mod xml;
+mod zip_archive;
 
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, mpsc};
 use std::thread;
 
-use calamine::{Ods, Reader, Sheets, Xls, Xlsx};
 use eframe::egui::{ColorImage, Context};
 
 use crate::vfs::{self, Contents, Stamp};
@@ -27,8 +33,6 @@ pub use table::{Delimited, DelimitedPreview};
 const MAX_BYTES: u64 = 20 * 1024 * 1024;
 /// Maximum number of bytes of text shown in a document or slide.
 const MAX_TEXT_BYTES: usize = 1024 * 1024;
-/// Maximum declared size of all contents in an Office ZIP archive.
-const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Formats that open as read-only documents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -192,7 +196,7 @@ fn too_large() -> String {
 /// Load the content for the selected format and navigation position.
 fn load(kind: Kind, bytes: &Arc<Vec<u8>>, selected: usize) -> Result<Content, String> {
     match kind {
-        Kind::Pdf => pdf::page(Arc::clone(bytes), selected),
+        Kind::Pdf => pdf::page(bytes, selected),
         Kind::Doc => word::legacy_text(Arc::clone(bytes)).map(Content::Text),
         Kind::Docx => word::docx_text(bytes).map(Content::Text),
         Kind::Odt => odt::text(bytes).map(Content::Text),
@@ -204,44 +208,15 @@ fn load(kind: Kind, bytes: &Arc<Vec<u8>>, selected: usize) -> Result<Content, St
 
 /// Open a workbook and read the selected sheet.
 fn workbook(kind: Kind, bytes: &[u8], selected: usize) -> Result<Content, String> {
-    let source = Cursor::new(bytes);
-    let mut workbook = match kind {
-        Kind::Xls => Xls::new(source).map(Sheets::Xls).map_err(calamine::Error::from),
-        Kind::Xlsx => {
-            check_archive(bytes)?;
-            Xlsx::new(source).map(Sheets::Xlsx).map_err(calamine::Error::from)
-        }
-        Kind::Ods => {
-            check_archive(bytes)?;
-            Ods::new(source).map(Sheets::Ods).map_err(calamine::Error::from)
-        }
+    let (names, table) = match kind {
+        Kind::Xls => xls::sheet(bytes, selected)?,
+        Kind::Xlsx => xlsx::sheet(bytes, selected)?,
+        Kind::Ods => ods::sheet(bytes, selected)?,
         Kind::Pdf | Kind::Doc | Kind::Docx | Kind::Odt | Kind::Rtf | Kind::Pptx => {
             return Err("Choose a workbook to show its sheets.".into());
         }
-    }
-    .map_err(|error| error.to_string())?;
-
-    let names = workbook.sheet_names();
-    let name = names.get(selected).ok_or("This workbook has no sheet to display.")?;
-    let table = match &mut workbook {
-        Sheets::Xlsx(workbook) => table::xlsx(workbook, name)?,
-        _ => table::workbook_range(&workbook.worksheet_range(name).map_err(|error| error.to_string())?),
     };
     Ok(Content::Sheet { names, table })
-}
-
-/// Check the declared expansion size before loading an Office archive.
-fn check_archive(bytes: &[u8]) -> Result<(), String> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|error| error.to_string())?;
-    let mut total = 0_u64;
-    for index in 0..archive.len() {
-        let entry = archive.by_index_raw(index).map_err(|error| error.to_string())?;
-        total = total.saturating_add(entry.size());
-        if total > MAX_ARCHIVE_BYTES {
-            return Err("This Office archive expands beyond the preview limit.".into());
-        }
-    }
-    Ok(())
 }
 
 /// Mark truncated output without splitting a Unicode character.
