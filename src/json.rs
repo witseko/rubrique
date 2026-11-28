@@ -42,22 +42,6 @@ impl Value {
         }
     }
 
-    /// The value at a JSON Pointer (RFC 6901) such as `/settings/name`.
-    pub fn pointer(&self, pointer: &str) -> Option<&Value> {
-        if pointer.is_empty() {
-            return Some(self);
-        }
-        let mut value = self;
-        for token in pointer.strip_prefix('/')?.split('/') {
-            let token = token.replace("~1", "/").replace("~0", "~");
-            value = match value {
-                Value::Array(items) => items.get(token.parse::<usize>().ok()?)?,
-                _ => value.get(&token)?,
-            };
-        }
-        Some(value)
-    }
-
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::String(text) => Some(text),
@@ -481,10 +465,9 @@ mod tests {
             parse(r#" {"a": [1, -2.5e2, true, null], "b": {"c": "x\"\u00e9\ud83d\ude00"}, "a": [3]} "#).unwrap();
         assert_eq!(value["a"], Value::Array(vec![Value::Number(3.0)]));
         assert_eq!(value["b"]["c"], "x\"é😀");
-        assert_eq!(value.pointer("/b/c").and_then(Value::as_str), Some("x\"é😀"));
         assert_eq!(value["missing"]["deeper"], Value::Null);
         assert!(value.is_object());
-        assert_eq!(parse("[1, 2]").unwrap().pointer("/1").and_then(Value::as_u64), Some(2));
+        assert_eq!(parse("[1, 2]").unwrap().as_array().and_then(|items| items[1].as_u64()), Some(2));
         assert_eq!(parse("1.5").unwrap().as_u64(), None);
         assert_eq!(parse("-1").unwrap().as_u64(), None);
     }

@@ -119,9 +119,11 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
 ] }
 
 # Lint levels from the Rust guide. `unsafe_code` is `deny` rather than
-# `forbid` because date.rs needs one FFI call (`localtime_r`) and
-# touch_id/macos.rs a few Objective-C calls; each use carries a narrow
-# `#[expect(unsafe_code, reason = ...)]`.
+# `forbid` because a few places need it: the `localtime_r` call in date.rs,
+# `set_var` in shell_path.rs, the Core Graphics bitmap in the PDF preview,
+# and Objective-C calls on macOS (menu bar, open documents, Touch ID). Each
+# use carries a narrow `#[expect(unsafe_code, reason = ...)]`; search for it
+# to list them.
 [lints.rust]
 unsafe_code = "deny"
 

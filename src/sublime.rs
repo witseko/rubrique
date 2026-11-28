@@ -91,7 +91,7 @@ fn unsaved_text(buffer: &Value) -> Option<UnsavedText> {
             }
             file.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default()
         }
-        None => buffer.pointer("/settings/name").and_then(Value::as_str).unwrap_or_default().to_string(),
+        None => buffer["settings"]["name"].as_str().unwrap_or_default().to_string(),
     };
     Some(UnsavedText { name, text: text.to_string() })
 }
