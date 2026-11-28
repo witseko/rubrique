@@ -6,6 +6,8 @@
 //! instructions are "destinations" that hold no body text, so their content
 //! is skipped.
 
+use std::collections::HashMap;
+
 use super::{MAX_TEXT_BYTES, codepage, limit_text};
 
 /// Deepest group nesting read; real documents stay far below it.
@@ -79,7 +81,7 @@ struct Reader<'a> {
     /// The `\ansicpg` code page, used where a font names none.
     document_codepage: u16,
     /// Code page of each font number, from the font table.
-    fonts: Vec<(i32, Option<u16>)>,
+    fonts: HashMap<i32, Option<u16>>,
     /// The font being described in the font table.
     font_in_table: Option<i32>,
     /// Fallback characters still to skip after a `\u`.
@@ -96,7 +98,7 @@ impl<'a> Reader<'a> {
             groups: Vec::new(),
             text: String::new(),
             document_codepage: DEFAULT_CODEPAGE,
-            fonts: Vec::new(),
+            fonts: HashMap::new(),
             font_in_table: None,
             fallback_left: 0,
             high_surrogate: None,
@@ -245,8 +247,7 @@ impl<'a> Reader<'a> {
             "fonttbl" => self.group().destination = Destination::FontTable,
             "f" => {
                 let font = parameter.unwrap_or(0);
-                let codepage =
-                    self.fonts.iter().find(|(number, _)| *number == font).and_then(|(_, codepage)| *codepage);
+                let codepage = self.fonts.get(&font).copied().flatten();
                 self.group().codepage = codepage.unwrap_or(self.document_codepage);
             }
             _ if SKIPPED_DESTINATIONS.contains(&name) => self.group().destination = Destination::Skipped,
@@ -262,8 +263,7 @@ impl<'a> Reader<'a> {
             "fcharset" | "cpg" => {
                 let codepage = if name == "cpg" { u16::try_from(value).ok() } else { charset_codepage(value) };
                 if let Some(font) = self.font_in_table {
-                    self.fonts.retain(|(number, _)| *number != font);
-                    self.fonts.push((font, codepage));
+                    self.fonts.insert(font, codepage);
                 }
             }
             _ => {}

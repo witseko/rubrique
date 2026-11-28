@@ -58,6 +58,7 @@ pub(super) enum Event {
     End(Name),
     /// Character data with references decoded, CDATA sections included.
     Text(String),
+    /// The end of the document, reached only after every element closed.
     Eof,
 }
 
@@ -89,6 +90,11 @@ impl<'a> XmlReader<'a> {
     }
 
     /// The next start tag, end tag or text; `Eof` at the end, repeatedly.
+    ///
+    /// # Errors
+    ///
+    /// Malformed or unsupported XML, and a document that ends while an
+    /// element is still open (a cut-off part).
     pub(super) fn next(&mut self) -> Result<Event, String> {
         if self.pending_end {
             self.pending_end = false;
@@ -97,7 +103,11 @@ impl<'a> XmlReader<'a> {
         loop {
             let rest = &self.text[self.position..];
             if rest.is_empty() {
-                return Ok(Event::Eof);
+                return if self.open.is_empty() {
+                    Ok(Event::Eof)
+                } else {
+                    Err("The XML part ends inside an element.".into())
+                };
             }
             if !rest.starts_with('<') {
                 let length = rest.find('<').unwrap_or(rest.len());
@@ -132,9 +142,7 @@ impl<'a> XmlReader<'a> {
     pub(super) fn skip_element(&mut self) -> Result<(), String> {
         let depth = self.open.len();
         while self.open.len() >= depth {
-            if let Event::Eof = self.next()? {
-                return Err("The XML part ends inside an element.".into());
-            }
+            self.next()?;
         }
         Ok(())
     }
@@ -330,6 +338,16 @@ mod tests {
         assert!(events("<a><b></a>").is_err());
         assert!(events("<a").is_err());
         assert!(events(&"<a>".repeat(MAX_DEPTH + 1)).is_err());
+    }
+
+    #[test]
+    fn refuses_a_document_cut_off_inside_an_element() {
+        assert_eq!(events("<a><b>text").unwrap_err(), "The XML part ends inside an element.");
+        assert!(events("<a><b>text</b></a>").is_ok());
+        let mut reader = XmlReader::new(b"<a><skip><x>1").unwrap();
+        reader.next().unwrap();
+        reader.next().unwrap();
+        assert!(reader.skip_element().is_err());
     }
 
     #[test]

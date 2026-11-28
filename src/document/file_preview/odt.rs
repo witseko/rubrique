@@ -44,7 +44,6 @@ fn body_text(reader: &mut XmlReader<'_>) -> Result<String, String> {
             }
             Event::Text(value) if paragraphs > 0 => text.push_str(&value),
             Event::End(name) if name.is(OFFICE, "text") => return Ok(text),
-            Event::Eof => return Err("The OpenDocument text body is incomplete.".into()),
             _ => {}
         }
         if text.len() > MAX_TEXT_BYTES {

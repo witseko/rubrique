@@ -103,7 +103,6 @@ fn read_table(reader: &mut XmlReader<'_>) -> Result<Table, String> {
                 }
             }
             Event::End(name) if name.is(TABLE, "table") => return Ok(table),
-            Event::Eof => return Err("The OpenDocument sheet is incomplete.".into()),
             _ => {}
         }
     }

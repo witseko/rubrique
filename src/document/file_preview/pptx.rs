@@ -41,7 +41,6 @@ fn slide_id(xml: &[u8], selected: usize) -> Result<(String, usize), String> {
                 count += 1;
             }
             Event::End(name) if in_list && name.is(PRESENTATION, "sldIdLst") => break,
-            Event::Eof if in_list => return Err("The presentation slide list is incomplete.".into()),
             Event::Eof => break,
             _ => {}
         }
@@ -81,7 +80,6 @@ fn slide_text(xml: &[u8]) -> Result<String, String> {
             },
             Event::Text(value) if in_text => text.push_str(&value),
             Event::End(name) if name.is(PRESENTATION, "sld") => return Ok(text),
-            Event::Eof => return Err("The slide part is incomplete.".into()),
             _ => {}
         }
         if text.len() > MAX_TEXT_BYTES {
