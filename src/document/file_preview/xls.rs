@@ -151,14 +151,15 @@ impl<'a> CompoundFile<'a> {
     }
 
     /// Follow a FAT chain from `start` and join its sectors, up to `limit`
-    /// bytes.
+    /// bytes. A chain longer than the file's sector count loops, so the
+    /// result is never larger than the file.
     fn chain(&self, start: u32, limit: usize) -> Result<Vec<u8>, String> {
         let mut data = Vec::new();
         let mut sector = start;
         let mut visited = 0;
         while sector < END_OF_CHAIN && data.len() < limit {
             visited += 1;
-            if visited > self.fat.len() {
+            if visited > self.sector_count() {
                 return Err(damaged());
             }
             data.extend_from_slice(self.sector(sector).ok_or_else(damaged)?);
@@ -169,14 +170,14 @@ impl<'a> CompoundFile<'a> {
     }
 
     /// Follow a mini FAT chain and join its 64-byte sectors, up to `limit`
-    /// bytes.
+    /// bytes. A chain longer than the mini stream's sector count loops.
     fn mini_chain(&self, start: u32, limit: usize) -> Result<Vec<u8>, String> {
         let mut data = Vec::new();
         let mut sector = start;
         let mut visited = 0;
         while sector < END_OF_CHAIN && data.len() < limit {
             visited += 1;
-            if visited > self.mini_fat.len() {
+            if visited > self.mini_stream.len() / 64 {
                 return Err(damaged());
             }
             let index = usize::try_from(sector).map_err(|_| damaged())?;
@@ -278,12 +279,18 @@ impl<'a> Records<'a> {
 impl<'a> Iterator for Records<'a> {
     type Item = (u16, &'a [u8]);
 
+    /// The next record. A record cut off by the end of the stream ends the
+    /// iteration, so callers that peek first cannot see it again.
     fn next(&mut self) -> Option<Self::Item> {
         let kind = read_u16(self.bytes, self.position)?;
-        let length = usize::from(read_u16(self.bytes, self.position + 2)?);
         let start = self.position + 4;
-        let data = self.bytes.get(start..start + length)?;
-        self.position = start + length;
+        let data = read_u16(self.bytes, self.position + 2)
+            .and_then(|length| self.bytes.get(start..start + usize::from(length)));
+        let Some(data) = data else {
+            self.position = self.bytes.len();
+            return None;
+        };
+        self.position = start + data.len();
         Some((kind, data))
     }
 }
@@ -563,5 +570,27 @@ mod tests {
         // Point the directory chain at a sector far past the end.
         broken[48..52].copy_from_slice(&0x00ff_ffff_u32.to_le_bytes());
         assert!(sheet(&broken, 0).is_err());
+    }
+
+    #[test]
+    fn rejects_a_sector_chain_that_points_back_to_itself() {
+        let mut looped = include_bytes!("fixtures/two-sheets.xls").to_vec();
+        let sector_size = 1 << read_u16(&looped, 30).unwrap();
+        let first_fat_sector = read_u32(&looped, 76).unwrap() as usize;
+        let directory_start = read_u32(&looped, 48).unwrap();
+        let entry = (first_fat_sector + 1) * sector_size + directory_start as usize * 4;
+        looped[entry..entry + 4].copy_from_slice(&directory_start.to_le_bytes());
+        assert!(sheet(&looped, 0).is_err());
+    }
+
+    #[test]
+    fn stops_at_a_continue_record_cut_off_by_the_end_of_the_stream() {
+        let workbook: &[u8] = &[
+            0x09, 0x08, 4, 0, 0x00, 0x06, 0x10, 0x00, // BOF, BIFF8 globals
+            0xfc, 0x00, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, // SST with no strings
+            0x3c, 0x00, 0xff, 0xff, // CONTINUE longer than what is left
+        ];
+        let globals = read_globals(Records::new(workbook)).unwrap();
+        assert_eq!(globals.sheets, []);
     }
 }

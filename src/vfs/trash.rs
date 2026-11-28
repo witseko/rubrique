@@ -72,17 +72,23 @@ mod platform {
         move_with_home_trash(path, &home_trash()?)
     }
 
-    /// Move the file, using `home_trash` for files on the home drive.
+    /// Move the file into the Trash of its own drive, or into `home_trash`
+    /// when it is on the home drive or its drive has no usable Trash (for
+    /// example a top folder the user cannot write). Only the home Trash
+    /// copies across drives, as the specification allows.
     pub(super) fn move_with_home_trash(path: &Path, home_trash: &Path) -> io::Result<()> {
         let device = path.symlink_metadata()?.dev();
-        if same_device(home_trash, device) {
-            fs::DirBuilder::new().recursive(true).mode(0o700).create(home_trash)?;
-            return move_into(home_trash, path, path);
+        if !same_device(home_trash, device) {
+            let top = top_folder(path, device);
+            let relative = path.strip_prefix(&top).unwrap_or(path);
+            if let Ok(trash) = drive_trash(&top)
+                && move_into(&trash, path, relative, false).is_ok()
+            {
+                return Ok(());
+            }
         }
-        let top = top_folder(path, device);
-        let trash = drive_trash(&top)?;
-        let relative = path.strip_prefix(&top).unwrap_or(path);
-        move_into(&trash, path, relative)
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(home_trash)?;
+        move_into(home_trash, path, path, true)
     }
 
     /// `$XDG_DATA_HOME/Trash`, or `~/.local/share/Trash`.
@@ -102,7 +108,7 @@ mod platform {
 
     /// The highest folder above `path` still on `device`: the drive's mount
     /// point.
-    fn top_folder(path: &Path, device: u64) -> PathBuf {
+    pub(super) fn top_folder(path: &Path, device: u64) -> PathBuf {
         let mut top = path.parent().unwrap_or(path).to_path_buf();
         while let Some(parent) = top.parent() {
             if fs::metadata(parent).map(|metadata| metadata.dev()).ok() != Some(device) {
@@ -137,8 +143,9 @@ mod platform {
     }
 
     /// Claim a free name with its `.trashinfo` (created exclusively, so two
-    /// deletes never share a name), then move the file in.
-    fn move_into(trash: &Path, path: &Path, recorded: &Path) -> io::Result<()> {
+    /// deletes never share a name), then move the file in. With
+    /// `copy_across_drives`, a file on another drive is copied, then removed.
+    fn move_into(trash: &Path, path: &Path, recorded: &Path, copy_across_drives: bool) -> io::Result<()> {
         let files = trash.join("files");
         let info = trash.join("info");
         for folder in [&files, &info] {
@@ -166,13 +173,57 @@ mod platform {
                 let _ = fs::remove_file(&info_path);
                 continue;
             }
-            let moved = file.write_all(contents.as_bytes()).and_then(|()| fs::rename(path, &target));
-            if moved.is_err() {
-                let _ = fs::remove_file(&info_path);
-            }
-            return moved;
+            let copied = file.write_all(contents.as_bytes()).and_then(|()| match fs::rename(path, &target) {
+                Ok(()) => Ok(false),
+                Err(error) if copy_across_drives && error.kind() == io::ErrorKind::CrossesDevices => {
+                    match copy_tree(path, &target) {
+                        Ok(()) => Ok(true),
+                        Err(error) => {
+                            let _ = remove_tree(&target);
+                            Err(error)
+                        }
+                    }
+                }
+                Err(error) => Err(error),
+            });
+            return match copied {
+                Ok(false) => Ok(()),
+                // The Trash entry is complete; keep it even if the original
+                // cannot be removed, so nothing is lost.
+                Ok(true) => remove_tree(path),
+                Err(error) => {
+                    let _ = fs::remove_file(&info_path);
+                    Err(error)
+                }
+            };
         }
         Err(io::Error::other("the Trash holds too many files with this name"))
+    }
+
+    /// Copy a file, folder or link to `target`, keeping links as links.
+    pub(super) fn copy_tree(from: &Path, target: &Path) -> io::Result<()> {
+        let metadata = from.symlink_metadata()?;
+        if metadata.is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(from)?, target)
+        } else if metadata.is_dir() {
+            fs::create_dir(target)?;
+            for entry in fs::read_dir(from)? {
+                let entry = entry?;
+                copy_tree(&entry.path(), &target.join(entry.file_name()))?;
+            }
+            // Set last, so a read-only folder can still be filled.
+            fs::set_permissions(target, metadata.permissions())
+        } else if metadata.is_file() {
+            fs::copy(from, target).map(|_| ())
+        } else {
+            // Copying a pipe or a device would read from it.
+            Err(io::Error::new(io::ErrorKind::Unsupported, format!("cannot copy {} to the Trash", from.display())))
+        }
+    }
+
+    /// Remove a file, link or whole folder.
+    fn remove_tree(path: &Path) -> io::Result<()> {
+        if path.symlink_metadata()?.is_dir() { fs::remove_dir_all(path) } else { fs::remove_file(path) }
     }
 
     /// The `.trashinfo` text: the original path, percent-encoded, and the
@@ -240,6 +291,46 @@ mod tests {
         assert!(trash.join("files/a.md.2").exists());
         let info = std::fs::read_to_string(trash.join("info/a.md.2.trashinfo")).unwrap();
         assert!(info.contains(&format!("Path={}", notes.join("a.md").display())), "{info}");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn copies_folders_with_their_links() {
+        let root = crate::test_support::TempFolder::new();
+        let source = root.make_folder("source");
+        root.write("source/inner/a.md", "x");
+        std::os::unix::fs::symlink("inner/a.md", source.join("link")).unwrap();
+        let copy = root.path().join("copy");
+        platform::copy_tree(&source, &copy).unwrap();
+        assert_eq!(std::fs::read_to_string(copy.join("inner/a.md")).unwrap(), "x");
+        assert_eq!(std::fs::read_link(copy.join("link")).unwrap(), Path::new("inner/a.md"));
+    }
+
+    /// A file on a drive whose top folder the user cannot write goes to the
+    /// home Trash on another drive, copied across. Runs where the temporary
+    /// folder's drive has a top folder the user cannot write (such as `/` on
+    /// CI) and `/dev/shm` is another drive.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn falls_back_to_the_home_trash_on_another_drive() {
+        use std::os::unix::fs::MetadataExt;
+        let root = crate::test_support::TempFolder::new();
+        let device = root.path().metadata().unwrap().dev();
+        let top = platform::top_folder(root.path(), device);
+        let top_is_writable = rustix::fs::access(&top, rustix::fs::Access::WRITE_OK).is_ok();
+        let shm_is_separate = std::fs::metadata("/dev/shm").is_ok_and(|shm| shm.dev() != device);
+        if top_is_writable || !shm_is_separate {
+            eprintln!("skipped: needs a read-only top folder for {} and /dev/shm on another drive", top.display());
+            return;
+        }
+        let home = Path::new("/dev/shm").join(format!("rubrique-trash-test-{}", std::process::id()));
+        let file = root.write("notes/a.md", "x");
+        let result = platform::move_with_home_trash(&file, &home.join("Trash"));
+        let trashed = std::fs::read_to_string(home.join("Trash/files/a.md"));
+        let _ = std::fs::remove_dir_all(&home);
+        result.unwrap();
+        assert!(!file.exists());
+        assert_eq!(trashed.unwrap(), "x");
     }
 
     #[test]
