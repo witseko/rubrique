@@ -6,9 +6,7 @@
 //! instructions are "destinations" that hold no body text, so their content
 //! is skipped.
 
-mod codepage;
-
-use super::{MAX_TEXT_BYTES, limit_text};
+use super::{MAX_TEXT_BYTES, codepage, limit_text};
 
 /// Deepest group nesting read; real documents stay far below it.
 const MAX_DEPTH: usize = 1_000;
@@ -298,12 +296,7 @@ impl<'a> Reader<'a> {
 
     /// Add one byte of text, decoded in the group's code page.
     fn push_byte(&mut self, byte: u8) {
-        let character = if byte.is_ascii() {
-            char::from(byte)
-        } else {
-            let codepage = self.group().codepage;
-            codepage::upper_half(codepage).map_or('\u{fffd}', |table| table[usize::from(byte - 0x80)])
-        };
+        let character = codepage::character(byte, self.group().codepage);
         self.push_counted(character);
     }
 

@@ -1,5 +1,6 @@
 //! Load a read-only document, presentation, or workbook outside the UI thread.
 
+mod codepage;
 mod converter;
 mod ods;
 mod odt;

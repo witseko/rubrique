@@ -1,12 +1,23 @@
 //! The upper halves (bytes 0x80 to 0xFF) of the single-byte code pages
-//! that RTF files name with `\ansicpg`, `\fcharset` or `\mac`.
+//! that RTF files name with `\ansicpg`, `\fcharset` or `\mac`, and that
+//! Excel 5.0/95 workbooks name in their `CODEPAGE` record.
 //!
 //! Generated from Python's codecs; a byte the code page leaves undefined
 //! maps to U+FFFD.
 
+/// The character for `byte` in `codepage`: ASCII as itself, other bytes
+/// from the code page's table, or U+FFFD when there is no table.
+pub(super) fn character(byte: u8, codepage: u16) -> char {
+    if byte.is_ascii() {
+        char::from(byte)
+    } else {
+        upper_half(codepage).map_or('\u{fffd}', |table| table[usize::from(byte - 0x80)])
+    }
+}
+
 /// The character for byte `0x80 + index` in `codepage`, or `None` when the
 /// code page has no table here (multi-byte Asian code pages among them).
-pub(super) fn upper_half(codepage: u16) -> Option<&'static [char; 128]> {
+fn upper_half(codepage: u16) -> Option<&'static [char; 128]> {
     match codepage {
         437 => Some(&CP437),
         850 => Some(&CP850),

@@ -1,5 +1,5 @@
-//! Read the sheet names and one sheet's cells from an Excel 97-2003 `.xls`
-//! workbook.
+//! Read the sheet names and one sheet's cells from an Excel `.xls`
+//! workbook: Excel 97-2003 (BIFF8) or Excel 5.0/95 (BIFF5).
 //!
 //! The file is an OLE compound file: a small file system of fixed-size
 //! sectors, chained through a file allocation table (FAT), with a directory
@@ -7,8 +7,11 @@
 //! sectors with their own mini FAT. The `Workbook` stream holds BIFF8
 //! records: a type, a length and data. The workbook globals list the sheets
 //! (`BOUNDSHEET`) and the shared strings (`SST`); each sheet's records then
-//! hold its cells.
+//! hold its cells. BIFF5 has the same records, except that text is stored
+//! as bytes in the workbook's code page (its `CODEPAGE` record) and there
+//! are no shared strings.
 
+use super::codepage;
 use super::table::Table;
 use super::zip_archive::{read_u16, read_u32, read_u64};
 
@@ -28,6 +31,7 @@ const MAX_DIRECTORY_ENTRIES: usize = 10_000;
 /// BIFF record types read here.
 mod record {
     pub const BOF: u16 = 0x0809;
+    pub const CODEPAGE: u16 = 0x0042;
     pub const EOF: u16 = 0x000a;
     pub const FILEPASS: u16 = 0x002f;
     pub const CONTINUE: u16 = 0x003c;
@@ -35,6 +39,7 @@ mod record {
     pub const SST: u16 = 0x00fc;
     pub const LABELSST: u16 = 0x00fd;
     pub const LABEL: u16 = 0x0204;
+    pub const RSTRING: u16 = 0x00d6;
     pub const NUMBER: u16 = 0x0203;
     pub const RK: u16 = 0x027e;
     pub const MULRK: u16 = 0x00bd;
@@ -46,18 +51,23 @@ mod record {
 /// The sheet names and the cells of sheet number `selected`.
 pub(super) fn sheet(bytes: &[u8], selected: usize) -> Result<(Vec<String>, Table), String> {
     let workbook = CompoundFile::new(bytes)?.workbook_stream()?;
-    let records = Records::new(&workbook);
-    let globals = read_globals(records)?;
+    read_workbook(&workbook, selected)
+}
+
+/// The sheet names and the cells of sheet number `selected` in a workbook
+/// stream.
+fn read_workbook(workbook: &[u8], selected: usize) -> Result<(Vec<String>, Table), String> {
+    let globals = read_globals(Records::new(workbook))?;
     let names = globals.sheets.iter().map(|(name, _)| name.clone()).collect();
     let (_, offset) = globals.sheets.get(selected).ok_or("This workbook has no sheet to display.")?;
     let start = usize::try_from(*offset).map_err(|_| damaged())?;
     let sheet_records = Records::new(workbook.get(start..).ok_or_else(damaged)?);
-    let table = read_cells(sheet_records, &globals.strings);
+    let table = read_cells(sheet_records, &globals);
     Ok((names, table))
 }
 
 fn damaged() -> String {
-    "This Excel 97-2003 workbook is damaged.".into()
+    "This Excel workbook is damaged.".into()
 }
 
 /// The parts of a compound file needed to read its streams.
@@ -76,7 +86,7 @@ impl<'a> CompoundFile<'a> {
     /// Read the header, the FAT, the directory and the mini stream.
     fn new(bytes: &'a [u8]) -> Result<Self, String> {
         if !bytes.starts_with(SIGNATURE) {
-            return Err("This file is not an Excel 97-2003 workbook.".into());
+            return Err("This file is not an Excel workbook.".into());
         }
         let header16 = |offset| read_u16(bytes, offset).ok_or_else(damaged);
         let header32 = |offset| read_u32(bytes, offset).ok_or_else(damaged);
@@ -213,10 +223,13 @@ impl<'a> CompoundFile<'a> {
         })
     }
 
-    /// The `Workbook` (or older `Book`) stream at the top level.
+    /// The `Workbook` stream at the top level, or the Excel 5.0/95 `Book`
+    /// stream when there is no `Workbook` (a file saved for both versions
+    /// has both).
     fn workbook_stream(&self) -> Result<Vec<u8>, String> {
         let root = self.directory_entry(0).ok_or_else(damaged)?;
         let mut pending = vec![root.child];
+        let mut book = None;
         let mut visited = 0;
         while let Some(index) = pending.pop() {
             if index == NO_ENTRY {
@@ -231,11 +244,14 @@ impl<'a> CompoundFile<'a> {
                 return self.stream(&entry);
             }
             if entry.kind == STREAM && entry.name.eq_ignore_ascii_case("Book") {
-                return Err("Excel 5.0/95 workbooks are not supported; save it in a newer format.".into());
+                book = Some(entry.clone());
             }
             pending.extend([entry.left, entry.right]);
         }
-        Err("This file has no Excel workbook inside.".into())
+        match book {
+            Some(entry) => self.stream(&entry),
+            None => Err("This file has no Excel workbook inside.".into()),
+        }
     }
 
     /// The bytes of a stream, from the mini stream when it is small.
@@ -249,6 +265,7 @@ impl<'a> CompoundFile<'a> {
 }
 
 /// The fields of a directory entry read here.
+#[derive(Clone)]
 struct DirectoryEntry {
     name: String,
     kind: u8,
@@ -295,8 +312,41 @@ impl<'a> Iterator for Records<'a> {
     }
 }
 
+/// How a workbook stores its text.
+#[derive(Clone, Copy)]
+enum Version {
+    /// Excel 97-2003: Unicode strings that start with an option byte.
+    Biff8,
+    /// Excel 5.0/95: bytes in a Windows code page.
+    Biff5 { codepage: u16 },
+}
+
+impl Version {
+    /// A string of `length` characters stored in `data`, after its length
+    /// field.
+    fn text(self, data: &[u8], length: usize) -> String {
+        match self {
+            Self::Biff8 => ContinuedData::new(vec![data]).string(length),
+            Self::Biff5 { codepage } => {
+                data.iter().take(length).map(|byte| codepage::character(*byte, codepage)).collect()
+            }
+        }
+    }
+}
+
+/// The Windows code page for the value of a `CODEPAGE` record, which uses
+/// two numbers of its own for Mac Roman and Windows Latin 1.
+fn windows_codepage(value: u16) -> u16 {
+    match value {
+        0x8000 => 10000,
+        0x8001 => 1252,
+        other => other,
+    }
+}
+
 /// What the workbook globals say.
 struct Globals {
+    version: Version,
     /// Each worksheet's name and the stream offset of its `BOF` record.
     sheets: Vec<(String, u32)>,
     strings: Vec<String>,
@@ -304,26 +354,30 @@ struct Globals {
 
 /// Read the globals up to their `EOF` record.
 fn read_globals(mut records: Records<'_>) -> Result<Globals, String> {
-    match records.next() {
-        Some((record::BOF, data)) if read_u16(data, 0) == Some(0x0600) => {}
-        Some((record::BOF, _)) => {
-            return Err("Excel 5.0/95 workbooks are not supported; save it in a newer format.".into());
-        }
+    let version = match records.next() {
+        Some((record::BOF, data)) => match read_u16(data, 0) {
+            Some(0x0600) => Version::Biff8,
+            Some(0x0500) => Version::Biff5 { codepage: 1252 },
+            _ => return Err("Excel workbooks older than Excel 5.0 are not supported.".into()),
+        },
         _ => return Err(damaged()),
-    }
-    let mut globals = Globals { sheets: Vec::new(), strings: Vec::new() };
+    };
+    let mut globals = Globals { version, sheets: Vec::new(), strings: Vec::new() };
     while let Some((kind, data)) = records.next() {
         match kind {
             record::EOF => break,
             record::FILEPASS => return Err("This workbook is password protected.".into()),
+            record::CODEPAGE => {
+                if let (Version::Biff5 { .. }, Some(value)) = (globals.version, read_u16(data, 0)) {
+                    globals.version = Version::Biff5 { codepage: windows_codepage(value) };
+                }
+            }
             record::BOUNDSHEET => {
                 // Sheet type 0 is a worksheet (others are charts and macros).
                 if data.get(5) == Some(&0)
-                    && let (Some(offset), Some(name)) = (read_u32(data, 0), data.get(6..))
+                    && let (Some(offset), Some(length), Some(name)) = (read_u32(data, 0), data.get(6), data.get(7..))
                 {
-                    let mut reader = ContinuedData::new(vec![name]);
-                    let length = usize::from(reader.u8());
-                    globals.sheets.push((reader.string(length), offset));
+                    globals.sheets.push((globals.version.text(name, usize::from(*length)), offset));
                 }
             }
             record::SST => {
@@ -426,7 +480,7 @@ impl<'a> ContinuedData<'a> {
 }
 
 /// Read a sheet's cells up to its `EOF` record.
-fn read_cells(mut records: Records<'_>, strings: &[String]) -> Table {
+fn read_cells(mut records: Records<'_>, globals: &Globals) -> Table {
     let mut table = Table::default();
     if !matches!(records.next(), Some((record::BOF, _))) {
         return table;
@@ -435,12 +489,12 @@ fn read_cells(mut records: Records<'_>, strings: &[String]) -> Table {
         match kind {
             record::EOF => break,
             record::LABELSST => {
-                let text = read_u32(data, 6).and_then(|index| strings.get(usize::try_from(index).ok()?));
+                let text = read_u32(data, 6).and_then(|index| globals.strings.get(usize::try_from(index).ok()?));
                 set_cell(&mut table, data, text.map_or("", String::as_str));
             }
-            record::LABEL => {
+            record::LABEL | record::RSTRING => {
                 let length = usize::from(read_u16(data, 6).unwrap_or(0));
-                let text = ContinuedData::new(vec![data.get(8..).unwrap_or_default()]).string(length);
+                let text = globals.version.text(data.get(8..).unwrap_or_default(), length);
                 set_cell(&mut table, data, &text);
             }
             record::NUMBER => {
@@ -469,7 +523,7 @@ fn read_cells(mut records: Records<'_>, strings: &[String]) -> Table {
                 set_cell(&mut table, data, text);
             }
             record::FORMULA => {
-                let text = formula_result(data, &mut records);
+                let text = formula_result(data, &mut records, globals.version);
                 set_cell(&mut table, data, &text);
             }
             _ => {}
@@ -500,7 +554,7 @@ fn mul_rk(table: &mut Table, data: &[u8]) {
 
 /// The cached result of a `FORMULA` record; a text result is in the
 /// `STRING` record that follows.
-fn formula_result(data: &[u8], records: &mut Records<'_>) -> String {
+fn formula_result(data: &[u8], records: &mut Records<'_>, version: Version) -> String {
     let Some(result) = data.get(6..14) else { return String::new() };
     if result[6..8] != [0xff, 0xff] {
         return read_u64(result, 0).map(|bits| f64::from_bits(bits).to_string()).unwrap_or_default();
@@ -509,7 +563,7 @@ fn formula_result(data: &[u8], records: &mut Records<'_>) -> String {
         0 if records.peek_kind() == Some(record::STRING) => {
             let Some((_, string)) = records.next() else { return String::new() };
             let length = usize::from(read_u16(string, 0).unwrap_or(0));
-            ContinuedData::new(vec![string.get(2..).unwrap_or_default()]).string(length)
+            version.text(string.get(2..).unwrap_or_default(), length)
         }
         1 => if result[2] == 0 { "false" } else { "true" }.to_string(),
         2 => error_text(result[2]).to_string(),
@@ -581,6 +635,44 @@ mod tests {
         let entry = (first_fat_sector + 1) * sector_size + directory_start as usize * 4;
         looped[entry..entry + 4].copy_from_slice(&directory_start.to_le_bytes());
         assert!(sheet(&looped, 0).is_err());
+    }
+
+    /// A BIFF record: type, length, data.
+    fn biff_record(kind: u16, data: &[u8]) -> Vec<u8> {
+        let length = u16::try_from(data.len()).unwrap();
+        [&kind.to_le_bytes()[..], &length.to_le_bytes(), data].concat()
+    }
+
+    #[test]
+    fn reads_excel_95_text_in_the_workbook_code_page() {
+        let bof = biff_record(record::BOF, &[0x00, 0x05, 0x10, 0x00]);
+        let sheet_bof = biff_record(record::BOF, &[0x00, 0x05, 0x10, 0x00]);
+        let eof = biff_record(record::EOF, &[]);
+        // Code page 1251: 0xcf 0xf0 0xe8 is "При", 0xe9 is "й".
+        let codepage = biff_record(record::CODEPAGE, &1251_u16.to_le_bytes());
+        let label = biff_record(record::LABEL, &[0, 0, 0, 0, 0, 0, 3, 0, 0xcf, 0xf0, 0xe8]);
+        let number = biff_record(record::RK, &[0, 0, 1, 0, 0, 0, 0x0a, 0, 0, 0]); // 2
+        // The sheet starts after the globals; its BOUNDSHEET record is 13 bytes.
+        let sheet_offset = u32::try_from(bof.len() + codepage.len() + 13 + eof.len()).unwrap();
+        let boundsheet =
+            biff_record(record::BOUNDSHEET, &[&sheet_offset.to_le_bytes()[..], &[0, 0, 2, b'L', 0xe9]].concat());
+        let workbook = [bof, codepage, boundsheet, eof.clone(), sheet_bof, label, number, eof].concat();
+        let (names, table) = read_workbook(&workbook, 0).unwrap();
+        assert_eq!(names, ["Lй"]);
+        assert_eq!(table.rows, [vec!["При", "2"]]);
+    }
+
+    #[test]
+    fn reads_a_workbook_stored_in_a_book_stream() {
+        let mut renamed = include_bytes!("fixtures/two-sheets.xls").to_vec();
+        let name: Vec<u8> = "Workbook".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let at = renamed.windows(name.len()).position(|window| window == name).unwrap();
+        let book: Vec<u8> = "Book\0".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        renamed[at..at + name.len()].fill(0);
+        renamed[at..at + book.len()].copy_from_slice(&book);
+        renamed[at + 64..at + 66].copy_from_slice(&10_u16.to_le_bytes());
+        let (names, _) = sheet(&renamed, 0).unwrap();
+        assert_eq!(names, sheet(include_bytes!("fixtures/two-sheets.xls"), 0).unwrap().0);
     }
 
     #[test]

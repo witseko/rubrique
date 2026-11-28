@@ -10,9 +10,10 @@ Until 1.0, a minor version (0.x.0) may change behavior or settings.
 
 ### Changed
 
-- **PDF pages drawn by the system.** PDF previews use Core Graphics on
-  macOS and poppler-utils on Linux. On Linux, install `poppler-utils` to
-  preview PDF files.
+- **Linux needs poppler-utils for PDF previews.** On Linux, install
+  `poppler-utils` (the `.deb` package recommends it) to keep previewing PDF
+  files; without it the preview says what to install. macOS draws PDF pages
+  with Core Graphics and needs nothing new.
 - **Fewer libraries.** Rubrique builds with about 70 fewer libraries (281
   to 212 on macOS, 293 to 228 on Linux). Table, RTF, Office and
   spreadsheet previews, the Trash, JSON and the macOS menu bar now use

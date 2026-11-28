@@ -114,7 +114,7 @@ mod platform {
 mod platform {
     use std::io;
     use std::process::Command;
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, Weak};
 
     use eframe::egui::ColorImage;
 
@@ -123,9 +123,15 @@ mod platform {
     /// Largest PNG read from `pdftoppm`.
     const MAX_PNG_BYTES: usize = 64 * 1024 * 1024;
 
-    /// Count pages with `pdfinfo`, then render the page with `pdftoppm`.
+    /// The page count of the PDF shown last, so turning a page runs only
+    /// `pdftoppm`. The weak reference keeps the bytes' address from being
+    /// reused by another file while it is here.
+    static LAST_PAGE_COUNT: Mutex<Option<(Weak<Vec<u8>>, usize)>> = Mutex::new(None);
+
+    /// Count pages with `pdfinfo` (once per file), then render the page with
+    /// `pdftoppm`.
     pub(super) fn render(bytes: &Arc<Vec<u8>>, selected: usize) -> Result<(ColorImage, usize), String> {
-        let page_count = page_count(Arc::clone(bytes))?;
+        let page_count = cached_page_count(bytes)?;
         if selected >= page_count {
             return Err("This PDF has no page to display.".into());
         }
@@ -142,6 +148,21 @@ mod platform {
             .to_rgba8();
         let size = [image.width() as usize, image.height() as usize];
         Ok((ColorImage::from_rgba_unmultiplied(size, image.as_raw()), page_count))
+    }
+
+    /// The page count of `bytes`, from the cache when it is the same file.
+    fn cached_page_count(bytes: &Arc<Vec<u8>>) -> Result<usize, String> {
+        let cached = LAST_PAGE_COUNT.lock().ok().and_then(|last| {
+            last.as_ref().filter(|(file, _)| Weak::ptr_eq(file, &Arc::downgrade(bytes))).map(|(_, count)| *count)
+        });
+        if let Some(count) = cached {
+            return Ok(count);
+        }
+        let count = page_count(Arc::clone(bytes))?;
+        if let Ok(mut last) = LAST_PAGE_COUNT.lock() {
+            *last = Some((Arc::downgrade(bytes), count));
+        }
+        Ok(count)
     }
 
     /// The `Pages:` line of `pdfinfo`.
